@@ -26,21 +26,21 @@ TESSERACT_URL = (
     "https://github.com/UB-Mannheim/tesseract/releases/download/"
     f"v{TESSERACT_VERSION}/tesseract-ocr-w64-setup-{TESSERACT_VERSION}.exe"
 )
-TESSERACT_SHA256 = "38fSHA_TO_PIN_ON_FIRST_CI_RUN"  # 최초 CI 실행 로그의 실측값으로 고정할 것
+TESSERACT_SHA256 = "c885fff6998e0608ba4bb8ab51436e1c6775c2bafc2559a19b423e18678b60c9"
 
-TESSDATA_COMMIT = "4767ea922bcc460e70b87b1d303ebdfed0897da8"  # tessdata_fast 고정 커밋
+TESSDATA_COMMIT = "87416418657359cb625c412a48b6e1d6d41c29bd"  # tessdata_fast 고정 커밋
 TESSDATA = {
     "kor.traineddata": (
         f"https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/{TESSDATA_COMMIT}/kor.traineddata",
-        None,  # 최초 실행 시 manifest에 기록되는 실측 sha256으로 고정
+        "6b85e11d9bbf07863b97b3523b1b112844c43e713df8b66418a081fd1060b3b2",
     ),
     "eng.traineddata": (
         f"https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/{TESSDATA_COMMIT}/eng.traineddata",
-        None,
+        "7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2",
     ),
     "osd.traineddata": (
         f"https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/{TESSDATA_COMMIT}/osd.traineddata",
-        None,
+        "9cf5d576fcc47564f11265841e5ca839001e7e6f38ff7f7aacf46d15a96b00ff",
     ),
 }
 
@@ -56,11 +56,15 @@ def sha256_of(path: Path) -> str:
 
 
 def download(url: str, dest: Path, expected_sha: str | None) -> str:
+    """fail-closed: 기대 checksum이 없거나 불일치하면 즉시 실패한다."""
     print(f"download: {url}")
     with urllib.request.urlopen(url, timeout=120) as resp:
         dest.write_bytes(resp.read())
     digest = sha256_of(dest)
-    if expected_sha and not expected_sha.startswith("38f") and digest != expected_sha:
+    if not expected_sha:
+        print(f"::error::checksum 미고정: {dest.name} — 스크립트에 sha256을 고정하세요.")
+        sys.exit(1)
+    if digest != expected_sha:
         print(f"::error::checksum 불일치: {dest.name} {digest} != {expected_sha}")
         sys.exit(1)
     print(f"  sha256={digest} size={dest.stat().st_size}")

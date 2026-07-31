@@ -50,7 +50,7 @@ class LocalTaskRunner:
     async def _run_ocr(
         self, document_id: uuid.UUID, correlation_id: str, language: str, quality: str
     ) -> None:
-        from app.services.tasks.ocr_job import run_ocr_job
+        from app.services.tasks.ocr_job import mark_ocr_job_crashed, run_ocr_job
 
         async with self._semaphore:
             try:
@@ -59,6 +59,10 @@ class LocalTaskRunner:
                 )
             except Exception:
                 logger.error("ocr_job_crashed", document_id=str(document_id))
+                try:
+                    await mark_ocr_job_crashed(document_id)
+                except Exception:
+                    logger.error("mark_ocr_crashed_failed", document_id=str(document_id))
 
     def _spawn(self, coro) -> None:
         task = asyncio.get_running_loop().create_task(coro)
@@ -164,6 +168,27 @@ class LocalTaskRunner:
         for doc_id in ocr_docs:
             self.enqueue_ocr(doc_id, f"recovery-{uuid.uuid4().hex[:8]}")
         to_enqueue.extend(ocr_docs)
+
+        # 대기 페이지 없이 RUNNING/QUEUED로 남은 stale OCR 잡 정리 (H5: 영구 차단 방지)
+        from datetime import UTC as _UTC
+        from datetime import datetime as _dt
+
+        from app.models.document import DocumentJob
+        from app.models.enums import JobStatus, JobType
+
+        async with get_session_factory()() as session:
+            stale_stmt = select(DocumentJob).where(
+                DocumentJob.job_type == JobType.OCR_DOCUMENT,
+                DocumentJob.status.in_([JobStatus.QUEUED, JobStatus.RUNNING]),
+            )
+            if ocr_docs:
+                stale_stmt = stale_stmt.where(DocumentJob.document_id.notin_(ocr_docs))
+            stale_jobs = (await session.execute(stale_stmt)).scalars().all()
+            for job in stale_jobs:
+                job.status = JobStatus.FAILED
+                job.failure_code = "INTERRUPTED"
+                job.completed_at = _dt.now(_UTC)
+            await session.commit()
         if docs:
             logger.info(
                 "recovered_interrupted_jobs", requeued=len(to_enqueue), total=len(docs)

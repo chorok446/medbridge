@@ -12,8 +12,9 @@ from app.core.errors import AppError, ErrorCode
 from app.core.logging import correlation_id_var
 from app.db.session import get_db
 from app.models.document import DocumentJob
-from app.models.enums import JobStatus, JobType
+from app.models.enums import JobStatus, JobType, OcrRunStatus
 from app.models.extraction import DocumentPage
+from app.models.ocr import OcrRun
 from app.models.user import User
 from app.schemas.common import CamelModel, Envelope
 from app.schemas.document import DocumentOut
@@ -145,20 +146,27 @@ async def ocr_status(
         )
     ).scalars().first()
     in_progress = [p for p in pages if p.ocr_status in ("pending", "running")]
-    terminal = [
-        p
-        for p in pages
-        if p.ocr_status
-        in ("ocr_completed", "ocr_low_confidence", "ocr_empty", "ocr_failed", "ocr_cancelled")
-    ]
+    # 진행률은 최근 잡 범위로 한정한다 — 과거 실행의 완료 페이지를 합산하지 않는다
+    done_page_ids: set[uuid.UUID] = set()
+    if job is not None:
+        rows = (
+            await db.execute(
+                select(OcrRun.page_id).where(
+                    OcrRun.document_id == document_id,
+                    OcrRun.created_at >= job.created_at,
+                    OcrRun.status != OcrRunStatus.RUNNING,
+                )
+            )
+        ).all()
+        done_page_ids = {r[0] for r in rows}
     return wrap(
         OcrStatusOut(
             available=ocr_service.engine().available,
             running=job is not None
             and job.status in (JobStatus.QUEUED, JobStatus.RUNNING)
             and bool(in_progress),
-            total_targets=len(in_progress) + len(terminal),
-            done=len(terminal),
+            total_targets=len(in_progress) + len(done_page_ids),
+            done=len(done_page_ids),
             failed=sum(1 for p in pages if p.ocr_status == "ocr_failed"),
             low_confidence_pages=[
                 p.page_number for p in pages if p.ocr_status == "ocr_low_confidence"

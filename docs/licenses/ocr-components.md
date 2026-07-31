@@ -3,7 +3,7 @@
 | 구성요소 | 버전 | 출처 | 라이선스 | 배포 파일 |
 |---|---|---|---|---|
 | Tesseract OCR | 5.4.0 (UB-Mannheim 빌드 5.4.0.20240606) | github.com/UB-Mannheim/tesseract | Apache-2.0 | tesseract.exe + DLL |
-| tessdata_fast kor | 고정 커밋 4767ea9 | github.com/tesseract-ocr/tessdata_fast | Apache-2.0 | kor.traineddata |
+| tessdata_fast kor | 고정 커밋 8741641 | github.com/tesseract-ocr/tessdata_fast | Apache-2.0 | kor.traineddata |
 | tessdata_fast eng | 동일 커밋 | 동일 | Apache-2.0 | eng.traineddata |
 | tessdata_fast osd | 동일 커밋 | 동일 | Apache-2.0 | osd.traineddata |
 

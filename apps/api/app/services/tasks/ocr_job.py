@@ -151,6 +151,8 @@ async def run_ocr_job(
                 error=type(exc).__name__,
             )
             async with factory() as session:
+                if not await _job_is_current(session, document_id, job_id):
+                    return  # 취소·교체된 실행은 실패 기록도 남기지 않는다 (H4)
                 page = (
                     await session.execute(
                         select(DocumentPage).where(
@@ -191,3 +193,25 @@ async def run_ocr_job(
         logger.info(
             "ocr_job_done", document_id=str(document_id), processed=processed, failed=failed
         )
+
+
+async def mark_ocr_job_crashed(document_id: uuid.UUID) -> None:
+    """크래시 경계 — RUNNING으로 남은 OCR 잡을 실패로 확정해 영구 차단을 막는다 (H5)."""
+    factory = get_session_factory()
+    async with factory() as session:
+        job = (
+            await session.execute(
+                select(DocumentJob)
+                .where(
+                    DocumentJob.document_id == document_id,
+                    DocumentJob.job_type == JobType.OCR_DOCUMENT,
+                )
+                .order_by(DocumentJob.created_at.desc())
+                .limit(1)
+            )
+        ).scalars().first()
+        if job is not None and job.status in (JobStatus.QUEUED, JobStatus.RUNNING):
+            job.status = JobStatus.FAILED
+            job.failure_code = "OCR_CRASHED"
+            job.completed_at = datetime.now(UTC)
+            await session.commit()

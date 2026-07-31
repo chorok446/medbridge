@@ -94,8 +94,8 @@ async def start_ocr(
         raise AppError(ErrorCode.VALIDATION_FAILED, "잘못된 품질 값입니다.", status_code=422)
 
     running = await _latest_ocr_job(db, doc.id)
-    if running is not None and running.status == JobStatus.RUNNING:
-        return doc, 0  # 이미 진행 중 (idempotent)
+    if running is not None and running.status in (JobStatus.QUEUED, JobStatus.RUNNING):
+        return doc, 0  # 이미 대기·진행 중 (중복 실행 금지)
 
     targets = await select_target_pages(db, doc.id, pages)
     if not targets:
@@ -206,6 +206,26 @@ async def _delete_ocr_rows(db: AsyncSession, page_id: uuid.UUID) -> None:
             DocumentWord.page_id == page_id, DocumentWord.source_method == "ocr"
         )
     )
+
+
+async def _digital_normalized_text(db: AsyncSession, page_id: uuid.UUID) -> str:
+    """디지털 블록만으로 본문 재구성 — OCR 재실행 시 누적을 막는 단일 기준."""
+    rows = (
+        await db.execute(
+            select(DocumentBlock)
+            .where(DocumentBlock.page_id == page_id)
+            .order_by(DocumentBlock.reading_order)
+        )
+    ).scalars()
+    texts, excludes = [], []
+    for b in rows:
+        if (b.metadata_json or {}).get("source") == "ocr":
+            continue
+        texts.append(b.text or "")
+        excludes.append(bool(b.is_header or b.is_footer or b.is_table))
+    from app.services.extraction.normalize import page_normalized_text
+
+    return page_normalized_text(texts, exclude_flags=excludes)
 
 
 async def apply_ocr_result(
@@ -322,21 +342,29 @@ async def apply_ocr_result(
     db.add_all(word_rows)
 
     status, low_ratio, median = classify_result(result)
-    ocr_text = normalize_text(
-        "\n".join(b.text for b in block_rows)
-    )
-    had_digital = bool((page.normalized_text or "").strip())
-    if ocr_text:
-        page.normalized_text = (
-            f"{page.normalized_text}\n\n{ocr_text}" if had_digital else ocr_text
+    ocr_text = normalize_text("\n".join(b.text for b in block_rows))
+    # 재실행 누적 방지: 항상 디지털 기준에서 다시 조립한다
+    digital_text = await _digital_normalized_text(db, page.id)
+    digital_word_count = (
+        await db.execute(
+            select(func.count())
+            .select_from(DocumentWord)
+            .where(DocumentWord.page_id == page.id, DocumentWord.source_method == "digital")
         )
-    page.extraction_method = "hybrid" if had_digital and ocr_text else (
-        "ocr" if ocr_text else page.extraction_method
-    )
+    ).scalar_one()
+    had_digital = bool(digital_text.strip())
+    if ocr_text and had_digital:
+        page.normalized_text = f"{digital_text}\n\n{ocr_text}"
+        page.extraction_method = "hybrid"
+    elif ocr_text:
+        page.normalized_text = ocr_text
+        page.extraction_method = "ocr"
+    else:
+        page.normalized_text = digital_text
     page.requires_ocr = False
     page.ocr_status = status.value
     page.ocr_mean_confidence = result.mean_confidence
-    page.word_count = page.word_count + len(word_rows)
+    page.word_count = digital_word_count + len(word_rows)
 
     run.status = status
     run.mean_confidence = result.mean_confidence
@@ -357,18 +385,21 @@ async def rollup_document_status(db: AsyncSession, doc: Document) -> None:
     if not pages:
         return
     remaining_ocr = sum(1 for p in pages if p.requires_ocr)
-    failed = sum(
+    # 실패·빈 결과 페이지는 '읽힌 것'으로 승격하지 않는다 (M6)
+    unresolved = sum(
         1
         for p in pages
         if p.extraction_status.value == "failed"
-        or p.ocr_status in (OcrRunStatus.OCR_FAILED.value,)
+        or p.ocr_status in (OcrRunStatus.OCR_FAILED.value, OcrRunStatus.OCR_EMPTY.value)
     )
     if doc.processing_status not in (
         ProcessingStatus.OCR_REQUIRED,
         ProcessingStatus.PARTIALLY_EXTRACTED,
     ):
         return
-    if remaining_ocr == 0 and failed == 0:
+    if remaining_ocr == 0 and unresolved == 0:
         transition(doc, ProcessingStatus.EXTRACTED)
-    elif doc.processing_status == ProcessingStatus.OCR_REQUIRED and remaining_ocr < len(pages):
+    elif doc.processing_status == ProcessingStatus.OCR_REQUIRED and (
+        remaining_ocr + unresolved
+    ) < len(pages):
         transition(doc, ProcessingStatus.PARTIALLY_EXTRACTED)

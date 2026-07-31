@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { cancelOcr, getOcrStatus, retryOcr, startOcr } from "@/lib/api/ocr";
 
@@ -19,9 +20,21 @@ export function OcrPanel({ documentId, ocrPageCount }: { documentId: string; ocr
   const invalidateAll = () => {
     void queryClient.invalidateQueries({ queryKey: ["ocr-status", documentId] });
     void queryClient.invalidateQueries({ queryKey: ["document", documentId] });
+    void queryClient.invalidateQueries({ queryKey: ["extraction-status", documentId] });
     void queryClient.invalidateQueries({ queryKey: ["extraction-pages", documentId] });
     void queryClient.invalidateQueries({ queryKey: ["extraction-page", documentId] });
+    void queryClient.invalidateQueries({ queryKey: ["extraction-blocks", documentId] });
+    void queryClient.invalidateQueries({ queryKey: ["extraction-tables", documentId] });
   };
+
+  // OCR이 끝나는 순간(running true→false) 본문·블록 화면을 새로 고친다
+  const running = statusQuery.data?.running ?? false;
+  const wasRunning = useRef(false);
+  useEffect(() => {
+    if (wasRunning.current && !running) invalidateAll();
+    wasRunning.current = running;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [running]);
 
   const startMutation = useMutation({ mutationFn: () => startOcr(documentId), onSettled: invalidateAll });
   const retryMutation = useMutation({ mutationFn: () => retryOcr(documentId), onSettled: invalidateAll });

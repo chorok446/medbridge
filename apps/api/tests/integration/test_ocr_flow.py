@@ -316,6 +316,77 @@ class TestOcrControlPaths:
         assert len(texts) == 4  # 교체, 누적 아님
         assert runs == 2  # 실행 기록은 누적 보존
 
+    async def test_rerun_does_not_accumulate_text_and_word_count(self, client, monkeypatch):
+        """재실행해도 normalized_text·word_count가 누적되지 않는다 (Codex H2)."""
+        fake = FakeEngine(
+            result=OcrResult(page_number=1, words=fake_words(["누적", "검증", "단어", "넷"]))
+        )
+        monkeypatch.setattr(ocr_service, "engine", lambda: fake)
+        doc = await upload_extracted(client, fx.blank_image_page())
+        for _ in range(3):
+            await client.post(f"/api/documents/{doc['id']}/ocr", json={"pages": [1]})
+            await drain_jobs()
+        async with get_session_factory()() as session:
+            page = (
+                await session.execute(
+                    select(DocumentPage).where(
+                        DocumentPage.document_id == uuid.UUID(doc["id"])
+                    )
+                )
+            ).scalar_one()
+        assert page.word_count == 4
+        assert page.normalized_text.count("누적") == 1
+
+    async def test_empty_result_keeps_document_unresolved(self, client, monkeypatch):
+        """ocr_empty 페이지만 있으면 extracted로 승격되지 않는다 (Codex M6)."""
+        fake = FakeEngine(result=OcrResult(page_number=1, words=[]))
+        monkeypatch.setattr(ocr_service, "engine", lambda: fake)
+        doc = await upload_extracted(client, fx.blank_image_page())
+        await client.post(f"/api/documents/{doc['id']}/ocr")
+        await drain_jobs()
+        after = (await client.get(f"/api/documents/{doc['id']}")).json()["data"]
+        assert after["processingStatus"] == "ocr_required"
+
+    async def test_duplicate_start_blocked_while_queued(self, client, monkeypatch):
+        """큐 대기 중 중복 시작은 거부된다 (Codex H3)."""
+        import asyncio
+
+        class SlowEngine(FakeEngine):
+            def recognize_page(self, pdf_path, page_number, *, language="kor+eng", dpi=0):
+                import time
+
+                time.sleep(0.3)
+                return super().recognize_page(
+                    pdf_path, page_number, language=language, dpi=dpi
+                )
+
+        fake = SlowEngine(
+            result=OcrResult(page_number=1, words=fake_words(["중복", "시작", "차단", "확인"]))
+        )
+        monkeypatch.setattr(ocr_service, "engine", lambda: fake)
+        doc = await upload_extracted(client, fx.blank_image_page())
+        first = await client.post(f"/api/documents/{doc['id']}/ocr")
+        assert first.json()["data"]["started"] is True
+        await asyncio.sleep(0.05)
+        second = await client.post(f"/api/documents/{doc['id']}/ocr", json={"pages": [1]})
+        assert second.json()["data"]["started"] is False
+        await drain_jobs()
+
+    async def test_status_scoped_to_latest_job(self, client, monkeypatch):
+        """진행률은 최근 잡 범위만 센다 — 과거 완료 페이지 합산 금지 (Codex M8)."""
+        fake = FakeEngine(
+            result=OcrResult(page_number=1, words=fake_words(["범위", "검증", "단어", "넷"]))
+        )
+        monkeypatch.setattr(ocr_service, "engine", lambda: fake)
+        doc = await upload_extracted(client, fx.scanned_page_doc(text_pages=0, scanned_pages=3))
+        await client.post(f"/api/documents/{doc['id']}/ocr")
+        await drain_jobs()
+        await client.post(f"/api/documents/{doc['id']}/ocr", json={"pages": [1]})
+        await drain_jobs()
+        status = (await client.get(f"/api/documents/{doc['id']}/ocr-status")).json()["data"]
+        assert status["done"] == 1
+        assert status["totalTargets"] == 1
+
     async def test_delete_cleans_ocr_rows(self, client, monkeypatch):
         fake = FakeEngine(
             result=OcrResult(page_number=1, words=fake_words(["삭제", "전", "데이터", "확인"]))
