@@ -31,3 +31,8 @@ test-results/
 
 # Local data (never bind-mount DB data on external SSD; named volumes only)
 .data/
+
+# Rust / Tauri
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/binaries/
+apps/desktop/src-tauri/resources/ocr/
