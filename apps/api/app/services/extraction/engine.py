@@ -76,6 +76,11 @@ def extract_page(doc: pymupdf.Document, index: int) -> PageData:
     rect = page.rect
     width, height = float(rect.width), float(rect.height)
     rotation = int(page.rotation) % 360
+    matrix = page.rotation_matrix  # 원시 추출 좌표(회전 미적용) → 시각 공간(page.rect 기준)
+
+    def vis(bbox_like) -> BBox:
+        r = pymupdf.Rect(bbox_like) * matrix
+        return clamp_bbox((r.x0, r.y0, r.x1, r.y1), width, height)
 
     raw_text = page.get_text("text")
 
@@ -83,7 +88,7 @@ def extract_page(doc: pymupdf.Document, index: int) -> PageData:
     blocks: list[BlockRec] = []
     text_dict = page.get_text("dict")
     for block_index, raw_block in enumerate(text_dict.get("blocks", [])):
-        bbox = clamp_bbox(tuple(raw_block["bbox"]), width, height)
+        bbox = vis(raw_block["bbox"])
         if raw_block.get("type") == 1:  # 이미지 블록
             blocks.append(
                 BlockRec(bbox=bbox, text="", block_index=block_index, block_type="image")
@@ -95,7 +100,7 @@ def extract_page(doc: pymupdf.Document, index: int) -> PageData:
             line_text = "".join(span.get("text", "") for span in raw_line.get("spans", []))
             lines.append(
                 LineRec(
-                    bbox=clamp_bbox(tuple(raw_line["bbox"]), width, height),
+                    bbox=vis(raw_line["bbox"]),
                     text=line_text,
                     line_index=line_index,
                 )
@@ -114,7 +119,7 @@ def extract_page(doc: pymupdf.Document, index: int) -> PageData:
     # 단어 (block/line 번호 포함)
     words = [
         WordRec(
-            bbox=clamp_bbox((w[0], w[1], w[2], w[3]), width, height),
+            bbox=vis((w[0], w[1], w[2], w[3])),
             text=w[4],
             block_index=int(w[5]),
             line_index=int(w[6]),
@@ -130,7 +135,7 @@ def extract_page(doc: pymupdf.Document, index: int) -> PageData:
     page_area = max(width * height, 1.0)
     try:
         for info in page.get_image_info():
-            bbox = clamp_bbox(tuple(info["bbox"]), width, height)
+            bbox = vis(info["bbox"])
             image_bboxes.append(bbox)
             area = bbox_area(bbox)
             covered += area
@@ -153,7 +158,7 @@ def extract_page(doc: pymupdf.Document, index: int) -> PageData:
                 )
                 tables.append(
                     TableRec(
-                        bbox=clamp_bbox(tuple(t.bbox), width, height),
+                        bbox=vis(t.bbox),
                         row_count=len(cells),
                         column_count=col_count,
                         cells=cells,
@@ -165,7 +170,7 @@ def extract_page(doc: pymupdf.Document, index: int) -> PageData:
             except Exception:
                 tables.append(
                     TableRec(
-                        bbox=clamp_bbox(tuple(t.bbox), width, height),
+                        bbox=vis(t.bbox),
                         row_count=0,
                         column_count=0,
                         cells=[],

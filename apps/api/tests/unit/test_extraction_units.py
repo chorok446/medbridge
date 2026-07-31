@@ -160,3 +160,46 @@ class TestHeaderFooter:
         zones = {z for page_marks in marks.values() for z in page_marks.values()}
         assert "header" in zones
         assert "footer" in zones
+
+
+class TestSeparatorPlacement:
+    def test_mid_page_separator_comes_after_body_above_it(self):
+        """본문 위에 있는 전체 폭 구분 블록(섹션 제목)이 그 위 본문보다 먼저 오면 안 된다."""
+        from app.services.extraction.engine import BlockRec
+
+        def blk(i, x0, y0, x1, y1, text):
+            return BlockRec(bbox=(x0, y0, x1, y1), text=text, block_index=i, block_type="text")
+
+        page_w, page_h = 595.0, 842.0
+        blocks = [
+            blk(0, 60, 50, 540, 70, "TITLE"),  # 전체 폭 제목 (band 경계)
+            blk(1, 60, 100, 280, 300, "LEFT-A"),
+            blk(2, 320, 100, 540, 300, "RIGHT-A"),
+            blk(3, 60, 320, 540, 340, "SECTION"),  # 본문 중간 전체 폭 구분
+            blk(4, 60, 360, 280, 500, "LEFT-B"),
+            blk(5, 320, 360, 540, 500, "RIGHT-B"),
+        ]
+        result = compute_reading_order(blocks, page_w, page_h)
+        assert result.two_column
+        texts = _ordered_texts_from(blocks, result.order)
+        # TITLE → (LEFT-A → RIGHT-A) → SECTION → (LEFT-B → RIGHT-B)
+        assert texts.index("LEFT-A") < texts.index("SECTION")
+        assert texts.index("RIGHT-A") < texts.index("SECTION")
+        assert texts.index("SECTION") < texts.index("LEFT-B")
+        assert texts.index("TITLE") < texts.index("LEFT-A")
+
+
+class TestRotatedCoordinates:
+    def test_rotated_bbox_is_in_visual_space(self):
+        """회전 페이지의 좌표는 화면에 보이는(회전 적용) 공간이어야 한다."""
+        pages = _pages(fx.rotated_page())
+        page = pages[0]
+        block = next(b for b in page.blocks if b.text.strip())
+        # A4 세로 문서를 90° 회전: 원래 좌상단 텍스트는 시각적으로 오른쪽에 나타난다
+        assert block.bbox[0] > page.width * 0.5
+        assert block.bbox[2] <= page.width and block.bbox[3] <= page.height
+
+
+def _ordered_texts_from(blocks, order):
+    by_index = {b.block_index: b for b in blocks}
+    return [by_index[i].text for i in order if by_index[i].text.strip()]

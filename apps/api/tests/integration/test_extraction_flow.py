@@ -213,3 +213,26 @@ class TestExtractionFlow:
         await drain_jobs()
         final = (await client.get(f"/api/documents/{doc['id']}")).json()["data"]
         assert final["processingStatus"] == "extracted"
+
+
+class TestReprocessFailureIntegrity:
+    async def test_persist_failure_replaces_old_rows_with_failed_page(self, client, monkeypatch):
+        """재처리 중 저장 실패 시 이전 결과가 남지 않고 FAILED 페이지로 교체된다."""
+        from app.services.extraction import pipeline as pipeline_mod
+
+        doc = await upload_extracted(client, fx.single_column_korean(pages=1))
+        assert doc["processingStatus"] == "extracted"
+
+        async def boom(session, document_id, page):
+            raise RuntimeError("persist boom")
+
+        monkeypatch.setattr(pipeline_mod, "_persist_page", boom)
+        await client.post(f"/api/documents/{doc['id']}/extract/retry")
+        await drain_jobs()
+        monkeypatch.undo()
+
+        detail = (await client.get(f"/api/documents/{doc['id']}")).json()["data"]
+        assert detail["processingStatus"] == "extraction_failed"
+        pages = (await client.get(f"/api/documents/{doc['id']}/pages")).json()["data"]
+        assert len(pages) == 1
+        assert pages[0]["extractionStatus"] == "failed"  # 옛 성공 결과가 남아있지 않다

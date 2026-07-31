@@ -44,13 +44,14 @@ async def extract_document(document_id: uuid.UUID, correlation_id: str) -> None:
             logger.info("extract_skip", document_id=str(document_id))
             return
         job = await _latest_job(session, document_id)
+        job_id = job.id if job is not None else None
         if job is not None:
             job.status = JobStatus.RUNNING
             job.attempt_count += 1
             job.started_at = datetime.now(UTC)
         await session.commit()
 
-    summary = await run_extraction(factory, document_id)
+    summary = await run_extraction(factory, document_id, job_id)
 
     async with factory() as session:
         doc = await session.get(Document, document_id)
@@ -68,6 +69,8 @@ async def extract_document(document_id: uuid.UUID, correlation_id: str) -> None:
             return
         if doc.processing_status != ProcessingStatus.EXTRACTING:
             return  # 그 사이 상태가 바뀜 (삭제 등)
+        if job_id is not None and (job is None or job.id != job_id):
+            return  # 새 실행으로 교체됨 — 최종 상태는 새 실행이 결정한다
 
         final = summary.final_status
         transition(doc, final)

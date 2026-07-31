@@ -214,6 +214,7 @@ async def page_blocks(
     document_id: uuid.UUID,
     page_number: int,
     include_bands: bool = Query(default=True, description="머리말·꼬리말 포함 여부"),
+    limit: int = Query(default=1000, ge=1, le=2000),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -223,6 +224,7 @@ async def page_blocks(
         select(DocumentBlock)
         .where(DocumentBlock.page_id == page.id)
         .order_by(DocumentBlock.reading_order)
+        .limit(limit)
     )
     blocks = (await db.execute(stmt)).scalars().all()
     if not include_bands:
@@ -233,6 +235,7 @@ async def page_blocks(
 @router.get("/{document_id}/tables", response_model=Envelope[list[TableOut]])
 async def list_tables(
     document_id: uuid.UUID,
+    limit: int = Query(default=200, ge=1, le=500),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -243,6 +246,7 @@ async def list_tables(
             .join(DocumentPage, DocumentPage.id == DocumentTable.page_id)
             .where(DocumentPage.document_id == document_id)
             .order_by(DocumentPage.page_number, DocumentTable.table_index)
+            .limit(limit)
         )
     ).all()
     out = []

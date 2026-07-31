@@ -99,7 +99,9 @@ def compute_reading_order(
         key=lambda b: (
             kinds[b.block_index] == KIND_FOOTNOTE,  # 각주는 페이지 마지막
             band_of(b),
-            kinds[b.block_index],  # separator(0) → left(1) → right(2)
+            # band 안에서 왼쪽(0) → 오른쪽(1) → separator(2):
+            # separator는 자기 band를 닫는 블록이므로 그 band 본문 뒤에 온다
+            {KIND_LEFT: 0, KIND_RIGHT: 1, KIND_SEPARATOR: 2}.get(kinds[b.block_index], 0),
             b.bbox[1],
             b.bbox[0],
         ),
