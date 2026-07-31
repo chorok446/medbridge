@@ -38,6 +38,10 @@ def test_internal_error_hides_details():
 
 
 def test_correlation_id_passthrough():
+    @app.get("/__test/cid")
+    async def _ok() -> dict:
+        return {"ok": True}
+
     client = TestClient(app)
-    res = client.get("/health", headers={"X-Correlation-ID": "test-cid-123"})
+    res = client.get("/__test/cid", headers={"X-Correlation-ID": "test-cid-123"})
     assert res.headers["X-Correlation-ID"] == "test-cid-123"

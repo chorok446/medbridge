@@ -1,21 +1,14 @@
 import os
-import uuid
+import tempfile
 
-# Settings가 기동 시 검증되므로 테스트 환경 변수를 import 전에 주입한다
+# Settings가 import 시점에 캐시되므로 테스트 환경 변수를 가장 먼저 주입한다.
+# 앱 데이터(DB·문서 파일)는 저장소 밖 임시 디렉터리에 격리된다.
+_TEST_DATA_DIR = tempfile.mkdtemp(prefix="medbridge-test-")
 os.environ["APP_ENV"] = "test"
-os.environ["APP_MODE"] = "single_user"
-os.environ["LOCAL_USER_EMAIL"] = "local-test@example.com"
-os.environ["LOCAL_USER_DISPLAY_NAME"] = "테스트 사용자"
-os.environ["SECRET_KEY"] = "test-secret-key-must-be-32-chars-long!!"
-os.environ.setdefault(
-    "DATABASE_URL", "postgresql+asyncpg://medbridge:medbridge@localhost:5432/medbridge_test"
-)
-os.environ.setdefault("REDIS_URL", "redis://localhost:6379/1")
-os.environ.setdefault("MINIO_ENDPOINT", "http://localhost:9000")
-os.environ.setdefault("MINIO_PUBLIC_ENDPOINT", "http://localhost:9000")
-os.environ.setdefault("MINIO_ACCESS_KEY", "medbridge")
-os.environ.setdefault("MINIO_SECRET_KEY", "medbridge-secret")
-os.environ.setdefault("MINIO_BUCKET_ORIGINALS", "medbridge-test-originals")
+os.environ["MEDBRIDGE_APP_DATA_DIR"] = _TEST_DATA_DIR
+# .env 파일 값이 새어들지 않도록 빈 값으로 가린다 (빈 문자열 → override 미사용)
+os.environ["MEDBRIDGE_API_TOKEN"] = ""
+os.environ["DATABASE_URL"] = ""
 
 import pytest
 
@@ -50,8 +43,3 @@ def make_encrypted_pdf() -> bytes:
 @pytest.fixture
 def pdf_bytes() -> bytes:
     return make_pdf()
-
-
-@pytest.fixture
-def unique_email() -> str:
-    return f"test-{uuid.uuid4().hex[:10]}@example.com"

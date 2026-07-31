@@ -1,22 +1,17 @@
 [project]
 name = "medbridge-api"
 version = "0.1.0"
-description = "MedBridge Study API + worker"
+description = "MedBridge Study desktop sidecar (FastAPI + SQLite)"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
-    "pydantic[email]>=2.7",
+    "pydantic>=2.7",
     "pydantic-settings>=2.3",
     "sqlalchemy[asyncio]>=2.0",
-    "asyncpg>=0.29",
-    "psycopg[binary]>=3.1",
+    "aiosqlite>=0.20",
     "alembic>=1.13",
-    "redis>=5.0",
-    "dramatiq[redis]>=1.17",
-    "boto3>=1.34",
-    "argon2-cffi>=23.1",
-    "itsdangerous>=2.2",
+    "platformdirs>=4.2",
     "pypdf>=4.2",
     "python-multipart>=0.0.9",
     "structlog>=24.1",
@@ -29,7 +24,7 @@ dev = [
     "httpx>=0.27",
     "ruff>=0.5",
     "mypy>=1.10",
-    "types-boto3",
+    "pyinstaller>=6.10",
 ]
 
 [tool.pytest.ini_options]
@@ -45,6 +40,9 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 ignore = ["B008"]  # FastAPI Depends() 기본값 패턴
+
+[tool.ruff.lint.per-file-ignores]
+"tests/conftest.py" = ["E402"]  # 테스트 env를 import보다 먼저 주입해야 한다
 
 [tool.mypy]
 python_version = "3.11"

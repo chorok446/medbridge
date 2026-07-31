@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"MedBridge 기본 권한 — GUI가 필요한 최소 기능만 허용","local":true,"windows":["main"],"permissions":["core:default","dialog:default","updater:default"]}}

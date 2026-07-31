@@ -54,10 +54,9 @@ async def _find_duplicate(db: AsyncSession, user_id: uuid.UUID, sha256: str) -> 
 
 
 def _enqueue_validate(document_id: uuid.UUID, correlation_id: str) -> None:
-    # import 시점 순환을 피하기 위해 지연 import
-    from app.workers.tasks import validate_file
+    from app.services.tasks.runner import get_task_runner
 
-    validate_file.send(str(document_id), correlation_id)
+    get_task_runner().enqueue_validate(document_id, correlation_id)
 
 
 async def create_document(
@@ -98,7 +97,7 @@ async def create_document(
     db.add(doc)
     await db.flush()  # id 확보
 
-    key = storage.object_key(user.id, doc.id)
+    key = storage.object_key(doc.id)
     transition(doc, ProcessingStatus.UPLOADING)
     await db.commit()
 
@@ -307,9 +306,3 @@ async def list_jobs(db: AsyncSession, user: User, document_id: uuid.UUID) -> lis
     )
     return list((await db.execute(stmt)).scalars())
 
-
-async def download_url(db: AsyncSession, user: User, document_id: uuid.UUID) -> str:
-    doc = await get_owned_document(db, user, document_id)
-    if doc.storage_key is None:
-        raise AppError(ErrorCode.NOT_FOUND, "원본 파일이 없습니다.", status_code=404)
-    return await run_in_threadpool(storage.presigned_original_url, doc.storage_key)

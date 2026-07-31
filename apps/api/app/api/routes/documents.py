@@ -1,10 +1,11 @@
 import uuid
 
 from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
-from app.core.config import get_settings
+from app.core.errors import AppError, ErrorCode
 from app.core.logging import correlation_id_var
 from app.db.session import get_db
 from app.models.enums import ProcessingStatus
@@ -16,10 +17,9 @@ from app.schemas.document import (
     DocumentJobOut,
     DocumentList,
     DocumentOut,
-    DownloadUrl,
     RenameRequest,
 )
-from app.services.documents import service
+from app.services.documents import service, storage
 from app.utils.responses import wrap
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
@@ -72,6 +72,22 @@ async def get_document(
     return wrap(DocumentOut.model_validate(doc))
 
 
+@router.get("/{document_id}/file")
+async def get_document_file(
+    document_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> FileResponse:
+    """PDF 원문 반환 (미리보기용). 소유권 검사 후 로컬 파일을 스트리밍한다."""
+    doc = await service.get_owned_document(db, user, document_id)
+    if doc.storage_key is None:
+        raise AppError(ErrorCode.NOT_FOUND, "원본 파일이 없습니다.", status_code=404)
+    path = storage.get_storage().resolve_path(doc.storage_key)
+    if not path.is_file():
+        raise AppError(ErrorCode.NOT_FOUND, "원본 파일이 없습니다.", status_code=404)
+    return FileResponse(path, media_type="application/pdf", content_disposition_type="inline")
+
+
 @router.delete("/{document_id}", response_model=Envelope[DeletedOut])
 async def delete_document(
     document_id: uuid.UUID,
@@ -111,13 +127,3 @@ async def list_jobs(
 ) -> dict:
     jobs = await service.list_jobs(db, user, document_id)
     return wrap([DocumentJobOut.model_validate(j) for j in jobs])
-
-
-@router.get("/{document_id}/download-url", response_model=Envelope[DownloadUrl])
-async def download_url(
-    document_id: uuid.UUID,
-    user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> dict:
-    url = await service.download_url(db, user, document_id)
-    return wrap(DownloadUrl(url=url, expires_in_seconds=get_settings().presign_expiry_seconds))

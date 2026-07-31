@@ -1,19 +1,10 @@
 import type { NextConfig } from "next";
 
-// 브라우저 → Next 서버 → API 프록시.
-// 같은 오리진으로 세션 쿠키를 유지하고, API 내부 주소·저장소 자격증명을 클라이언트에 노출하지 않는다.
-const API_INTERNAL_URL = process.env.API_INTERNAL_URL ?? "http://localhost:8000";
-
+// Tauri에 정적 파일로 포함되는 데스크톱 GUI.
+// 서버 기능(리라이트·SSR)은 쓰지 않고, sidecar 주소는 런타임에 lib/api/base.ts가 해석한다.
 const nextConfig: NextConfig = {
-  output: "standalone",
-  async rewrites() {
-    return [
-      {
-        source: "/api/:path*",
-        destination: `${API_INTERNAL_URL}/api/:path*`,
-      },
-    ];
-  },
+  output: "export",
+  images: { unoptimized: true },
 };
 
 export default nextConfig;

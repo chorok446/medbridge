@@ -2,95 +2,106 @@
 
 import Link from "next/link";
 import { StatusBadge } from "@/components/status-badge";
-import { STAGE_LABELS, formatBytes, formatDate } from "@/lib/format";
+import { failureGuide, formatBytes, formatDate } from "@/lib/format";
 import type { DocumentSummary } from "@/types/api";
 
 interface Props {
   items: DocumentSummary[];
   onRetry: (id: string) => void;
+  onRename: (id: string, currentTitle: string) => void;
   onDelete: (id: string) => void;
+  onReport: (id: string) => void;
   busyId?: string | null;
 }
 
-export function DocumentTable({ items, onRetry, onDelete, busyId }: Props) {
+const actionButton =
+  "rounded border px-3 py-1.5 text-xs hover:bg-slate-50 disabled:opacity-50 border-slate-300";
+
+export function DocumentTable({ items, onRetry, onRename, onDelete, onReport, busyId }: Props) {
   if (items.length === 0) {
     return (
       <div className="rounded-lg border border-dashed border-slate-300 bg-white px-6 py-12 text-center">
-        <p className="font-medium">아직 업로드한 문서가 없습니다</p>
-        <p className="mt-1 text-sm text-slate-500">
-          위에서 첫 PDF를 업로드하면 자동으로 파일 검증이 시작됩니다.
-        </p>
+        <p className="text-lg font-medium">아직 학습자료가 없어요</p>
+        <p className="mt-1 text-sm text-slate-500">첫 PDF를 올리면 여기에 표시됩니다.</p>
+        <a
+          href="#upload-section"
+          className="mt-4 inline-block rounded bg-blue-600 px-5 py-2.5 font-medium text-white hover:bg-blue-700"
+        >
+          PDF 추가하기
+        </a>
       </div>
     );
   }
 
   return (
-    <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b border-slate-200 text-left text-xs text-slate-500">
-            <th className="px-4 py-2 font-medium">제목</th>
-            <th className="px-4 py-2 font-medium">크기</th>
-            <th className="px-4 py-2 font-medium">생성일</th>
-            <th className="px-4 py-2 font-medium">상태</th>
-            <th className="px-4 py-2 font-medium">작업</th>
-          </tr>
-        </thead>
-        <tbody>
-          {items.map((doc) => (
-            <tr key={doc.id} className="border-b border-slate-100 last:border-0">
-              <td className="max-w-[280px] px-4 py-2">
-                <Link
-                  href={`/documents/${doc.id}`}
-                  className="block truncate font-medium text-blue-700 hover:underline"
+    <ul className="flex flex-col gap-3">
+      {items.map((doc) => (
+        <li key={doc.id} className="rounded-lg border border-slate-200 bg-white p-4">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div className="min-w-0">
+              <Link
+                href={`/documents/view?id=${doc.id}`}
+                className="block truncate text-base font-semibold text-blue-700 hover:underline"
+              >
+                {doc.title}
+              </Link>
+              <p className="truncate text-xs text-slate-500">
+                {doc.originalFilename} · {formatBytes(doc.fileSize)} ·{" "}
+                {formatDate(doc.createdAt)} 추가
+              </p>
+            </div>
+            <StatusBadge status={doc.processingStatus} progress={doc.processingProgress} />
+          </div>
+
+          {doc.processingStatus === "failed" && (
+            <div className="mt-2 rounded bg-red-50 px-3 py-2 text-sm text-red-800">
+              <p className="font-medium">파일을 처리하지 못했습니다.</p>
+              <p className="mt-0.5 text-xs">{failureGuide(doc.failureCode)}</p>
+            </div>
+          )}
+
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Link href={`/documents/view?id=${doc.id}`} className={actionButton}>
+              열기
+            </Link>
+            {doc.processingStatus === "failed" && (
+              <>
+                <button
+                  type="button"
+                  disabled={busyId === doc.id}
+                  onClick={() => onRetry(doc.id)}
+                  className={actionButton}
                 >
-                  {doc.title}
-                </Link>
-                <span className="block truncate text-xs text-slate-500">
-                  {doc.originalFilename}
-                </span>
-              </td>
-              <td className="whitespace-nowrap px-4 py-2">{formatBytes(doc.fileSize)}</td>
-              <td className="whitespace-nowrap px-4 py-2">{formatDate(doc.createdAt)}</td>
-              <td className="px-4 py-2">
-                <StatusBadge status={doc.processingStatus} progress={doc.processingProgress} />
-                {doc.processingStatus !== "ready" && (
-                  <span className="block text-xs text-slate-500">
-                    {STAGE_LABELS[doc.processingStage] ?? doc.processingStage}
-                  </span>
-                )}
-                {doc.processingStatus === "failed" && doc.failureMessage && (
-                  <span className="block max-w-[220px] text-xs text-red-600">
-                    {doc.failureMessage}
-                  </span>
-                )}
-              </td>
-              <td className="whitespace-nowrap px-4 py-2">
-                <div className="flex gap-2">
-                  {doc.processingStatus === "failed" && (
-                    <button
-                      type="button"
-                      disabled={busyId === doc.id}
-                      onClick={() => onRetry(doc.id)}
-                      className="rounded border border-slate-300 px-2 py-1 text-xs hover:bg-slate-50 disabled:opacity-50"
-                    >
-                      재시도
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    disabled={busyId === doc.id}
-                    onClick={() => onDelete(doc.id)}
-                    className="rounded border border-red-200 px-2 py-1 text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
-                  >
-                    삭제
-                  </button>
-                </div>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+                  다시 시도
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onReport(doc.id)}
+                  className={actionButton}
+                >
+                  오류 신고
+                </button>
+              </>
+            )}
+            <button
+              type="button"
+              disabled={busyId === doc.id}
+              onClick={() => onRename(doc.id, doc.title)}
+              className={actionButton}
+            >
+              이름 변경
+            </button>
+            <button
+              type="button"
+              disabled={busyId === doc.id}
+              onClick={() => onDelete(doc.id)}
+              className="rounded border border-red-200 px-3 py-1.5 text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
+            >
+              삭제
+            </button>
+          </div>
+        </li>
+      ))}
+    </ul>
   );
 }

@@ -1,3 +1,4 @@
+import { getApiConfig } from "@/lib/api/base";
 import type { ApiErrorBody, ApiSuccess } from "@/types/api";
 
 export class ApiError extends Error {
@@ -14,12 +15,14 @@ export class ApiError extends Error {
 }
 
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
+  const { base, token } = await getApiConfig();
+  const res = await fetch(`${base}${path}`, {
     ...init,
     headers: {
       ...(init?.body && typeof init.body === "string"
         ? { "Content-Type": "application/json" }
         : {}),
+      ...(token ? { "X-MedBridge-Token": token } : {}),
       ...init?.headers,
     },
   });
@@ -32,7 +35,7 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError(
       res.status,
       err?.error.code ?? "INTERNAL_ERROR",
-      err?.error.message ?? "서버 오류가 발생했습니다.",
+      err?.error.message ?? "문제가 발생했습니다. 잠시 후 다시 시도해 주세요.",
       err?.error.retryable ?? false,
     );
   }

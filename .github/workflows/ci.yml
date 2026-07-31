@@ -1,0 +1,103 @@
+name: CI
+
+on:
+  push:
+    branches: [develop]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        run: uv sync
+      - name: Lint
+        run: uv run ruff check .
+      - name: Typecheck
+        run: uv run mypy app
+      - name: Tests (unit + integration, 외부 인프라 불필요)
+        run: uv run pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Lint
+        run: pnpm lint
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Tests
+        run: pnpm test
+      - name: Static export build
+        run: pnpm build
+
+  migrations:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install dependencies
+        run: uv sync
+      - name: Empty-DB upgrade → downgrade → upgrade cycle
+        env:
+          MEDBRIDGE_APP_DATA_DIR: /tmp/medbridge-ci
+        run: |
+          uv run alembic upgrade head
+          uv run alembic downgrade base
+          uv run alembic upgrade head
+
+  # develop/PR에서는 Windows 빌드가 깨지지 않는지만 검증한다 (Release 생성 안 함)
+  windows-build-check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: astral-sh/setup-uv@v5
+      - name: Frontend build (static export)
+        working-directory: apps/web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm build
+      - name: Sidecar exe build
+        working-directory: apps/api
+        run: |
+          uv sync
+          uv run pyinstaller sidecar.spec
+      - name: Place sidecar for Tauri
+        shell: bash
+        run: |
+          mkdir -p apps/desktop/src-tauri/binaries
+          cp apps/api/dist/medbridge-sidecar.exe \
+            apps/desktop/src-tauri/binaries/medbridge-sidecar-x86_64-pc-windows-msvc.exe
+      - name: Tauri Windows build (bundle 검증, 서명 없음)
+        working-directory: apps/desktop
+        run: |
+          pnpm install
+          pnpm tauri build -- --no-sign 2>$null; if ($LASTEXITCODE -ne 0) { pnpm tauri build }

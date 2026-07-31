@@ -1,0 +1,4 @@
+#!/bin/sh
+# macOS 개발 스텁 — dev 모드에서는 Rust가 uv로 sidecar를 직접 실행한다.
+echo "medbridge-sidecar stub (dev)" >&2
+exit 1

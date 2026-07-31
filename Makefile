@@ -1,32 +1,26 @@
-.PHONY: setup up down clean migrate revision test test-api test-web lint typecheck upload-sample logs
+.PHONY: setup dev-api dev-web dev-desktop test test-api test-web lint typecheck sample migrate
 
 setup: ## 초기 설치 (.env 생성 + 의존성)
 	@test -f .env || cp .env.example .env
 	cd apps/api && uv sync
 	cd apps/web && pnpm install
+	cd apps/desktop && pnpm install
 
-up: ## 전체 스택 기동 + 마이그레이션
-	docker compose up -d --build postgres redis minio minio-init api worker web
-	docker compose run --rm migrate
+dev-api: ## sidecar 단독 실행 (개발·브라우저 테스트용, 포트 8765)
+	cd apps/api && uv run uvicorn app.main:app --host 127.0.0.1 --port 8765 --reload
 
-down: ## 종료 (데이터 유지)
-	docker compose down
+dev-web: ## GUI 개발 서버 (브라우저, sidecar 별도 실행 필요)
+	cd apps/web && pnpm dev
 
-clean: ## 종료 + 볼륨 초기화 (모든 로컬 데이터 삭제)
-	docker compose down -v
+dev-desktop: ## Tauri 개발 앱 실행 (sidecar 자동 기동)
+	cd apps/desktop && pnpm tauri dev
 
-migrate: ## 마이그레이션 적용
-	docker compose run --rm migrate
+test: test-api test-web ## 전체 테스트 (외부 인프라 불필요)
 
-revision: ## 새 마이그레이션 생성: make revision m="메시지"
-	cd apps/api && uv run alembic revision -m "$(m)"
-
-test: test-api test-web ## 전체 테스트
-
-test-api: ## 백엔드 테스트 (통합 테스트는 스택 기동 필요)
+test-api:
 	cd apps/api && uv run pytest
 
-test-web: ## 프론트엔드 테스트
+test-web:
 	cd apps/web && pnpm test
 
 lint:
@@ -37,8 +31,8 @@ typecheck:
 	cd apps/api && uv run mypy app
 	cd apps/web && pnpm typecheck
 
-upload-sample: ## 샘플 PDF 업로드 (스택 기동 + 회원가입 포함 전체 흐름)
-	./scripts/upload-sample.sh
+migrate: ## 마이그레이션 수동 적용 (앱 시작 시엔 자동 실행됨)
+	cd apps/api && uv run alembic upgrade head
 
-logs:
-	docker compose logs -f api worker
+sample: ## 샘플 PDF 업로드 검증 (dev-api가 떠 있어야 함)
+	./scripts/upload-sample.sh

@@ -1,15 +1,81 @@
+import shutil
 import uuid
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.routes import auth, documents, health, reports
+from app.core.config import get_settings
 from app.core.errors import AppError, ErrorCode
 from app.core.logging import configure_logging, correlation_id_var, get_logger
-from app.workers.broker import setup_broker
+from app.core.paths import get_path_provider
 
 logger = get_logger(__name__)
+
+ALEMBIC_DIR = Path(__file__).resolve().parents[1] / "alembic"
+ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
+
+
+def _current_and_head_revision() -> tuple[str | None, str]:
+    from alembic.config import Config
+    from alembic.runtime.migration import MigrationContext
+    from alembic.script import ScriptDirectory
+    from sqlalchemy import create_engine
+
+    cfg = Config(str(ALEMBIC_INI))
+    cfg.set_main_option("script_location", str(ALEMBIC_DIR))
+    head = ScriptDirectory.from_config(cfg).get_current_head() or ""
+
+    engine = create_engine(get_settings().database_url_sync)
+    try:
+        with engine.connect() as conn:
+            current = MigrationContext.configure(conn).get_current_revision()
+    finally:
+        engine.dispose()
+    return current, head
+
+
+def run_migrations() -> None:
+    """앱 시작 시 자동 마이그레이션. 실행 전 DB 파일을 백업한다.
+
+    실패 시 예외를 올려 앱이 정상 상태로 기동되지 않게 한다.
+    """
+    from alembic.config import Config
+
+    from alembic import command
+
+    provider = get_path_provider()
+    provider.ensure_directories()
+
+    current, head = _current_and_head_revision()
+    db_path = provider.db_path
+    if db_path.is_file() and current != head:
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        backup = provider.backups_dir / f"medbridge-{current or 'empty'}-{stamp}.db"
+        shutil.copy2(db_path, backup)
+        logger.info("db_backup_created", backup=backup.name)
+
+    cfg = Config(str(ALEMBIC_INI))
+    cfg.set_main_option("script_location", str(ALEMBIC_DIR))
+    command.upgrade(cfg, "head")
+    logger.info("migrations_applied", revision=head)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    import asyncio
+
+    from app.services.tasks.runner import get_task_runner
+
+    await asyncio.to_thread(run_migrations)
+    recovered = await get_task_runner().recover_interrupted()
+    logger.info("sidecar_ready", recovered_jobs=recovered)
+    yield
+    await get_task_runner().drain()
 
 
 def _error_response(
@@ -35,14 +101,40 @@ def _error_response(
 
 
 def create_app() -> FastAPI:
+    from app.api.routes import documents, health, profile, reports
+
     configure_logging()
-    setup_broker()
-    app = FastAPI(title="MedBridge Study API", version="0.1.0")
+    settings = get_settings()
+    app = FastAPI(title="MedBridge Sidecar", version="0.1.0", lifespan=lifespan)
+
+    # 개발 브라우저와 Tauri 웹뷰 오리진만 허용
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "tauri://localhost",
+            "http://tauri.localhost",
+            "https://tauri.localhost",
+            "http://localhost:3000",
+        ],
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     @app.middleware("http")
-    async def correlation_middleware(request: Request, call_next):
+    async def correlation_and_token_middleware(request: Request, call_next):
         cid = request.headers.get("X-Correlation-ID") or str(uuid.uuid4())
         correlation_id_var.set(cid)
+
+        # 로컬 API 보호: Tauri가 발급한 토큰 없이는 접근 불가 (미설정 시 개발 모드)
+        token = settings.medbridge_api_token
+        if token and request.url.path != "/health":
+            supplied = request.headers.get("X-MedBridge-Token") or request.query_params.get(
+                "token"
+            )
+            if supplied != token:
+                return _error_response(401, ErrorCode.UNAUTHORIZED, "인증되지 않은 요청입니다.")
+
         response = await call_next(request)
         response.headers["X-Correlation-ID"] = cid
         return response
@@ -69,12 +161,12 @@ def create_app() -> FastAPI:
         return _error_response(
             500,
             ErrorCode.INTERNAL_ERROR,
-            "서버 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.",
+            "문제가 발생했습니다. 잠시 후 다시 시도해 주세요.",
             retryable=True,
         )
 
     app.include_router(health.router)
-    app.include_router(auth.router)
+    app.include_router(profile.router)
     app.include_router(documents.router)
     app.include_router(reports.router)
     return app

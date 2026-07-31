@@ -1,0 +1,123 @@
+name: Release (Windows)
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Read app version
+        id: version
+        shell: bash
+        run: echo "version=$(node -p "require('./apps/desktop/src-tauri/tauri.conf.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Fail if release already exists (덮어쓰기 금지)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
+        run: |
+          if gh release view "v${{ steps.version.outputs.version }}" --repo chorok446/medbridge-releases > /dev/null 2>&1; then
+            echo "::error::v${{ steps.version.outputs.version }} 릴리스가 이미 존재합니다. 버전을 올린 뒤 다시 병합하세요."
+            exit 1
+          fi
+
+      - name: Frontend deps + checks
+        working-directory: apps/web
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm typecheck
+          pnpm test
+
+      - name: Backend deps + tests
+        working-directory: apps/api
+        run: |
+          uv sync
+          uv run pytest -q
+
+      - name: Build sidecar exe
+        working-directory: apps/api
+        run: uv run pyinstaller sidecar.spec
+
+      - name: Place sidecar for Tauri
+        shell: bash
+        run: |
+          mkdir -p apps/desktop/src-tauri/binaries
+          cp apps/api/dist/medbridge-sidecar.exe \
+            apps/desktop/src-tauri/binaries/medbridge-sidecar-x86_64-pc-windows-msvc.exe
+
+      - name: Inject updater public key
+        shell: bash
+        run: |
+          python -c "
+          import json, os
+          p = 'apps/desktop/src-tauri/tauri.conf.json'
+          conf = json.load(open(p))
+          conf['plugins']['updater']['pubkey'] = os.environ['TAURI_UPDATER_PUBKEY']
+          json.dump(conf, open(p, 'w'), indent=2)
+          "
+        env:
+          TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
+
+      - name: Tauri build (NSIS + updater 서명)
+        working-directory: apps/desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          pnpm install
+          pnpm tauri build
+
+      - name: Compose latest.json
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          BUNDLE_DIR="apps/desktop/src-tauri/target/release/bundle/nsis"
+          SIG_FILE=$(ls "$BUNDLE_DIR"/*.sig | head -1)
+          PKG_FILE=$(ls "$BUNDLE_DIR"/*.exe.zip 2>/dev/null || ls "$BUNDLE_DIR"/*setup*.exe | head -1)
+          python - "$VERSION" "$SIG_FILE" "$(basename "$PKG_FILE")" <<'EOF'
+          import json, sys, datetime
+          version, sig_path, pkg_name = sys.argv[1:4]
+          latest = {
+              "version": version,
+              "notes": f"MedBridge Study {version}",
+              "pub_date": datetime.datetime.now(datetime.UTC).isoformat(),
+              "platforms": {
+                  "windows-x86_64": {
+                      "signature": open(sig_path).read(),
+                      "url": f"https://github.com/chorok446/medbridge-releases/releases/download/v{version}/{pkg_name}",
+                  }
+              },
+          }
+          json.dump(latest, open("latest.json", "w"), indent=2)
+          EOF
+
+      - name: Publish to public releases repo
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          BUNDLE_DIR="apps/desktop/src-tauri/target/release/bundle/nsis"
+          gh release create "v$VERSION" \
+            --repo chorok446/medbridge-releases \
+            --title "MedBridge Study v$VERSION" \
+            --notes "MedBridge Study v$VERSION 업데이트" \
+            "$BUNDLE_DIR"/*setup*.exe \
+            "$BUNDLE_DIR"/*.zip \
+            "$BUNDLE_DIR"/*.sig \
+            latest.json

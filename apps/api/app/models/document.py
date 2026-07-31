@@ -11,9 +11,9 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    Uuid,
     func,
 )
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -26,6 +26,17 @@ from app.models.enums import (
 )
 
 
+def _str_enum(enum_cls: type, name: str, length: int = 30) -> Enum:
+    # SQLite 호환: 네이티브 enum 대신 VARCHAR 저장 (값 목록은 코드 enum이 단일 원천)
+    return Enum(enum_cls, name=name, native_enum=False, length=length)
+
+
+def _utcnow() -> datetime:
+    from datetime import UTC
+
+    return datetime.now(UTC)
+
+
 class Document(Base):
     __tablename__ = "documents"
     __table_args__ = (
@@ -34,9 +45,9 @@ class Document(Base):
         Index("ix_documents_status", "processing_status"),
     )
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("users.id", ondelete="CASCADE"), index=True
+        ForeignKey("app_profile.id", ondelete="CASCADE"), index=True
     )
     title: Mapped[str] = mapped_column(String(500))
     original_filename: Mapped[str] = mapped_column(String(500))
@@ -47,24 +58,24 @@ class Document(Base):
     file_size: Mapped[int] = mapped_column(BigInteger)
     page_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     document_type: Mapped[DocumentType] = mapped_column(
-        Enum(DocumentType, name="document_type", native_enum=True), default=DocumentType.UNKNOWN
+        _str_enum(DocumentType, "document_type"), default=DocumentType.UNKNOWN
     )
     language: Mapped[str | None] = mapped_column(String(10), nullable=True)
     processing_status: Mapped[ProcessingStatus] = mapped_column(
-        Enum(ProcessingStatus, name="processing_status", native_enum=True),
-        default=ProcessingStatus.CREATED,
+        _str_enum(ProcessingStatus, "processing_status"), default=ProcessingStatus.CREATED
     )
     processing_stage: Mapped[ProcessingStage] = mapped_column(
-        Enum(ProcessingStage, name="processing_stage", native_enum=True),
-        default=ProcessingStage.UPLOAD,
+        _str_enum(ProcessingStage, "processing_stage"), default=ProcessingStage.UPLOAD
     )
     processing_progress: Mapped[int] = mapped_column(Integer, default=0)
     failure_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
     failure_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     external_evidence_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now()
+    )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), onupdate=_utcnow
     )
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -72,13 +83,13 @@ class Document(Base):
 class DocumentJob(Base):
     __tablename__ = "document_jobs"
 
-    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
     document_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("documents.id", ondelete="CASCADE"), index=True
     )
-    job_type: Mapped[JobType] = mapped_column(Enum(JobType, name="job_type", native_enum=True))
+    job_type: Mapped[JobType] = mapped_column(_str_enum(JobType, "job_type"))
     status: Mapped[JobStatus] = mapped_column(
-        Enum(JobStatus, name="job_status", native_enum=True), default=JobStatus.QUEUED
+        _str_enum(JobStatus, "job_status"), default=JobStatus.QUEUED
     )
     attempt_count: Mapped[int] = mapped_column(Integer, default=0)
     max_attempts: Mapped[int] = mapped_column(Integer, default=3)
@@ -87,7 +98,9 @@ class DocumentJob(Base):
     failure_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now()
+    )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), onupdate=_utcnow
     )

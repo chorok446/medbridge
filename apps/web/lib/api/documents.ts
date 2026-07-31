@@ -1,10 +1,10 @@
+import { getApiConfig } from "@/lib/api/base";
 import { api } from "@/lib/api/client";
 import type {
   DocumentCreated,
   DocumentJob,
   DocumentList,
   DocumentSummary,
-  DownloadUrl,
 } from "@/types/api";
 
 export function listDocuments(cursor?: string): Promise<DocumentList> {
@@ -26,12 +26,28 @@ export function retryDocument(id: string): Promise<DocumentSummary> {
   return api<DocumentSummary>(`/api/documents/${id}/retry`, { method: "POST" });
 }
 
+export function renameDocument(id: string, title: string): Promise<DocumentSummary> {
+  return api<DocumentSummary>(`/api/documents/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ title }),
+  });
+}
+
 export function listJobs(id: string): Promise<DocumentJob[]> {
   return api<DocumentJob[]>(`/api/documents/${id}/jobs`);
 }
 
-export function getDownloadUrl(id: string): Promise<DownloadUrl> {
-  return api<DownloadUrl>(`/api/documents/${id}/download-url`);
+export function reportError(documentId: string | null, description: string) {
+  return api<{ received: boolean }>(`/api/reports`, {
+    method: "POST",
+    body: JSON.stringify({ documentId, description }),
+  });
+}
+
+/** PDF 미리보기 iframe용 URL (iframe은 헤더를 못 보내므로 토큰은 query로) */
+export async function documentFileUrl(id: string): Promise<string> {
+  const { base, token } = await getApiConfig();
+  return `${base}/api/documents/${id}/file${token ? `?token=${encodeURIComponent(token)}` : ""}`;
 }
 
 export interface UploadHandle {
@@ -47,37 +63,40 @@ export function uploadDocument(
 ): UploadHandle {
   const xhr = new XMLHttpRequest();
   const promise = new Promise<DocumentCreated>((resolve, reject) => {
-    const form = new FormData();
-    form.append("file", file);
-    if (title) form.append("title", title);
+    void getApiConfig().then(({ base, token }) => {
+      const form = new FormData();
+      form.append("file", file);
+      if (title) form.append("title", title);
 
-    xhr.upload.addEventListener("progress", (e) => {
-      if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+      xhr.upload.addEventListener("progress", (e) => {
+        if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+      });
+      xhr.addEventListener("load", () => {
+        let parsed: unknown = null;
+        try {
+          parsed = JSON.parse(xhr.responseText) as unknown;
+        } catch {
+          parsed = null;
+        }
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve((parsed as { data: DocumentCreated }).data);
+        } else {
+          const err = parsed as { error?: { message?: string } } | null;
+          reject(
+            new Error(
+              err?.error?.message ?? "파일을 올리지 못했습니다. 잠시 후 다시 시도해 주세요.",
+            ),
+          );
+        }
+      });
+      xhr.addEventListener("error", () =>
+        reject(new Error("연결에 문제가 생겨 파일을 올리지 못했습니다. 다시 시도해 주세요.")),
+      );
+      xhr.addEventListener("abort", () => reject(new Error("업로드를 취소했습니다.")));
+      xhr.open("POST", `${base}/api/documents`);
+      if (token) xhr.setRequestHeader("X-MedBridge-Token", token);
+      xhr.send(form);
     });
-    xhr.addEventListener("load", () => {
-      let parsed: unknown = null;
-      try {
-        parsed = JSON.parse(xhr.responseText) as unknown;
-      } catch {
-        parsed = null;
-      }
-      if (xhr.status >= 200 && xhr.status < 300) {
-        resolve((parsed as { data: DocumentCreated }).data);
-      } else {
-        const err = parsed as
-          | { error?: { code?: string; message?: string; retryable?: boolean } }
-          | null;
-        reject(
-          new Error(err?.error?.message ?? "업로드에 실패했습니다. 잠시 후 다시 시도해 주세요."),
-        );
-      }
-    });
-    xhr.addEventListener("error", () =>
-      reject(new Error("네트워크 오류로 업로드에 실패했습니다.")),
-    );
-    xhr.addEventListener("abort", () => reject(new Error("업로드를 취소했습니다.")));
-    xhr.open("POST", "/api/documents");
-    xhr.send(form);
   });
   return { promise, abort: () => xhr.abort() };
 }
