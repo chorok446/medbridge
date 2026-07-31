@@ -172,6 +172,10 @@ class TesseractEngine:
                     raise TimeoutError(f"ocr timeout ({OCR_TIMEOUT_SECONDS}s)") from exc
                 if proc.returncode != 0:
                     raise RuntimeError(f"tesseract exited {proc.returncode}")
+                stderr = proc.stderr.decode("utf-8", errors="replace")
+                if "Can't open tsv" in stderr:
+                    # tessdata/configs/tsv 누락 — 조용한 빈 결과 대신 명시적 실패
+                    raise RuntimeError("tesseract tsv config missing")
                 stdout = proc.stdout.decode("utf-8", errors="replace")
                 return [
                     w for w in parse_tsv(stdout) if w.confidence >= OCR_MIN_WORD_CONFIDENCE

@@ -121,6 +121,12 @@ def main() -> None:
         digest = download(url, tessdata_dir / name, sha)
         manifest["files"][f"tessdata/{name}"] = {"url": url, "sha256": digest}
 
+    # TSV 출력 설정 — 없으면 tesseract가 종료 코드 0으로 빈 결과를 낸다
+    configs_dir = tessdata_dir / "configs"
+    configs_dir.mkdir(exist_ok=True)
+    (configs_dir / "tsv").write_text("tessedit_create_tsv 1\n", encoding="utf-8")
+    manifest["files"]["tessdata/configs/tsv"] = {"sha256": sha256_of(configs_dir / "tsv")}
+
     # 필수 파일 검증 — 누락 시 빌드 실패
     missing = [f for f in REQUIRED_FILES if not (DEST / f).is_file()]
     for lang in ("kor", "eng", "osd"):
