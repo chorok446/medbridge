@@ -32,11 +32,18 @@ struct SidecarInfo {
     token: String,
 }
 
+/// sidecar가 실제로 바인딩된 포트로부터 base URL을 만드는 유일한 지점.
+/// GUI(sidecar_info)와 오류 보고서(fetch_error_report)가 이 한 함수만 거치게 해
+/// 두 경로의 포트가 어긋날 여지를 없앤다.
+fn sidecar_base_url(port: u16) -> String {
+    format!("http://127.0.0.1:{port}")
+}
+
 /// GUI가 sidecar 주소·토큰을 조회하는 유일한 통로 (화면에는 표시하지 않는다)
 #[tauri::command]
 fn sidecar_info(state: tauri::State<SidecarState>) -> SidecarInfo {
     SidecarInfo {
-        base: format!("http://127.0.0.1:{}", state.port),
+        base: sidecar_base_url(state.port),
         token: state.token.clone(),
     }
 }
@@ -90,7 +97,12 @@ fn save_error_report(app: tauri::AppHandle, state: tauri::State<SidecarState>) -
 }
 
 fn fetch_error_report(state: &SidecarState) -> Result<String, String> {
-    let url = format!("http://127.0.0.1:{}/api/system/error-report", state.port);
+    // 시작 자체가 실패한 상태에서는 원인이 이미 명확하므로, 원시 소켓 오류 대신
+    // 사람이 읽을 수 있는 안내를 우선 반환한다 (죽은 sidecar에 연결 시도하지 않음).
+    if matches!(*state.startup.lock().unwrap(), Startup::Failed) {
+        return Err("sidecar를 시작하지 못해 오류 정보를 가져올 수 없습니다.".into());
+    }
+    let url = format!("{}/api/system/error-report", sidecar_base_url(state.port));
     ureq::get(&url)
         .set("X-MedBridge-Token", &state.token)
         .timeout(Duration::from_secs(10))
@@ -219,6 +231,17 @@ pub fn run() {
     let token = uuid::Uuid::new_v4().to_string();
 
     let app = tauri::Builder::default()
+        // 반드시 첫 플러그인으로 등록한다: 이미 실행 중인 창이 있으면 새 프로세스는
+        // sidecar를 다시 띄우지 않고 여기서 끝난다. 그렇지 않으면 두 번째 실행이
+        // 서로 다른 포트의 두 번째 sidecar를 띄우면서, 첫 창은 죽은 sidecar를 보고
+        // 있는데 실제로 살아있는 sidecar는 다른 포트라는 혼란스러운 상태가 된다.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -241,9 +264,13 @@ pub fn run() {
                         wait_for_sidecar(port, &state.child, Duration::from_secs(120));
                     let mut startup = state.startup.lock().unwrap();
                     *startup = match result {
-                        Ok(()) => Startup::Ready,
+                        Ok(()) => {
+                            // 포트만 기록한다 — 토큰은 절대 로그에 남기지 않는다.
+                            println!("sidecar ready at {}", sidecar_base_url(port));
+                            Startup::Ready
+                        }
                         Err(e) => {
-                            eprintln!("sidecar startup failed: {e}");
+                            eprintln!("sidecar startup failed (port {port}): {e}");
                             Startup::Failed
                         }
                     };
@@ -275,4 +302,24 @@ pub fn run() {
             _ => {}
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sidecar_base_url;
+
+    // sidecar_info(GUI)와 fetch_error_report(오류 보고서)가 같은 함수를 거치므로,
+    // 이 테스트가 통과하는 한 두 경로가 서로 다른 포트를 가리킬 수 없다.
+    #[test]
+    fn base_url_embeds_the_given_port_faithfully() {
+        assert_eq!(sidecar_base_url(3367), "http://127.0.0.1:3367");
+        assert_eq!(sidecar_base_url(8765), "http://127.0.0.1:8765");
+        assert_eq!(sidecar_base_url(0), "http://127.0.0.1:0");
+    }
+
+    #[test]
+    fn base_url_never_hardcodes_a_fixed_port() {
+        // 회귀 방지: 함수가 인자를 무시하고 고정값을 반환하면 이 비교가 실패한다.
+        assert_ne!(sidecar_base_url(1234), sidecar_base_url(5678));
+    }
 }
