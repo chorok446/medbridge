@@ -91,6 +91,39 @@ class TestVerify:
         # 999mg는 원문에 없음 → unsupported → 지원 0 → insufficient
         assert out.answer_status == "insufficient_evidence"
 
+    def test_number_boundary_not_substring(self):
+        # 50mg 주장이 원문의 150mg에 substring으로 매치되면 안 된다
+        lookup = _lookup(("c1", "투여량은 150mg이다"))
+        out = verify(
+            {"answer": "x", "answerStatus": "answered",
+             "claims": [{"text": "투여량은 50mg이다", "sourceChunkIds": ["c1"]}]},
+            lookup,
+            had_results=True,
+        )
+        assert out.answer_status == "insufficient_evidence"
+
+    def test_comma_formatted_number_matches(self):
+        lookup = _lookup(("c1", "대상은 1000명이다"))
+        out = verify(
+            {"answer": "x", "answerStatus": "answered",
+             "claims": [{"text": "대상은 1,000명이다", "sourceChunkIds": ["c1"]}]},
+            lookup,
+            had_results=True,
+        )
+        assert out.answer_status == "completed"
+
+    def test_lexically_ungrounded_claim_rejected(self):
+        # 근거 청크와 공유 어휘가 사실상 없는 날조 주장은 supported로 저장하지 않는다
+        lookup = _lookup(("c1", "심장은 혈액을 온몸에 보내는 근육 기관이다"))
+        fabricated = "간은 담즙을 분비하고 해독을 담당한다"
+        out = verify(
+            {"answer": "x", "answerStatus": "answered",
+             "claims": [{"text": fabricated, "sourceChunkIds": ["c1"]}]},
+            lookup,
+            had_results=True,
+        )
+        assert out.answer_status == "insufficient_evidence"
+
     def test_number_in_source_supported(self):
         lookup = _lookup(("c1", "용량은 500mg이다"))
         out = verify(

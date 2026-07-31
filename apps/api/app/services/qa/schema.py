@@ -5,6 +5,8 @@
 수치 주장은 출처 청크 원문에 실제로 존재하는지 검증한다.
 """
 
+import math
+import re
 from dataclasses import dataclass, field
 
 from app.models.enums import QaClaimVerification
@@ -15,7 +17,12 @@ from app.services.qa.settings import (
     MAX_CLAIMS,
     MAX_FOLLOWUPS,
 )
-from app.services.summary.numbers import _NUMBER_RE
+
+# claim 안의 수치 토큰(콤마·소수·백분율 포함). 자릿수 경계로 검사해 50이 150에 매치되지
+# 않게 한다.
+_CLAIM_NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?%?")
+# 어절 토큰(길이 2 이상) — claim이 근거 청크에 실제로 어휘적으로 연결되는지 확인용
+_WORD_RE = re.compile(r"[0-9A-Za-z가-힣]{2,}")
 
 
 @dataclass
@@ -59,12 +66,36 @@ def _refs_for(ids: list[str], lookup: dict[str, QaChunkRef]) -> list[dict]:
 
 
 def _numbers_present(claim_text: str, ids: list[str], lookup: dict[str, QaChunkRef]) -> bool:
-    """claim의 수치가 근거 청크 원문에 실제로 존재하는지. 수치가 없으면 통과."""
-    numbers = {m.group(0).strip() for m in _NUMBER_RE.finditer(claim_text)}
+    """claim의 모든 수치가 근거 청크 원문에 존재하는지(자릿수 경계 검사). 없으면 통과."""
+    numbers = [m.group(0) for m in _CLAIM_NUMBER_RE.finditer(claim_text)]
     if not numbers:
         return True
-    haystack = "\n".join(lookup[c].text for c in ids)
-    return all(n in haystack for n in numbers)
+    # 콤마를 제거해 "1,000"과 "1000"을 같게 본다
+    haystack = "\n".join(lookup[c].text for c in ids).replace(",", "")
+    for raw in numbers:
+        core = raw.replace(",", "")
+        # 자릿수 경계로 매치 — 50이 150·250에 매치되지 않게 한다(% 포함 형태도 처리)
+        digits = core.rstrip("%")
+        tail = r"%?" if core.endswith("%") else r"(?!\d)"
+        pattern = r"(?<!\d)" + re.escape(digits) + tail
+        if not re.search(pattern, haystack):
+            return False
+    return True
+
+
+def _lexically_grounded(claim_text: str, ids: list[str], lookup: dict[str, QaChunkRef]) -> bool:
+    """claim이 근거 청크에 어휘적으로 연결되는지 — 무관한 날조에 임의 chunk id를 붙인
+    경우를 걸러낸다. 완전한 함의 검증은 아니지만(그건 검증 모델이 필요), 근거 청크와
+    공유 토큰이 사실상 없는 주장을 supported로 저장하지 않는다."""
+    claim_tokens = {t.lower() for t in _WORD_RE.findall(claim_text)}
+    if not claim_tokens:
+        return False
+    haystack = "\n".join(lookup[c].text for c in ids).lower()
+    hay_tokens = set(_WORD_RE.findall(haystack))
+    shared = len(claim_tokens & hay_tokens)
+    # claim 토큰의 1/3 이상(최소 1개)이 근거 청크에 나타나야 한다. 공유 어휘가 거의
+    # 없는(=사실상 0) 무관한 날조를 걸러내는 게 목적이며, 완전한 함의 검증은 아니다.
+    return shared >= max(1, math.ceil(len(claim_tokens) / 3)) or shared == len(claim_tokens)
 
 
 def verify(
@@ -84,8 +115,12 @@ def verify(
         if not text or text in seen_text:
             continue
         ids = _valid_ids(raw.get("sourceChunkIds"), lookup)
-        # 출처 없음 → unsupported / 수치가 원문에 없음 → unsupported
-        if not ids or not _numbers_present(text, ids, lookup):
+        # 지원 조건: 유효 출처 있음 + 수치가 원문에 존재 + 근거 청크에 어휘적으로 연결됨
+        if (
+            not ids
+            or not _numbers_present(text, ids, lookup)
+            or not _lexically_grounded(text, ids, lookup)
+        ):
             claim_status = QaClaimVerification.UNSUPPORTED
         else:
             claim_status = QaClaimVerification.SUPPORTED

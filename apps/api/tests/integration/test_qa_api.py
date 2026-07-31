@@ -192,13 +192,13 @@ class TestRevisionGuard:
         duuid = uuid.UUID(doc_id)
         tid = await new_thread(client, doc_id)
 
-        # 저장 직전 청크 해시가 시작과 달라진 상황을 모사(중간 재생성 등)
+        # 저장 직전 검색 청크 해시가 시작과 달라진 상황을 모사(중간 재생성 등)
         from app.services.qa import service as qa_service
 
-        async def _changed_hash(db, document_id):
+        async def _changed_hash(db, chunk_ids):
             return "CHANGED-DIFFERENT-HASH"
 
-        monkeypatch.setattr(qa_service, "current_chunk_hash", _changed_hash)
+        monkeypatch.setattr(qa_service, "_hash_of_ids", _changed_hash)
         assert duuid  # 사용됨
         res = await client.post(
             f"/api/documents/{doc_id}/qa/threads/{tid}/messages",
@@ -215,6 +215,73 @@ class TestRevisionGuard:
                 await s.execute(select(func.count()).select_from(QaClaim))
             ).scalar_one()
         assert n == 0
+
+
+class TestMultiChunkNotDiscarded:
+    async def test_answer_saved_when_document_has_more_chunks_than_retrieved(self, client):
+        # 검색에 안 걸리는 다른 청크가 문서에 더 있어도 정상 저장돼야 한다.
+        # (revision guard는 '검색에 쓴 청크' 기준 — 전체 문서 기준이면 항상 폐기됨)
+        import uuid as _uuid
+
+        from app.models.search import DocumentChunk
+
+        await enable_deterministic()
+        doc_id = await upload_chunked(client, fx.single_column_korean(pages=1))
+        duuid = uuid.UUID(doc_id)
+        # 질문("심장")과 무관한 별도 청크를 추가 → 검색 subset < 전체 문서
+        async with get_session_factory()() as s:
+            s.add(
+                DocumentChunk(
+                    id=_uuid.uuid4(),
+                    document_id=duuid,
+                    chunk_index=999,
+                    section_title="무관",
+                    normalized_text="간 담즙 소화 해독 기능 설명 문단",
+                    token_count=10,
+                    page_start=1,
+                    page_end=1,
+                    source_refs_json=[
+                        {"pageNumber": 1, "blockId": "extra", "bbox": [0, 0, 1, 1],
+                         "readingOrder": 99, "sourceMethod": "digital"}
+                    ],
+                    content_hash="extra-distinct-hash",
+                )
+            )
+            await s.commit()
+
+        tid = await new_thread(client, doc_id)
+        res = await client.post(
+            f"/api/documents/{doc_id}/qa/threads/{tid}/messages",
+            json={"question": "심장은 무엇을 하나요?"},
+        )
+        a = assistant_of(res.json()["data"])
+        assert a["status"] != "revision_changed"
+        assert a["status"] in ("completed", "insufficient_evidence")
+
+
+class TestMalformedModelOutput:
+    async def test_wrong_type_json_marks_failed_not_pending(self, client, monkeypatch):
+        # 모델이 유효 JSON이지만 최상위가 dict가 아니면(배열 등) 무한 pending이 아니라 failed
+        await enable_deterministic()
+        doc_id = await upload_chunked(client, fx.single_column_korean(pages=1))
+        tid = await new_thread(client, doc_id)
+        from app.services.qa import provider as prov
+
+        def _list_output(self, request):
+            return ["not", "a", "dict"]
+
+        monkeypatch.setattr(prov.DeterministicQaProvider, "answer", _list_output)
+        res = await client.post(
+            f"/api/documents/{doc_id}/qa/threads/{tid}/messages",
+            json={"question": "심장은 무엇을 하나요?"},
+        )
+        a = assistant_of(res.json()["data"])
+        assert a["status"] == "failed"
+        # 스레드가 잠기지 않고 다시 질문할 수 있어야 한다(pending 고착 방지)
+        again = await client.post(
+            f"/api/documents/{doc_id}/qa/threads/{tid}/retry"
+        )
+        assert again.status_code == 200
 
 
 class TestConcurrency:

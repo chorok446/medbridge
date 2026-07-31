@@ -30,7 +30,6 @@ from app.services.qa.settings import (
 )
 from app.services.summary.service import (
     compute_chunk_hash,
-    current_chunk_hash,
     ensure_external_consent,
     provider_is_external,
 )
@@ -317,6 +316,53 @@ async def retry_last(
     )
 
 
+async def _fresh_document(db: AsyncSession, document_id: uuid.UUID) -> Document | None:
+    """identity map의 낡은 속성이 아니라 DB의 현재 값을 읽는다."""
+    return (
+        await db.execute(
+            select(Document)
+            .where(Document.id == document_id)
+            .execution_options(populate_existing=True)
+        )
+    ).scalars().first()
+
+
+async def _fresh_user(db: AsyncSession) -> User | None:
+    return (
+        await db.execute(select(User).limit(1).execution_options(populate_existing=True))
+    ).scalars().first()
+
+
+async def _hash_of_ids(db: AsyncSession, chunk_ids: list[str]) -> str:
+    """지정한 chunk id들의 현재 (id, content_hash)로 해시를 만든다. 삭제된 id는 빠지므로
+    시작 시점 해시와 자동으로 달라진다(retrieved subset 기준 revision guard)."""
+    from app.models.search import DocumentChunk
+
+    if not chunk_ids:
+        return compute_chunk_hash([])
+    uuids = [uuid.UUID(c) for c in chunk_ids]
+    rows = (
+        await db.execute(
+            select(DocumentChunk.id, DocumentChunk.content_hash).where(
+                DocumentChunk.id.in_(uuids)
+            )
+        )
+    ).all()
+    return compute_chunk_hash([(str(r.id), r.content_hash) for r in rows])
+
+
+async def _document_changed(
+    db: AsyncSession, document_id: uuid.UUID, start_content_rev: int, start_chunk_rev: int | None
+) -> bool:
+    fresh = await _fresh_document(db, document_id)
+    return (
+        fresh is None
+        or fresh.deleted_at is not None
+        or fresh.content_revision != start_content_rev
+        or fresh.chunk_revision != start_chunk_rev
+    )
+
+
 async def _generate(
     db, doc, user, thread, user_msg, assistant_msg, question, history,
     start_content_rev, start_chunk_rev, provider,
@@ -335,7 +381,12 @@ async def _generate(
     retrieval = await qa_context.retrieve(db, doc.id, question)
 
     if not retrieval.chunks:
-        # 검색 결과 없음 → 모델 호출하지 않음
+        # 검색 결과 없음 → 모델 호출하지 않음. 단 저장 직전 문서 상태는 확인한다.
+        if await _document_changed(db, doc.id, start_content_rev, start_chunk_rev):
+            return await _fail(
+                db, assistant_msg, "REVISION_CHANGED", QaMessageStatus.REVISION_CHANGED,
+                message="문서 내용이 변경되어 답변을 다시 만들어야 합니다.",
+            )
         return await _finalize(
             db, assistant_msg,
             answer="이 자료에서는 확인할 수 없습니다.",
@@ -347,15 +398,17 @@ async def _generate(
 
     request = QaRequest(question=question, chunks=retrieval.chunks, history=history)
     try:
-        # 외부 전송 직전 동의 재확인
+        # 외부 전송 직전 동의 재확인 — identity map의 낡은 값을 피하려고 새로 읽는다.
         if provider_is_external(provider):
-            fresh_doc = await db.get(Document, doc.id)
-            fresh_user = (await db.execute(select(User).limit(1))).scalars().first()
+            fresh_doc = await _fresh_document(db, doc.id)
+            fresh_user = await _fresh_user(db)
             if fresh_doc is None or fresh_user is None or not (
                 fresh_doc.external_evidence_enabled and fresh_user.external_ai_allowed
             ):
                 return await _fail(db, assistant_msg, "EXTERNAL_CONSENT_MISSING")
         model_output = await asyncio.to_thread(provider.answer, request)
+        # 잘못된 최상위 타입(배열·문자열 등)도 여기서 잡아 pending 고착을 막는다
+        verified = verify(model_output, retrieval.lookup, had_results=bool(retrieval.chunks))
     except Exception as exc:
         logger.warning(
             "qa_generate_failed",
@@ -367,11 +420,11 @@ async def _generate(
         )
         return await _fail(db, assistant_msg, "QA_FAILED")
 
-    verified = verify(model_output, retrieval.lookup, had_results=bool(retrieval.chunks))
-
-    # revision-guarded 저장: 시작 시점과 현재가 같을 때만 저장
-    fresh_doc = await db.get(Document, doc.id)
-    current_hash = await current_chunk_hash(db, doc.id)
+    # revision-guarded 저장: 문서 revision + "검색에 실제로 쓴 청크"의 해시가 시작과
+    # 같을 때만 저장한다(전체 문서 해시가 아니라 retrieved subset 기준 — 문서에 다른
+    # 청크가 더 있어도 정상 저장돼야 한다).
+    fresh_doc = await _fresh_document(db, doc.id)
+    current_hash = await _hash_of_ids(db, retrieval.searched_ids)
     start_hash = compute_chunk_hash(retrieval.chunk_hash_pairs)
     if (
         fresh_doc is None
@@ -400,9 +453,18 @@ async def _generate(
         )
         for c in verified.claims
     ]
+    # 근거가 없거나 부족하면 모델의 자유 서술을 그대로 보여주지 않는다(날조 노출 방지).
+    if verified.answer_status in ("not_found", "insufficient_evidence"):
+        safe_answer = (
+            "이 자료에서는 확인할 수 없습니다."
+            if verified.answer_status == "not_found"
+            else "문서에서 충분한 근거를 찾지 못했어요. 다른 표현으로 다시 물어봐 주세요."
+        )
+    else:
+        safe_answer = verified.answer or "이 자료에서는 확인할 수 없습니다."
     outcome = await _finalize(
         db, assistant_msg,
-        answer=verified.answer or "이 자료에서는 확인할 수 없습니다.",
+        answer=safe_answer,
         status=status_map.get(verified.answer_status, QaMessageStatus.INSUFFICIENT_EVIDENCE),
         retrieval_mode=retrieval.retrieval_mode,
         claims=claim_rows,
