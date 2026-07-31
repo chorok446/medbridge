@@ -21,3 +21,10 @@ VALID_LEARNER_LEVELS = ("concise", "nursing_student", "experienced_nurse")
 STUDY_CAUTION_NOTICE = (
     "이 내용은 학습 보조용이며 실제 환자의 진단·처방·응급 판단에 사용하지 마세요."
 )
+
+# 외부 모델 네트워크 제한 (SSRF·DoS 방어). urllib은 단일 timeout만 지원하므로
+# connect/read를 분리하지 못한다 — 전체 요청 timeout으로 근사한다.
+SUMMARY_REQUEST_TIMEOUT_SEC = 60.0  # 요약 생성 요청 전체 timeout
+CONNECTION_TEST_TIMEOUT_SEC = 10.0  # 연결 확인은 더 짧게
+# 정상/오류 응답 모두 이 크기까지만 읽는다(압축 비활성화 후 적용). 요약 JSON은 작다.
+SUMMARY_MAX_RESPONSE_BYTES = 4 * 1024 * 1024

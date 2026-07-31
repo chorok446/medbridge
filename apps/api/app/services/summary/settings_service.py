@@ -10,12 +10,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.errors import AppError, ErrorCode
 from app.models.summary import SummarySettings
 from app.services.summary import secrets
+from app.services.summary.endpoint import SummaryNetworkError, validate_endpoint
 from app.services.summary.factory import ResolvedProviderConfig, load_settings_row
 from app.services.summary.provider import (
     ChunkInput,
     GroupRequest,
     build_summary_provider,
 )
+from app.services.summary.settings import CONNECTION_TEST_TIMEOUT_SEC
 
 # deterministic은 테스트 전용 공급자라 공개 설정 API로는 선택할 수 없다
 # (테스트는 summary_settings 행을 직접 넣거나 config override를 쓴다).
@@ -75,33 +77,87 @@ async def update_settings(
     if provider_type is not None and provider_type not in VALID_PROVIDER_TYPES:
         raise AppError(ErrorCode.VALIDATION_FAILED, "잘못된 공급자 유형입니다.", status_code=422)
     row = await _get_or_create(db)
+
+    # 적용될 최종 endpoint·is_local·provider_type을 먼저 계산한다(검증 기준).
+    eff_is_local = is_local if is_local is not None else row.is_local
+    eff_provider = provider_type if provider_type is not None else row.provider_type
+    raw_endpoint = endpoint.strip() if endpoint is not None else (row.endpoint or "")
+    normalized_endpoint: str | None = row.endpoint
+
+    # openai_compatible endpoint는 keyring을 건드리기 전에 엄격히 검증·정규화한다.
+    if eff_provider == "openai_compatible" and raw_endpoint:
+        try:
+            normalized_endpoint = validate_endpoint(raw_endpoint, is_local=eff_is_local)
+        except SummaryNetworkError as exc:
+            raise AppError(
+                ErrorCode.VALIDATION_FAILED, exc.user_message, status_code=422
+            ) from exc
+    elif endpoint is not None:
+        normalized_endpoint = raw_endpoint or None
+
     if enabled is not None:
         row.enabled = enabled
     if provider_type is not None:
         row.provider_type = provider_type
-    if endpoint is not None:
-        row.endpoint = endpoint.strip() or None
+    if endpoint is not None or normalized_endpoint != row.endpoint:
+        row.endpoint = normalized_endpoint
     if model_name is not None:
         row.model_name = model_name.strip() or None
     if is_local is not None:
         row.is_local = is_local
+
     # api_key는 keyring에만 저장 — DB·로그에 남기지 않는다. 빈 문자열이면 삭제.
+    # 부분 성공 방지: 이전 키를 먼저 기억하고, keyring을 건드리기 직전 mutated 플래그를
+    # 세워 부분 변경(변경 후 실패 보고 포함)도 반드시 보상 대상이 되게 한다.
+    previous_key: str | None = secrets.get_api_key() if api_key is not None else None
+    key_mutated = False
     if api_key is not None:
         try:
+            key_mutated = True  # 호출 자체가 자격 증명을 바꿀 수 있으므로 먼저 표시
             if api_key.strip():
                 secrets.set_api_key(api_key.strip())
             else:
                 secrets.delete_api_key()
         except Exception as exc:
-            # OS 자격 증명 저장소를 쓸 수 없는 환경 — 평문 저장으로 우회하지 않고 실패시킨다.
             await db.rollback()
+            _restore_key(previous_key)  # 부분 변경 되돌리기(실패 시 명확한 오류)
             raise AppError(
                 ErrorCode.INTERNAL_ERROR,
                 "이 기기에서 API 키를 안전하게 저장할 수 없습니다.",
                 status_code=500,
             ) from exc
-    await db.commit()
+    try:
+        await db.commit()
+    except Exception as exc:
+        await db.rollback()
+        if key_mutated:  # keyring을 이전 값으로 되돌려 DB·keyring 불일치를 막는다
+            _restore_key(previous_key)
+        raise AppError(
+            ErrorCode.INTERNAL_ERROR,
+            "설정을 저장하지 못했습니다. 다시 시도해 주세요.",
+            status_code=500,
+        ) from exc
     return await get_settings_view(db)
+
+
+def _restore_key(previous_key: str | None) -> None:
+    """keyring을 이전 값으로 되돌린다. 되돌리기까지 실패하면 불일치를 명확히 알린다
+    (조용히 삼키지 않는다 — 사용자가 재시도·재설정하도록)."""
+    try:
+        if previous_key is not None:
+            secrets.set_api_key(previous_key)
+        else:
+            secrets.delete_api_key()
+        # 되돌린 값이 실제로 반영됐는지 확인
+        if secrets.get_api_key() != previous_key:
+            raise RuntimeError("keyring restore verification failed")
+    except Exception as exc:
+        raise AppError(
+            ErrorCode.INTERNAL_ERROR,
+            "설정 저장에 실패했고 이전 API 키 복원도 실패했습니다. 앱 설정에서 요약 모델 "
+            "키를 다시 확인해 주세요.",
+            status_code=500,
+        ) from exc
 
 
 async def delete_api_key(db: AsyncSession) -> None:
@@ -121,10 +177,11 @@ async def test_connection(db: AsyncSession) -> tuple[bool, str]:
         is_local=row.is_local,
         api_key=secrets.get_api_key(),
     )
-    provider = build_summary_provider(config)
+    provider = build_summary_provider(config, timeout=CONNECTION_TEST_TIMEOUT_SEC)
     if not provider.available:
         return False, "설정이 완전하지 않습니다. endpoint·모델명·API 키를 확인해 주세요."
     try:
+        # 연결 확인은 문서 원문을 전송하지 않는다 — 고정된 짧은 프로브 문장만 보낸다.
         provider.summarize_group(
             GroupRequest(
                 group_id="probe",
@@ -134,6 +191,9 @@ async def test_connection(db: AsyncSession) -> tuple[bool, str]:
                 language="ko",
             )
         )
+    except SummaryNetworkError as exc:
+        # 오류 범주만 사용자 메시지로 — 외부 서버 원문·stack trace·키는 노출하지 않는다.
+        return False, exc.user_message
     except Exception:
         return False, "모델 서비스에 연결하지 못했습니다. 설정을 확인해 주세요."
-    return True, "연결에 성공했습니다."
+    return True, "연결에 성공했습니다. 실제 요약 품질은 문서에 따라 다를 수 있어요."

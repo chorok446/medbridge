@@ -172,15 +172,23 @@ class OpenAICompatibleSummaryProvider:
         api_key: str,
         is_local: bool,
         http_client=None,
+        timeout: float | None = None,
     ) -> None:
         self._endpoint = endpoint.rstrip("/")
         self.model_name = model_name
         self._api_key = api_key
         self.is_local = is_local
-        self._http = http_client  # 테스트에서 mock 주입; None이면 호출 시점에 생성
+        self._http = http_client  # 테스트에서 mock 주입; None이면 안전 HTTP 경로를 쓴다
+        self._timeout = timeout  # None이면 요약 기본 timeout
         self.available = bool(self._endpoint and self.model_name and self._api_key)
 
     def _chat(self, system: str, user: str) -> str:
+        from app.services.summary.endpoint import SummaryNetworkError, post_json
+        from app.services.summary.settings import (
+            SUMMARY_MAX_RESPONSE_BYTES,
+            SUMMARY_REQUEST_TIMEOUT_SEC,
+        )
+
         payload = {
             "model": self.model_name,
             "messages": [
@@ -190,25 +198,25 @@ class OpenAICompatibleSummaryProvider:
             "temperature": 0.2,
             "response_format": {"type": "json_object"},
         }
+        url = f"{self._endpoint}/chat/completions"
         # 테스트에서 http_client(콜러블)를 주입하면 그것을 쓴다 — 실제 네트워크 없이 검증.
         if self._http is not None:
-            return self._http(f"{self._endpoint}/chat/completions", payload, self._api_key)
-        # 런타임은 stdlib urllib만 사용한다(httpx는 sidecar 번들에 없음).
-        import json as _json
-        import urllib.request
-
-        req = urllib.request.Request(
-            f"{self._endpoint}/chat/completions",
-            data=_json.dumps(payload).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {self._api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=60.0) as resp:  # noqa: S310 (신뢰된 사용자 설정 endpoint)
-            data = _json.loads(resp.read().decode("utf-8"))
-        return data["choices"][0]["message"]["content"]
+            raw = self._http(url, payload, self._api_key)
+            data = json.loads(raw) if isinstance(raw, str) else raw
+        else:
+            # 런타임은 검증·redirect 차단·크기 제한이 적용된 안전 HTTP 경로만 쓴다.
+            data = post_json(
+                url,
+                payload,
+                self._api_key,
+                is_local=self.is_local,
+                timeout=self._timeout or SUMMARY_REQUEST_TIMEOUT_SEC,
+                max_response_bytes=SUMMARY_MAX_RESPONSE_BYTES,
+            )
+        try:
+            return data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise SummaryNetworkError("bad_response") from exc
 
     def summarize_group(self, request: GroupRequest) -> GroupSummary:
         chunk_block = "\n\n".join(
@@ -252,10 +260,11 @@ class OpenAICompatibleSummaryProvider:
         return json.loads(raw)
 
 
-def build_summary_provider(config) -> SummaryProvider:
+def build_summary_provider(config, *, timeout: float | None = None) -> SummaryProvider:
     """설정으로부터 공급자를 만든다. config가 None/비활성이면 Disabled.
 
     config는 provider_type/endpoint/model_name/api_key/is_local 속성을 가진 객체.
+    timeout을 주면(연결 확인 등) 그 값을 요청 전체 timeout으로 쓴다.
     """
     if config is None or not getattr(config, "enabled", False):
         return DisabledSummaryProvider()
@@ -268,5 +277,6 @@ def build_summary_provider(config) -> SummaryProvider:
             model_name=config.model_name or "",
             api_key=getattr(config, "api_key", "") or "",
             is_local=bool(getattr(config, "is_local", False)),
+            timeout=timeout,
         )
     return DisabledSummaryProvider()

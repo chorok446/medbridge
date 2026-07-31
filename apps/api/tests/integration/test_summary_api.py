@@ -279,18 +279,23 @@ class TestSummaryExternalConsent:
         )
         assert res.status_code == 403
 
-    async def test_external_provider_allowed_with_both_consents(self, client):
+    async def test_external_provider_allowed_with_both_consents(self, client, monkeypatch):
+        # 실제 네트워크를 치지 않도록 안전 HTTP 경로를 스텁한다(잡 결과는 관심사 아님).
+        from app.services.summary import endpoint as endpoint_mod
+
+        def _no_network(*args, **kwargs):
+            raise endpoint_mod.SummaryNetworkError("connect_failed")
+
+        monkeypatch.setattr(endpoint_mod, "post_json", _no_network)
+
         await enable_external_openai()
         doc_id = await upload_chunked(client, fx.single_column_korean(pages=1))
-        # 전역 동의
-        await client.patch("/api/profile", json={"externalAiAllowed": True})
-        # 문서 동의
+        await client.patch("/api/profile", json={"externalAiAllowed": True})  # 전역 동의
         async with get_session_factory()() as s:
             doc = await s.get(Document, uuid.UUID(doc_id))
-            doc.external_evidence_enabled = True
+            doc.external_evidence_enabled = True  # 문서 동의
             await s.commit()
-        # 이제 동의는 통과 — 잡이 시작된다(202). 실제 네트워크 호출은 잡에서 실패해도
-        # start 단계에서 403이 아니어야 한다는 점만 확인한다.
+        # 동의가 통과하면 start는 403이 아니라 202다(잡은 네트워크 스텁으로 실패한다).
         res = await client.post(
             f"/api/documents/{doc_id}/summaries", json={"learnerLevel": "nursing_student"}
         )

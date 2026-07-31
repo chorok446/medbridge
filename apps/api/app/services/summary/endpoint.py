@@ -1,0 +1,267 @@
+"""요약 모델 endpoint 검증 + SSRF 방어 + 안전한 HTTP POST (stdlib만 사용).
+
+정책 요약:
+- 외부 모델: HTTPS만, 공인 IP로만 연결.
+- 로컬 모델: HTTP/HTTPS, loopback 호스트(localhost/127.0.0.0/8/::1)로만.
+- redirect는 추적하지 않는다(3xx는 오류) — 내부 주소 우회·API 키 유출 방지.
+- 응답은 크기 상한까지만 streaming으로 읽는다.
+
+남은 위험: 완전한 DNS pinning(검증한 IP로 강제 연결 + TLS SNI)은 stdlib urllib
+구조에서 과도하게 복잡해, 요청 직전 해석한 IP를 정책 검증하는 방식(TOCTOU 창 존재)을
+쓴다. redirect 차단 + 요청 직전 재검증으로 흔한 SSRF 경로는 막지만, 검증 후 DNS가
+내부 IP로 바뀌는 rebinding은 완전히 제거하지 못한다. 자세한 내용은
+docs/security/summary-provider-network-security.md 참조.
+"""
+
+import ipaddress
+import json as _json
+import socket
+import time
+import urllib.error
+import urllib.request
+from urllib.parse import urlsplit
+
+# 안전 로컬 호스트명 (정확히 일치해야 함 — localhost.evil.example 등은 제외)
+_LOCAL_HOSTNAMES = frozenset({"localhost", "localhost.localdomain"})
+
+# 오류 범주 — 사용자에게는 이 범주에 대응하는 안전한 메시지만 보여준다.
+NET_ERROR_MESSAGES = {
+    "invalid_address": "주소가 올바르지 않습니다.",
+    "unsafe_address": "안전하지 않은 주소입니다.",
+    "connect_failed": "모델 서비스에 연결할 수 없습니다.",
+    "auth_failed": "인증에 실패했습니다. API 키를 확인해 주세요.",
+    "forbidden": "접근 권한이 없습니다.",
+    "rate_limited": "요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.",
+    "model_not_found": "모델을 찾을 수 없습니다. 모델 이름을 확인해 주세요.",
+    "server_error": "모델 서비스에서 오류가 발생했습니다.",
+    "bad_response": "모델 응답 형식이 올바르지 않습니다.",
+    "response_too_large": "모델 응답이 너무 큽니다.",
+    "redirect_blocked": "안전하지 않은 리디렉션이 차단되었습니다.",
+    "timeout": "모델 응답 시간이 초과되었습니다.",
+}
+
+
+class SummaryNetworkError(Exception):
+    """요약 네트워크 오류 — category만 노출하고 원문 오류·비밀은 담지 않는다."""
+
+    def __init__(self, category: str) -> None:
+        super().__init__(category)
+        self.category = category
+
+    @property
+    def user_message(self) -> str:
+        return NET_ERROR_MESSAGES.get(self.category, "모델 서비스 오류가 발생했습니다.")
+
+
+def _has_control_chars(value: str) -> bool:
+    return any(ord(c) < 0x20 or ord(c) == 0x7F for c in value)
+
+
+def _is_loopback_hostname(host: str) -> bool:
+    h = host.lower().rstrip(".")
+    if h in _LOCAL_HOSTNAMES:
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return ip.is_loopback
+
+
+def _ip_is_blocked_for_external(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """외부 endpoint가 연결하면 안 되는 IP인지 — 내부·특수 대역 전부 차단."""
+    # IPv4-mapped IPv6(::ffff:a.b.c.d)는 내부 IPv4로 매핑되므로 원래 IPv4로 판정
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local  # 169.254.0.0/16 (클라우드 metadata 포함), fe80::/10
+        or ip.is_multicast
+        or ip.is_reserved
+        or ip.is_unspecified
+        or not ip.is_global
+    )
+
+
+def validate_endpoint(raw: str | None, *, is_local: bool) -> str:
+    """endpoint를 엄격히 파싱·정규화해 반환한다. 위반 시 SummaryNetworkError.
+
+    정규화: scheme·host(소문자)·port·path만 유지, trailing slash 제거. query/fragment/
+    userinfo/params는 거부한다(저장값과 실제 요청값이 달라지지 않게).
+    """
+    if raw is None or not raw.strip():
+        raise SummaryNetworkError("invalid_address")
+    value = raw.strip()
+    if _has_control_chars(value):  # CR/LF·제어문자
+        raise SummaryNetworkError("invalid_address")
+
+    try:
+        parts = urlsplit(value)
+    except ValueError as exc:
+        raise SummaryNetworkError("invalid_address") from exc
+
+    if parts.scheme not in ("http", "https"):
+        raise SummaryNetworkError("invalid_address")
+    if parts.username or parts.password or "@" in parts.netloc:  # userinfo 금지
+        raise SummaryNetworkError("invalid_address")
+    if parts.fragment or parts.query:  # fragment·query 금지
+        raise SummaryNetworkError("invalid_address")
+    try:
+        hostname = parts.hostname
+    except ValueError as exc:
+        raise SummaryNetworkError("invalid_address") from exc
+    if not hostname:
+        raise SummaryNetworkError("invalid_address")
+    # host 영역의 percent-encoding·제어문자로 검증을 우회하지 못하게 한다
+    if _has_control_chars(hostname) or "%" in parts.netloc:
+        raise SummaryNetworkError("invalid_address")
+    try:
+        port = parts.port  # 비정상 포트면 ValueError
+    except ValueError as exc:
+        raise SummaryNetworkError("invalid_address") from exc
+    if port is not None and not (1 <= port <= 65535):
+        raise SummaryNetworkError("invalid_address")
+
+    if is_local:
+        # 로컬: http/https 모두 허용하되 loopback 호스트만
+        if not _is_loopback_hostname(hostname):
+            raise SummaryNetworkError("unsafe_address")
+    else:
+        # 외부: HTTPS만. 명백한 loopback 호스트명은 즉시 거부(해석은 요청 시 재검증).
+        if parts.scheme != "https":
+            raise SummaryNetworkError("unsafe_address")
+        if _is_loopback_hostname(hostname):
+            raise SummaryNetworkError("unsafe_address")
+
+    host_norm = hostname.lower()
+    if ":" in host_norm:  # IPv6 리터럴은 대괄호로 다시 감싼다
+        host_norm = f"[{host_norm}]"
+    netloc = f"{host_norm}:{port}" if port is not None else host_norm
+    path = (parts.path or "").rstrip("/")
+    return f"{parts.scheme}://{netloc}{path}"
+
+
+def _resolve(hostname: str, port: int) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    try:
+        infos = socket.getaddrinfo(hostname, port or None, proto=socket.IPPROTO_TCP)
+    except OSError as exc:
+        raise SummaryNetworkError("connect_failed") from exc
+    ips: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+    for info in infos:
+        addr = info[4][0]
+        try:
+            ips.append(ipaddress.ip_address(addr))
+        except ValueError:
+            continue
+    if not ips:
+        raise SummaryNetworkError("connect_failed")
+    return ips
+
+
+def assert_host_allowed(hostname: str, port: int, *, is_local: bool) -> None:
+    """요청 직전 호스트명을 해석해 정책을 재검증한다(SSRF 방어의 핵심)."""
+    ips = _resolve(hostname, port)
+    if is_local:
+        if not all(ip.is_loopback for ip in ips):
+            raise SummaryNetworkError("unsafe_address")
+    else:
+        if any(_ip_is_blocked_for_external(ip) for ip in ips):
+            raise SummaryNetworkError("unsafe_address")
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """3xx redirect를 추적하지 않는다 — 내부 주소 우회·API 키 유출 방지."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401
+        raise SummaryNetworkError("redirect_blocked")
+
+
+def post_json(
+    url: str,
+    payload: dict,
+    api_key: str,
+    *,
+    is_local: bool,
+    timeout: float,
+    max_response_bytes: int,
+) -> dict:
+    """검증된 endpoint로 JSON POST. redirect 차단·크기 제한·정책 재검증을 적용한다.
+
+    api_key는 Authorization 헤더로만 전송하고, 오류에는 담지 않는다.
+    """
+    parts = urlsplit(url)
+    hostname = parts.hostname or ""
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    # 요청 직전 정책 재검증 (저장 시점과 DNS가 달라졌을 수 있다)
+    assert_host_allowed(hostname, port, is_local=is_local)
+
+    body = _json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            # 압축 해제 후 크기 폭증을 피하려고 압축을 요청하지 않는다
+            "Accept-Encoding": "identity",
+        },
+        method="POST",
+    )
+    opener = urllib.request.build_opener(_NoRedirect())
+    try:
+        with opener.open(req, timeout=timeout) as resp:  # noqa: S310 (검증된 endpoint)
+            length = resp.headers.get("Content-Length")
+            if length is not None:
+                try:
+                    if int(length) > max_response_bytes:
+                        raise SummaryNetworkError("response_too_large")
+                except ValueError:
+                    pass  # 거짓 Content-Length는 무시하고 streaming 상한으로 막는다
+            # 전체 요청 데드라인을 강제한다 — urllib timeout은 소켓 연산 단위라, 악성
+            # 서버가 timeout 간격마다 1바이트씩 흘려보내면 무한정 붙잡을 수 있다.
+            # 조금씩 읽되 매 반복 monotonic 데드라인을 확인해 slow-drip을 차단한다.
+            deadline = time.monotonic() + timeout
+            raw = bytearray()
+            while True:
+                if time.monotonic() > deadline:
+                    raise SummaryNetworkError("timeout")
+                piece = resp.read(65536)
+                if not piece:
+                    break
+                raw.extend(piece)
+                if len(raw) > max_response_bytes:
+                    raise SummaryNetworkError("response_too_large")
+    except SummaryNetworkError:
+        raise
+    except urllib.error.HTTPError as exc:
+        raise _classify_http_status(exc.code) from None
+    except TimeoutError as exc:
+        raise SummaryNetworkError("timeout") from exc
+    except OSError as exc:
+        # socket.timeout은 OSError의 하위지만 위에서 TimeoutError로 안 잡히는 경우 대비
+        if isinstance(exc, socket.timeout):
+            raise SummaryNetworkError("timeout") from exc
+        raise SummaryNetworkError("connect_failed") from exc
+
+    if len(raw) > max_response_bytes:
+        raise SummaryNetworkError("response_too_large")
+    try:
+        return _json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise SummaryNetworkError("bad_response") from exc
+
+
+def _classify_http_status(code: int) -> SummaryNetworkError:
+    if code in (401,):
+        return SummaryNetworkError("auth_failed")
+    if code in (403,):
+        return SummaryNetworkError("forbidden")
+    if code in (404,):
+        return SummaryNetworkError("model_not_found")
+    if code == 429:
+        return SummaryNetworkError("rate_limited")
+    if 500 <= code <= 599:
+        return SummaryNetworkError("server_error")
+    return SummaryNetworkError("bad_response")
