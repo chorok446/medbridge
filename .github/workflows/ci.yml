@@ -118,25 +118,18 @@ jobs:
           mkdir -p apps/desktop/src-tauri/binaries
           cp apps/api/dist/medbridge-sidecar.exe \
             apps/desktop/src-tauri/binaries/medbridge-sidecar-x86_64-pc-windows-msvc.exe
-      - name: 임시 updater 서명 키 생성 (CI 전용, 실제 릴리스 키 아님)
-        id: throwaway_key
+      - name: Tauri Windows build (NSIS, 서명 없음 — CI 전용 임시 키로 발급 통과)
         shell: bash
         working-directory: apps/desktop
         run: |
-          pnpm tauri signer generate --ci -w /tmp/ci-signing-key -p ""
-          {
-            echo "key<<EOF"
-            cat /tmp/ci-signing-key
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
-      - name: Tauri Windows build (NSIS, 서명 없음)
-        working-directory: apps/desktop
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ steps.throwaway_key.outputs.key }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
-        run: |
+          # 상대 경로 사용: /tmp는 Windows 러너의 MSYS bash에서 경로 변환이
+          # 어긋나 tauri CLI가 쓴 파일을 못 읽는 경우가 있다.
+          pnpm tauri signer generate --ci -w ci-signing-key -p ""
+          export TAURI_SIGNING_PRIVATE_KEY="$(cat ci-signing-key)"
+          export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
           pnpm install
           pnpm tauri build
+          rm -f ci-signing-key ci-signing-key.pub
       - name: Upload installer artifact
         uses: actions/upload-artifact@v7
         with:
