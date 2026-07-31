@@ -1,0 +1,79 @@
+"""PDF 파일 검증. 순수 함수로 유지해 단위 테스트 가능하게 한다."""
+
+import hashlib
+from dataclasses import dataclass
+from io import BytesIO
+
+from pypdf import PdfReader
+from pypdf.errors import PdfReadError
+
+from app.core.errors import AppError, ErrorCode
+
+PDF_SIGNATURE = b"%PDF-"
+
+
+@dataclass
+class PdfInspection:
+    page_count: int
+    sha256: str
+
+
+def check_size(size: int, max_bytes: int) -> None:
+    if size > max_bytes:
+        raise AppError(
+            ErrorCode.FILE_TOO_LARGE,
+            f"파일이 최대 크기({max_bytes // (1024 * 1024)}MB)를 초과했습니다.",
+            status_code=413,
+        )
+    if size == 0:
+        raise AppError(ErrorCode.EMPTY_PDF, "빈 파일은 업로드할 수 없습니다.", status_code=400)
+
+
+def check_pdf_signature(head: bytes) -> None:
+    """확장자가 아닌 실제 파일 시그니처(%PDF-)를 검사한다."""
+    if not head.startswith(PDF_SIGNATURE):
+        raise AppError(
+            ErrorCode.INVALID_FILE_TYPE,
+            "PDF 파일만 업로드할 수 있습니다.",
+            status_code=415,
+        )
+
+
+def compute_sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def inspect_pdf(data: bytes) -> PdfInspection:
+    """전체 검증: 시그니처 → 파서 열기 → 암호화 → 페이지 수 → 구조 손상 → 해시.
+
+    실패는 안정적인 오류 코드를 가진 AppError로 변환한다.
+    내부 파서 예외 메시지는 사용자에게 노출하지 않는다.
+    """
+    check_pdf_signature(data[:8])
+    try:
+        reader = PdfReader(BytesIO(data))
+    except PdfReadError as exc:
+        raise AppError(ErrorCode.CORRUPTED_PDF, "손상된 PDF 파일입니다.", status_code=400) from exc
+    except Exception as exc:  # pypdf는 손상 파일에서 다양한 예외를 던진다
+        raise AppError(
+            ErrorCode.CORRUPTED_PDF, "PDF 파일을 읽을 수 없습니다.", status_code=400
+        ) from exc
+
+    if reader.is_encrypted:
+        raise AppError(
+            ErrorCode.ENCRYPTED_PDF,
+            "암호화된 PDF는 업로드할 수 없습니다. 암호를 해제한 뒤 다시 업로드해 주세요.",
+            status_code=400,
+        )
+
+    try:
+        page_count = len(reader.pages)
+    except Exception as exc:
+        raise AppError(
+            ErrorCode.CORRUPTED_PDF, "PDF 페이지 구조가 손상되었습니다.", status_code=400
+        ) from exc
+
+    if page_count == 0:
+        raise AppError(ErrorCode.EMPTY_PDF, "페이지가 없는 PDF입니다.", status_code=400)
+
+    return PdfInspection(page_count=page_count, sha256=compute_sha256(data))

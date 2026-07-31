@@ -1,0 +1,33 @@
+# Node
+node_modules/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+htmlcov/
+
+# Env / secrets — 실사용자 설정이 git pull로 덮어써지지 않도록 example만 추적한다
+.env
+.env.local
+.env.production
+.env.pilot
+.env.*.local
+
+# OS / editor
+.DS_Store
+
+# Build / test artifacts
+dist/
+playwright-report/
+test-results/
+
+# Local data (never bind-mount DB data on external SSD; named volumes only)
+.data/
