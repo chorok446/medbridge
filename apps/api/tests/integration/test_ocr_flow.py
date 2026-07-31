@@ -175,13 +175,15 @@ class TestOcrRealEngine:
 
 
 class TestOcrControlPaths:
-    async def test_start_requires_targets(self, client):
+    async def test_start_requires_targets(self, client, monkeypatch):
+        monkeypatch.setattr(ocr_service, "engine", lambda: FakeEngine())
         doc = await upload_extracted(client, fx.single_column_korean(pages=1))
         res = await client.post(f"/api/documents/{doc['id']}/ocr")
         assert res.status_code == 200
         assert res.json()["data"]["started"] is False  # digital 문서: 대상 없음
 
-    async def test_invalid_page_number_rejected(self, client):
+    async def test_invalid_page_number_rejected(self, client, monkeypatch):
+        monkeypatch.setattr(ocr_service, "engine", lambda: FakeEngine())
         doc = await upload_extracted(client, fx.single_column_korean(pages=1))
         res = await client.post(
             f"/api/documents/{doc['id']}/ocr", json={"pages": [99]}
