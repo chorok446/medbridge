@@ -44,6 +44,9 @@ async def clean_db(prepare_infra):
     async with get_session_factory()() as session:
         # summary_settings는 문서와 무관한 단일 행이라 명시적으로 비운다
         for table in (
+            "qa_claims",
+            "qa_messages",
+            "qa_threads",
             "summary_artifacts",
             "summary_runs",
             "document_chunks",

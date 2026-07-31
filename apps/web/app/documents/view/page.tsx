@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 import { ErrorBox } from "@/components/error-box";
+import { DocumentQa } from "@/components/document-qa";
 import { ExtractionReview } from "@/components/extraction-review";
 import { PdfPreview } from "@/components/pdf-preview";
 import { StatusBadge } from "@/components/status-badge";
@@ -25,7 +26,7 @@ function DocumentDetail() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [notice, setNotice] = useState<string | null>(null);
-  const [mainTab, setMainTab] = useState<"preview" | "extraction" | "summary">("preview");
+  const [mainTab, setMainTab] = useState<"preview" | "extraction" | "summary" | "qa">("preview");
 
   const fileUrlQuery = useQuery({
     queryKey: ["file-url", id],
@@ -170,6 +171,7 @@ function DocumentDetail() {
               { key: "preview", label: "문서 보기" },
               { key: "extraction", label: "텍스트 확인" },
               { key: "summary", label: "요약" },
+              { key: "qa", label: "질문" },
             ] as const
           ).map((t) => (
             <button
@@ -193,6 +195,8 @@ function DocumentDetail() {
         <ExtractionReview doc={doc} fileUrl={fileUrlQuery.data} />
       ) : mainTab === "summary" && fileUrlQuery.data ? (
         <SummaryView doc={doc} fileUrl={fileUrlQuery.data} />
+      ) : mainTab === "qa" && fileUrlQuery.data ? (
+        <DocumentQa doc={doc} fileUrl={fileUrlQuery.data} />
       ) : (
       <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
         <PdfPreview documentId={id} />

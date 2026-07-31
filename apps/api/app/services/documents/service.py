@@ -308,6 +308,20 @@ async def delete_document(db: AsyncSession, user: User, document_id: uuid.UUID) 
     # 요약 run·artifact도 documents.id를 직접 FK로 참조 — 명시 삭제 필요
     await db.execute(sa_delete(SummaryArtifact).where(SummaryArtifact.document_id == doc.id))
     await db.execute(sa_delete(SummaryRun).where(SummaryRun.document_id == doc.id))
+    # Q&A 스레드·메시지·claim (soft delete라 FK cascade가 안 돎 — 명시 정리)
+    from app.models.qa import QaClaim, QaMessage, QaThread
+
+    thread_ids = (
+        await db.execute(select(QaThread.id).where(QaThread.document_id == doc.id))
+    ).scalars().all()
+    if thread_ids:
+        msg_ids = (
+            await db.execute(select(QaMessage.id).where(QaMessage.thread_id.in_(thread_ids)))
+        ).scalars().all()
+        if msg_ids:
+            await db.execute(sa_delete(QaClaim).where(QaClaim.message_id.in_(msg_ids)))
+        await db.execute(sa_delete(QaMessage).where(QaMessage.thread_id.in_(thread_ids)))
+        await db.execute(sa_delete(QaThread).where(QaThread.document_id == doc.id))
     transition(doc, ProcessingStatus.DELETED)
     doc.deleted_at = datetime.now(UTC)
     doc.storage_key = None
