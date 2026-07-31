@@ -1,12 +1,15 @@
-# Windows Sprint 2 실기기 검증 (게이트) — 상태: 시행 대기
+# Windows Sprint 2 실기기 검증 (게이트) — 상태: 실행 준비 완료 (사용자 실기기 확인 대기)
 
-전제: GitHub 저장소 push + CI artifact(설치 파일) 필요.
-현재 차단 요인: 저장소 원격 미생성 (gh repo create 권한 승인 대기 중).
+전제 충족: GitHub 저장소 push 완료(https://github.com/chorok446/medbridge), CI 전 잡 통과(commit 3e08e1e),
+Windows NSIS 설치 파일 artifact 확보. 이 문서와 `docs/testing/windows-test-kit-guide.md`를 함께 보고
+실제 Windows PC에서 사용자가 직접 진행한다 (AI는 GUI를 조작할 수 없어 이 단계는 대신할 수 없다).
 
 ## 준비물
 - Windows 10/11 x64 PC (Python·Node·Git·Docker 미설치 계정, 관리자 권한 불필요)
 - 한국어 사용자명 계정 1개 + 공백 포함 경로 계정 1개 (또는 동일 계정에서 확인)
 - CI artifact "medbridge-windows-setup"의 setup.exe
+  (https://github.com/chorok446/medbridge/actions/runs/30616849579)
+- `docs/testing/windows-test-kit/`의 테스트용 PDF 7종 (항목별 매핑은 windows-test-kit-guide.md 참고)
 
 ## 체크리스트 (§2)
 | # | 항목 | 결과 | 비고 |
