@@ -61,6 +61,7 @@ class ChunkStatus:
     chunk_count: int
     last_rebuilt_at: datetime | None
     job_status: str | None
+    embedding_available: bool
 
 
 async def get_chunk_status(db: AsyncSession, doc: Document) -> ChunkStatus:
@@ -76,6 +77,7 @@ async def get_chunk_status(db: AsyncSession, doc: Document) -> ChunkStatus:
         chunk_count=chunk_count,
         last_rebuilt_at=job.completed_at if job and job.status == JobStatus.SUCCEEDED else None,
         job_status=job.status.value if job else None,
+        embedding_available=get_embedding_provider().available,
     )
 
 

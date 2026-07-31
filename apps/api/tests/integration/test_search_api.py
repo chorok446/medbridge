@@ -33,6 +33,7 @@ class TestChunkRebuildAndStatusApi:
         assert status["chunkCount"] > 0
         assert status["jobStatus"] == "succeeded"
         assert status["lastRebuiltAt"] is not None
+        assert status["embeddingAvailable"] is False  # 기본은 disabled 공급자
 
     async def test_duplicate_rebuild_blocked_while_running(self, client, monkeypatch):
         doc = await upload_extracted(client, fx.single_column_korean(pages=2))

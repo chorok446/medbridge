@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { DocumentSearch } from "@/components/document-search";
 import { OcrPanel } from "@/components/ocr-panel";
 import { PdfViewer } from "@/components/pdf-viewer";
 import {
@@ -17,7 +18,7 @@ import { getOcrStatus, startPageOcr } from "@/lib/api/ocr";
 import type { DocumentSummary } from "@/types/api";
 import type { ExtractionBlock, Rect } from "@/types/extraction";
 
-type PanelTab = "text" | "blocks" | "tables" | "notes";
+type PanelTab = "text" | "blocks" | "tables" | "search" | "notes";
 
 interface Props {
   doc: DocumentSummary;
@@ -189,6 +190,7 @@ export function ExtractionReview({ doc, fileUrl }: Props) {
     { key: "text", label: "본문" },
     { key: "blocks", label: "구역별 보기" },
     { key: "tables", label: "표" },
+    { key: "search", label: "검색" },
     { key: "notes", label: "안내" },
   ];
 
@@ -358,6 +360,18 @@ export function ExtractionReview({ doc, fileUrl }: Props) {
                 </div>
               ))}
             </div>
+          )}
+
+          {tab === "search" && (
+            <DocumentSearch
+              documentId={doc.id}
+              onNavigate={(pageNumber, bbox) => {
+                setPage(pageNumber);
+                setHighlights([{ x0: bbox[0], y0: bbox[1], x1: bbox[2], y1: bbox[3] }]);
+                setFlashKey((k) => k + 1);
+                setSelectedBlockId(null);
+              }}
+            />
           )}
 
           {tab === "notes" && (

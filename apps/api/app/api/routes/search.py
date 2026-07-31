@@ -27,6 +27,7 @@ class ChunkStatusOut(CamelModel):
     chunk_count: int
     last_rebuilt_at: str | None
     job_status: str | None
+    embedding_available: bool
 
 
 class SearchRequest(CamelModel):
@@ -77,6 +78,7 @@ async def chunk_status_route(
             chunk_count=status.chunk_count,
             last_rebuilt_at=status.last_rebuilt_at.isoformat() if status.last_rebuilt_at else None,
             job_status=status.job_status,
+            embedding_available=status.embedding_available,
         )
     )
 
