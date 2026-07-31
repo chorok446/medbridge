@@ -37,6 +37,8 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
         raise VectorValidationError(f"벡터 차원이 다릅니다: {len(a)} != {len(b)}")
     if not a or not b:
         raise VectorValidationError("빈 벡터는 비교할 수 없습니다.")
+    if any(math.isnan(v) or math.isinf(v) for v in (*a, *b)):
+        raise VectorValidationError("NaN/Inf가 포함된 벡터는 비교할 수 없습니다.")
     dot = sum(x * y for x, y in zip(a, b, strict=True))
     norm_a = math.sqrt(sum(x * x for x in a))
     norm_b = math.sqrt(sum(y * y for y in b))

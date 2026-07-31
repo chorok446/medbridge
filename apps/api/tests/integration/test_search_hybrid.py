@@ -56,17 +56,21 @@ class TestKeywordSearch:
             hits = await search_keyword(session, uuid.UUID(doc_id), "존재하지않는단어xyz", limit=10)
         assert hits == []
 
-    async def test_two_char_korean_query_yields_no_match_trigram_limitation(self, client):
-        """trigram 토크나이저는 3자 미만 질의를 매치하지 못한다(알려진 한계, 오류는 아님).
-
-        한국어는 공백이 조사가 붙은 어절 단위라 unicode61 단어 토큰화로는
-        "심장"이 실제 저장된 "심장은"에 매치되지 않는다(형태소 분석 없음). trigram으로
-        바꿔 3자 이상 질의는 정상 매치되지만, 2자 이하 질의는 이 한계가 남는다 —
-        오류 대신 빈 배열을 반환해야 한다(사용자에게는 "결과 없음"으로 보인다).
+    async def test_two_char_korean_query_matches_via_like_fallback(self, client):
+        """trigram 토크나이저는 3자 미만 질의에서 토큰을 만들지 못해 FTS5 MATCH가
+        항상 빈 결과를 낸다 — "심장"·"혈압"·"간암"처럼 2글자인 한국어 의학 용어가
+        흔해 이 한계를 그대로 두면 안 된다. 3자 미만 검색어는 문서 범위 LIKE
+        스캔으로 대체해 실제 매치를 찾는다(개인용 앱 규모라 선형 스캔으로 충분하다).
         """
         doc_id = await upload_and_chunk(client, fx.single_column_korean(pages=2))
         async with get_session_factory()() as session:
             hits = await search_keyword(session, uuid.UUID(doc_id), "심장", limit=10)
+        assert hits
+
+    async def test_one_char_query_with_no_match_returns_empty(self, client):
+        doc_id = await upload_and_chunk(client, fx.single_column_korean(pages=1))
+        async with get_session_factory()() as session:
+            hits = await search_keyword(session, uuid.UUID(doc_id), "짧", limit=10)
         assert hits == []
 
     async def test_special_characters_do_not_crash_fts(self, client):
@@ -121,6 +125,39 @@ class TestHybridSearchModes:
                 embedding_provider=provider,
             )
         assert results
+        assert all(r.match_type == "vector" for r in results)
+
+    async def test_vector_mode_excludes_chunks_without_embeddings(self, client):
+        """mode="vector"는 실제로 임베딩이 있는 청크만 봐야 한다 — 임베딩이 없는
+        청크가 키워드로만 매치돼 "vector"로 잘못 표시된 채 섞여 나오면 안 된다."""
+        doc_id = await upload_and_chunk(client, fx.single_column_korean(pages=6))
+        provider = DeterministicEmbeddingProvider(dimension=16)
+        async with get_session_factory()() as session:
+            rows = (
+                await session.execute(
+                    select(DocumentChunk).where(DocumentChunk.document_id == uuid.UUID(doc_id))
+                )
+            ).scalars().all()
+            assert len(rows) >= 2, "이 테스트는 청크가 2개 이상이어야 의미가 있다"
+            # 첫 청크만 임베딩한다 — 나머지는 "심장은" 키워드로는 매치되지만 벡터는 없다.
+            vectors = provider.embed_documents([rows[0].normalized_text])
+            rows[0].embedding_model = provider.model_name
+            rows[0].embedding_dimension = provider.dimension
+            rows[0].embedding_blob = pack_vector(vectors[0])
+            embedded_id = rows[0].id
+            await session.commit()
+
+        async with get_session_factory()() as session:
+            results = await search(
+                session,
+                uuid.UUID(doc_id),
+                query="심장은",
+                mode="vector",
+                limit=10,
+                embedding_provider=provider,
+            )
+        assert results
+        assert {r.chunk_id for r in results} == {embedded_id}
         assert all(r.match_type == "vector" for r in results)
 
     async def test_hybrid_mode_combines_keyword_and_vector(self, client):

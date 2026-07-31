@@ -72,8 +72,10 @@ async def search(
     embedding_provider: EmbeddingProvider | None,
 ) -> list[SearchResult]:
     fetch_pool = max(limit * 3, 30)
-    keyword_hits = await search_keyword(session, document_id, query, limit=fetch_pool)
-    keyword_scores = _normalize({h.chunk_id: h.raw_bm25 for h in keyword_hits}, invert=True)
+    keyword_scores: dict[uuid.UUID, float] = {}
+    if mode in ("keyword", "hybrid"):
+        keyword_hits = await search_keyword(session, document_id, query, limit=fetch_pool)
+        keyword_scores = _normalize({h.chunk_id: h.raw_bm25 for h in keyword_hits}, invert=True)
 
     vector_scores: dict[uuid.UUID, float] = {}
     if mode in ("vector", "hybrid") and embedding_provider and embedding_provider.available:

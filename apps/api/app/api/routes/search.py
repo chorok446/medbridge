@@ -54,7 +54,11 @@ class SearchResultOut(CamelModel):
     match_type: str
 
 
-@router.post("/{document_id}/chunks/rebuild", response_model=Envelope[ChunkRebuildOut])
+@router.post(
+    "/{document_id}/chunks/rebuild",
+    response_model=Envelope[ChunkRebuildOut],
+    status_code=202,
+)
 async def rebuild_chunks_route(
     document_id: uuid.UUID,
     user: User = Depends(get_current_user),

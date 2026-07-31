@@ -3,9 +3,10 @@
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.search import DocumentChunk
 from app.services.search.settings import BODY_BM25_WEIGHT, SECTION_TITLE_BM25_WEIGHT
 
 
@@ -26,9 +27,22 @@ def _sanitize_fts_query(query: str) -> str:
     return " ".join(f'"{t}"' for t in escaped)
 
 
+_MIN_TRIGRAM_TERM_CHARS = 3
+
+
 async def search_keyword(
     session: AsyncSession, document_id: uuid.UUID, query: str, limit: int
 ) -> list[KeywordHit]:
+    terms = [t.strip() for t in query.split() if t.strip()]
+    if not terms:
+        return []
+    if any(len(t) < _MIN_TRIGRAM_TERM_CHARS for t in terms):
+        # trigram 토크나이저는 3자 미만 검색어에서 토큰을 만들지 못해 매치가 전혀
+        # 안 된다("심장", "혈압" 등 2글자 한국어 의학 용어가 흔하다) — 이런 경우만
+        # 문서 범위 LIKE 스캔으로 대체한다. 개인용 앱 규모(문서 하나의 청크 수십~
+        # 수백 개)라 선형 스캔으로 충분하다.
+        return await _search_keyword_like(session, document_id, terms, limit)
+
     fts_query = _sanitize_fts_query(query)
     if not fts_query:
         return []
@@ -50,3 +64,24 @@ async def search_keyword(
         )
     ).all()
     return [KeywordHit(chunk_id=uuid.UUID(r.chunk_id), raw_bm25=r.score) for r in rows]
+
+
+async def _search_keyword_like(
+    session: AsyncSession, document_id: uuid.UUID, terms: list[str], limit: int
+) -> list[KeywordHit]:
+    """bm25 점수는 없으므로 등장 횟수를 대체 점수로 쓴다(낮을수록 좋다는 bm25 관례에
+    맞춰 음수로 뒤집는다). 모든 검색어가 포함된 청크만 대상으로 한다."""
+    columns = (DocumentChunk.id, DocumentChunk.normalized_text, DocumentChunk.section_title)
+    rows = (
+        await session.execute(select(*columns).where(DocumentChunk.document_id == document_id))
+    ).all()
+    lowered_terms = [t.lower() for t in terms]
+    hits: list[KeywordHit] = []
+    for row in rows:
+        haystack = f"{row.normalized_text}\n{row.section_title or ''}".lower()
+        if not all(t in haystack for t in lowered_terms):
+            continue
+        occurrences = sum(haystack.count(t) for t in lowered_terms)
+        hits.append(KeywordHit(chunk_id=row.id, raw_bm25=-float(occurrences)))
+    hits.sort(key=lambda h: h.raw_bm25)
+    return hits[:limit]

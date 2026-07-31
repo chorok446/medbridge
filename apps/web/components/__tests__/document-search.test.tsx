@@ -114,6 +114,28 @@ describe("DocumentSearch", () => {
     ).toBeInTheDocument();
   });
 
+  it("의미 검색이 비활성 상태이면 결과가 0건이어도 단어 검색 결과임을 알린다", async () => {
+    apiMock.getChunkStatus.mockResolvedValue(readyStatus);
+    apiMock.searchDocument.mockResolvedValue([]);
+    renderSearch();
+
+    await userEvent.type(await screen.findByRole("searchbox"), "존재하지않는단어");
+    await userEvent.click(screen.getByRole("button", { name: "검색" }));
+
+    expect(await screen.findByText("검색 결과가 없어요. 다른 단어로 찾아보세요.")).toBeInTheDocument();
+    expect(
+      screen.getByText("의미 검색을 사용할 수 없어 단어 검색 결과만 표시합니다."),
+    ).toBeInTheDocument();
+  });
+
+  it("재생성 작업이 대기(queued) 상태여도 준비 버튼을 비활성화한다", async () => {
+    apiMock.getChunkStatus.mockResolvedValue({ ...notPreparedStatus, jobStatus: "queued" });
+    renderSearch();
+
+    expect(await screen.findByRole("button", { name: "문서 검색 준비하기" })).toBeDisabled();
+    expect(screen.getByText("준비하는 중이에요…")).toBeInTheDocument();
+  });
+
   it("결과를 클릭하면 페이지 번호와 bbox로 이동한다", async () => {
     apiMock.getChunkStatus.mockResolvedValue(readyStatus);
     apiMock.searchDocument.mockResolvedValue([sampleResult]);

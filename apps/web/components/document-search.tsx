@@ -10,6 +10,10 @@ interface Props {
   onNavigate: (pageNumber: number, bbox: [number, number, number, number]) => void;
 }
 
+function isActiveJobStatus(status: string | null | undefined): boolean {
+  return status === "running" || status === "queued";
+}
+
 /**
  * 문서 검색 — 청크 기반 키워드/의미 검색. 기술 용어(포트·모델명·원시 점수)는
  * 어디에도 노출하지 않는다.
@@ -24,7 +28,7 @@ export function DocumentSearch({ documentId, onNavigate }: Props) {
   const statusQuery = useQuery({
     queryKey: ["chunk-status", documentId],
     queryFn: () => getChunkStatus(documentId),
-    refetchInterval: (q) => (q.state.data?.jobStatus === "running" ? 1000 : false),
+    refetchInterval: (q) => (isActiveJobStatus(q.state.data?.jobStatus) ? 1000 : false),
   });
 
   const rebuildMutation = useMutation({
@@ -52,8 +56,7 @@ export function DocumentSearch({ documentId, onNavigate }: Props) {
   const chunkCount = statusQuery.data?.chunkCount ?? 0;
   const embeddingAvailable = statusQuery.data?.embeddingAvailable ?? false;
   const results: SearchResultItem[] = searchQuery.data ?? [];
-  const usedKeywordOnlyFallback =
-    submitted?.mode === "hybrid" && !embeddingAvailable && results.length > 0;
+  const usedKeywordOnlyFallback = submitted?.mode === "hybrid" && !embeddingAvailable;
 
   return (
     <div className="flex flex-col gap-3">
@@ -76,12 +79,12 @@ export function DocumentSearch({ documentId, onNavigate }: Props) {
           <button
             type="button"
             onClick={() => rebuildMutation.mutate()}
-            disabled={rebuildMutation.isPending || statusQuery.data?.jobStatus === "running"}
+            disabled={rebuildMutation.isPending || isActiveJobStatus(statusQuery.data?.jobStatus)}
             className="mt-2 rounded bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
           >
             문서 검색 준비하기
           </button>
-          {statusQuery.data?.jobStatus === "running" && (
+          {isActiveJobStatus(statusQuery.data?.jobStatus) && (
             <p role="status" aria-live="polite" className="mt-1.5 text-xs text-slate-500">
               준비하는 중이에요…
             </p>

@@ -13,8 +13,9 @@ from dataclasses import dataclass, field
 from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.extraction import DocumentBlock, DocumentPage
+from app.models.extraction import DocumentBlock, DocumentPage, DocumentTable
 from app.models.search import DocumentChunk
+from app.services.extraction.geometry import overlap_ratio
 from app.services.extraction.normalize import normalize_text
 from app.services.search.settings import (
     CHUNK_MAX_CHARS,
@@ -98,7 +99,35 @@ def _split_long_text(text: str, limit: int) -> list[str]:
             buf = f"{buf} {sentence}".strip()
     if buf:
         parts.append(buf)
-    return parts
+    # 문장 하나가 그 자체로 limit을 넘으면(긴 나열형 문장 등) 그 부분만 강제로 자른다.
+    final: list[str] = []
+    for part in parts:
+        if len(part) <= limit:
+            final.append(part)
+        else:
+            final.extend(part[i : i + limit] for i in range(0, len(part), limit))
+    return final
+
+
+_TABLE_MATCH_MIN_OVERLAP = 0.5
+
+
+def _table_markdown_for_block(
+    block: DocumentBlock, tables_by_page: dict[uuid.UUID, list[DocumentTable]]
+) -> str | None:
+    """is_table 블록과 같은 위치의 DocumentTable을 bbox 겹침으로 찾는다(직접 FK가
+    없다 — 추출 파이프라인이 둘을 별도 테이블로 만든다). 찾으면 표 구조를 보존한
+    markdown_text를, 못 찾으면 None을 반환해 블록 원문으로 대체한다."""
+    block_bbox = (block.x0, block.y0, block.x1, block.y1)
+    best_ratio = 0.0
+    best_table: DocumentTable | None = None
+    for t in tables_by_page.get(block.page_id, []):
+        ratio = overlap_ratio(block_bbox, (t.x0, t.y0, t.x1, t.y1))
+        if ratio >= _TABLE_MATCH_MIN_OVERLAP and ratio > best_ratio:
+            best_ratio, best_table = ratio, t
+    if best_table is not None and best_table.markdown_text.strip():
+        return best_table.markdown_text
+    return None
 
 
 def _select_blocks(
@@ -130,10 +159,15 @@ def _select_blocks(
 
 
 def build_chunk_drafts(
-    pages: list[DocumentPage], blocks: list[DocumentBlock]
+    pages: list[DocumentPage],
+    blocks: list[DocumentBlock],
+    tables: list[DocumentTable] | None = None,
 ) -> list[ChunkDraft]:
     """document_id 범위의 페이지·블록으로부터 청크 초안 목록을 만든다."""
     ordered = _select_blocks(pages, blocks)
+    tables_by_page: dict[uuid.UUID, list[DocumentTable]] = {}
+    for t in tables or []:
+        tables_by_page.setdefault(t.page_id, []).append(t)
 
     drafts: list[ChunkDraft] = []
     current: ChunkDraft | None = None
@@ -157,11 +191,14 @@ def build_chunk_drafts(
 
         if block.is_table:
             # 표는 절대 본문과 평탄화하지 않는다 — 있던 청크를 닫고 표 전용 청크를 낸다.
+            # 가능하면 행·열 구조가 살아있는 DocumentTable.markdown_text를 쓴다
+            # (block.text는 PDF 추출 순서로 흩어진 셀 텍스트라 구조를 잃는다).
             flush()
+            table_text = _table_markdown_for_block(block, tables_by_page) or block_text
             drafts.append(
                 ChunkDraft(
                     section_title=current_section,
-                    text_parts=[block_text],
+                    text_parts=[table_text],
                     refs=[ref],
                     is_table=True,
                 )
@@ -238,8 +275,17 @@ async def rebuild_chunks(session: AsyncSession, document_id: uuid.UUID) -> int:
             )
         ).scalars()
     )
+    tables = list(
+        (
+            await session.execute(
+                select(DocumentTable).where(
+                    DocumentTable.page_id.in_([p.id for p in pages])
+                )
+            )
+        ).scalars()
+    )
 
-    drafts = build_chunk_drafts(pages, blocks)
+    drafts = build_chunk_drafts(pages, blocks, tables)
 
     # 원자적 교체: 기존 청크 + FTS 미러를 지우고 새로 넣는다 (재실행 누적 방지).
     await session.execute(
@@ -251,7 +297,7 @@ async def rebuild_chunks(session: AsyncSession, document_id: uuid.UUID) -> int:
     )
 
     rows: list[DocumentChunk] = []
-    seen_hashes: set[str] = set()
+    rows_by_hash: dict[str, DocumentChunk] = {}
     for index, draft in enumerate(drafts):
         if not draft.refs:
             continue  # 출처 없는 청크는 저장하지 않는다
@@ -259,23 +305,31 @@ async def rebuild_chunks(session: AsyncSession, document_id: uuid.UUID) -> int:
         if not chunk_text:
             continue
         chunk_hash = _content_hash(chunk_text)
-        if chunk_hash in seen_hashes:
-            continue  # 동일 content_hash 청크는 중복 생성하지 않는다
-        seen_hashes.add(chunk_hash)
-        rows.append(
-            DocumentChunk(
-                id=uuid.uuid4(),
-                document_id=document_id,
-                chunk_index=index,
-                section_title=draft.section_title,
-                normalized_text=chunk_text,
-                token_count=max(1, round(len(chunk_text) / 4)),
-                page_start=draft.page_start,
-                page_end=draft.page_end,
-                source_refs_json=[r.to_json() for r in draft.refs],
-                content_hash=chunk_hash,
-            )
+        existing = rows_by_hash.get(chunk_hash)
+        if existing is not None:
+            # 동일 content_hash는 새 청크를 만들지 않되, 다른 위치에 나온 출처는
+            # 잃지 않도록 기존 청크에 병합한다(반복되는 문구가 여러 페이지에 있는 경우).
+            existing.source_refs_json = [
+                *existing.source_refs_json,
+                *[r.to_json() for r in draft.refs],
+            ]
+            existing.page_start = min(existing.page_start, draft.page_start)
+            existing.page_end = max(existing.page_end, draft.page_end)
+            continue
+        row = DocumentChunk(
+            id=uuid.uuid4(),
+            document_id=document_id,
+            chunk_index=index,
+            section_title=draft.section_title,
+            normalized_text=chunk_text,
+            token_count=max(1, round(len(chunk_text) / 4)),
+            page_start=draft.page_start,
+            page_end=draft.page_end,
+            source_refs_json=[r.to_json() for r in draft.refs],
+            content_hash=chunk_hash,
         )
+        rows.append(row)
+        rows_by_hash[chunk_hash] = row
 
     session.add_all(rows)
     await session.flush()

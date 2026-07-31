@@ -6,6 +6,7 @@ import uuid
 from sqlalchemy import func, select
 
 from app.db.session import get_session_factory
+from app.models.extraction import DocumentTable
 from app.models.search import DocumentChunk
 from app.services.extraction.ocr import OcrResult
 from app.services.ocr import service as ocr_service
@@ -109,6 +110,27 @@ class TestChunkOrderAndSourceRefs:
         assert table_chunks
         # 표 청크는 제목 블록("표가 있는 문서")과 섞이지 않는다 (평탄화 금지)
         assert "표가 있는 문서" not in table_chunks[0].normalized_text
+
+    async def test_table_chunk_uses_structured_markdown_not_flattened_block_text(self, client):
+        doc = await upload_extracted(client, fx.with_table())
+        await _rebuild(doc["id"])
+
+        async with get_session_factory()() as session:
+            chunk_rows = (
+                await session.execute(
+                    select(DocumentChunk).where(
+                        DocumentChunk.document_id == uuid.UUID(doc["id"])
+                    )
+                )
+            ).scalars().all()
+            table_rows = (await session.execute(select(DocumentTable))).scalars().all()
+
+        assert table_rows, "추출 파이프라인이 표를 감지하지 못했다 — 픽스처를 확인하라"
+        table_chunks = [r for r in chunk_rows if "심박수" in r.normalized_text]
+        assert table_chunks
+        # 구조화된 markdown 표(파이프 구분)를 썼는지 확인한다 — block.text로 되돌아가면
+        # 셀이 읽기 순서대로 한 줄에 나열돼 행·열 구분(파이프)이 사라진다.
+        assert "|" in table_chunks[0].normalized_text
 
 
 class TestChunkDigitalOcrDedup:

@@ -25,7 +25,7 @@ class TestChunkRebuildAndStatusApi:
         doc = await upload_extracted(client, fx.single_column_korean(pages=2))
 
         res = await client.post(f"/api/documents/{doc['id']}/chunks/rebuild")
-        assert res.status_code == 200
+        assert res.status_code == 202
         assert res.json()["data"]["started"] is True
         await drain_jobs()
 
