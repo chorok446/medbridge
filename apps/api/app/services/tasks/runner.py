@@ -37,6 +37,29 @@ class LocalTaskRunner:
     def enqueue_extract(self, document_id: uuid.UUID, correlation_id: str) -> None:
         self._spawn(self._run_extract(document_id, correlation_id))
 
+    def enqueue_ocr(
+        self,
+        document_id: uuid.UUID,
+        correlation_id: str,
+        *,
+        language: str = "kor+eng",
+        quality: str = "standard",
+    ) -> None:
+        self._spawn(self._run_ocr(document_id, correlation_id, language, quality))
+
+    async def _run_ocr(
+        self, document_id: uuid.UUID, correlation_id: str, language: str, quality: str
+    ) -> None:
+        from app.services.tasks.ocr_job import run_ocr_job
+
+        async with self._semaphore:
+            try:
+                await run_ocr_job(
+                    document_id, correlation_id, language=language, quality=quality
+                )
+            except Exception:
+                logger.error("ocr_job_crashed", document_id=str(document_id))
+
     def _spawn(self, coro) -> None:
         task = asyncio.get_running_loop().create_task(coro)
         self._tasks.add(task)
@@ -116,6 +139,31 @@ class LocalTaskRunner:
         for doc_id in to_extract:
             self.enqueue_extract(doc_id, f"recovery-{uuid.uuid4().hex[:8]}")
         to_enqueue.extend(to_extract)
+
+        # 중단된 OCR 복구: pending/running 페이지가 남은 문서를 다시 실행
+        from app.models.extraction import DocumentPage
+
+        async with get_session_factory()() as session:
+            rows = (
+                await session.execute(
+                    select(DocumentPage.document_id, DocumentPage.id, DocumentPage.ocr_status)
+                    .join(Document, Document.id == DocumentPage.document_id)
+                    .where(
+                        DocumentPage.ocr_status.in_(["pending", "running"]),
+                        Document.deleted_at.is_(None),
+                    )
+                )
+            ).all()
+            ocr_docs = {r[0] for r in rows}
+            for _, page_id, status in rows:
+                if status == "running":
+                    page = await session.get(DocumentPage, page_id)
+                    if page is not None:
+                        page.ocr_status = "pending"  # 중단된 페이지 재시도
+            await session.commit()
+        for doc_id in ocr_docs:
+            self.enqueue_ocr(doc_id, f"recovery-{uuid.uuid4().hex[:8]}")
+        to_enqueue.extend(ocr_docs)
         if docs:
             logger.info(
                 "recovered_interrupted_jobs", requeued=len(to_enqueue), total=len(docs)

@@ -2,6 +2,7 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
+import { OcrPanel } from "@/components/ocr-panel";
 import { PdfViewer } from "@/components/pdf-viewer";
 import {
   cancelExtraction,
@@ -303,21 +304,7 @@ export function ExtractionReview({ doc, fileUrl }: Props) {
 
           {tab === "notes" && (
             <div className="flex flex-col gap-3">
-              {doc.processingStatus === "ocr_required" && (
-                <p className="rounded bg-amber-50 px-3 py-2 text-amber-800">
-                  이 문서는 이미지로 되어 있어 글자를 읽지 못했어요. 추가 처리는 다음
-                  업데이트에서 제공됩니다.
-                </p>
-              )}
-              {ocrPages.length > 0 && doc.processingStatus !== "ocr_required" && (
-                <div className="rounded bg-amber-50 px-3 py-2 text-amber-800">
-                  <p className="font-medium">이미지로 된 페이지가 있어요</p>
-                  <p className="mt-0.5 text-xs">
-                    {ocrPages.map((p) => `${p.pageNumber}쪽`).join(", ")} — 글자를 읽으려면
-                    추가 처리가 필요합니다.
-                  </p>
-                </div>
-              )}
+              <OcrPanel documentId={doc.id} ocrPageCount={ocrPages.length} />
               {failedPages.length > 0 && (
                 <div className="rounded bg-red-50 px-3 py-2 text-red-800">
                   <p className="font-medium">읽지 못한 페이지</p>

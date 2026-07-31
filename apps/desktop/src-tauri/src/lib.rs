@@ -149,6 +149,13 @@ fn spawn_sidecar(app: &tauri::AppHandle, port: u16, token: &str) -> std::io::Res
         c
     };
 
+    // 번들된 OCR 리소스 경로 전달 (없으면 sidecar가 PATH fallback)
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        let ocr_dir = resource_dir.join("resources").join("ocr");
+        if ocr_dir.is_dir() {
+            cmd.env("MEDBRIDGE_OCR_DIR", &ocr_dir);
+        }
+    }
     cmd.env("MEDBRIDGE_APP_DATA_DIR", &app_data_dir)
         .env("MEDBRIDGE_API_TOKEN", token)
         .env("MEDBRIDGE_BOUND_PORT", port.to_string())

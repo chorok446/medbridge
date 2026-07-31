@@ -84,6 +84,9 @@ jobs:
           uv run ruff check .
           uv run pytest -q
 
+      - name: OCR 리소스 준비
+        if: steps.gate.outputs.proceed == 'true'
+        run: python scripts/fetch-ocr-resources.py
       - name: Build sidecar exe
         if: steps.gate.outputs.proceed == 'true'
         working-directory: apps/api

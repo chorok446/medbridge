@@ -1,0 +1,2 @@
+# CI가 fetch-ocr-resources.py로 채운다 (버전·checksum 고정). 로컬 개발은 PATH의 tesseract 사용.
+resources/ocr/

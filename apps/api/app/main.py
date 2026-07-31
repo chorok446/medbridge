@@ -116,7 +116,7 @@ def _error_response(
 
 
 def create_app() -> FastAPI:
-    from app.api.routes import documents, extraction, health, profile, reports, system
+    from app.api.routes import documents, extraction, health, ocr, profile, reports, system
 
     configure_logging()
     settings = get_settings()
@@ -186,6 +186,7 @@ def create_app() -> FastAPI:
     app.include_router(profile.router)
     app.include_router(documents.router)
     app.include_router(extraction.router)
+    app.include_router(ocr.router)
     app.include_router(reports.router)
     app.include_router(system.router)
     return app

@@ -198,7 +198,7 @@ async def _persist_page(
             rotation=page.rotation,
             raw_text=page.raw_text,
             normalized_text=normalized,
-            extraction_method=engine_mod.ENGINE_NAME,
+            extraction_method="digital",
             extraction_status=(
                 PageExtractionStatus.OCR_REQUIRED
                 if scan.requires_ocr

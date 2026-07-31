@@ -89,6 +89,8 @@ jobs:
         run: |
           uv sync
           uv run pytest -q
+      - name: OCR 리소스 준비 (버전·checksum 고정)
+        run: python scripts/fetch-ocr-resources.py
       - name: Sidecar exe build
         working-directory: apps/api
         run: uv run pyinstaller sidecar.spec
@@ -104,6 +106,12 @@ jobs:
           done
           curl -sf http://127.0.0.1:18900/health
           kill $SIDECAR_PID || true
+      - name: OCR 스모크 테스트 (번들 리소스로 한국어·영어 인식)
+        shell: bash
+        working-directory: apps/api
+        env:
+          MEDBRIDGE_OCR_DIR: ${{ github.workspace }}/apps/desktop/src-tauri/resources/ocr
+        run: uv run pytest tests/integration/test_ocr_flow.py -q
       - name: Place sidecar for Tauri
         shell: bash
         run: |

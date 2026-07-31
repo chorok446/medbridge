@@ -31,7 +31,7 @@ def test_full_downgrade_upgrade_cycle():
             "document_tables",
         } <= names
         revision = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-        assert revision == "0002"
+        assert revision == "0003"
     engine.dispose()
 
 

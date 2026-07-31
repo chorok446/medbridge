@@ -28,7 +28,7 @@
     "targets": ["nsis"],
     "createUpdaterArtifacts": true,
     "icon": ["icons/icon.ico", "icons/icon.png"],
-    "resources": [],
+    "resources": ["resources/ocr"],
     "externalBin": ["binaries/medbridge-sidecar"],
     "windows": {
       "nsis": {

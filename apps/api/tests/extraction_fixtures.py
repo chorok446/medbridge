@@ -132,3 +132,75 @@ def sparse_text() -> bytes:
     page = doc.new_page(width=PAGE_W, height=PAGE_H)
     page.insert_text((72, 80), "끝", fontsize=12, **KOR)
     return _to_bytes(doc)
+
+
+def _rasterize(pdf_bytes: bytes, dpi: int = 200) -> bytes:
+    """텍스트 PDF를 페이지별 전면 이미지 PDF로 변환 (스캔 시뮬레이션)."""
+    src = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+    out = _new_doc()
+    for page in src:
+        pix = page.get_pixmap(dpi=dpi)
+        new_page = out.new_page(width=page.rect.width, height=page.rect.height)
+        new_page.insert_image(new_page.rect, pixmap=pix)
+    src.close()
+    return _to_bytes(out)
+
+
+def scanned_korean_clear(pages: int = 1) -> bytes:
+    """선명한 한국어 스캔 (OCR ground truth: 큰 글자 — 합성 CID 폰트의 소형 자간 한계 회피)."""
+    doc = _new_doc()
+    for _n in range(pages):
+        page = doc.new_page(width=PAGE_W, height=PAGE_H)
+        lines = [
+            "심장은 혈액을 보내는 기관이다",
+            "산소가 부족하면 호흡이 빨라진다",
+            "혈압을 매일 기록한다",
+        ]
+        for i, line in enumerate(lines):
+            page.insert_text((60, 120 + i * 70), line, fontsize=24, **KOR)
+    return _rasterize(_to_bytes(doc))
+
+
+def scanned_english_clear() -> bytes:
+    doc = _new_doc()
+    page = doc.new_page(width=PAGE_W, height=PAGE_H)
+    lines = [
+        "Heart failure reduces cardiac output.",
+        "BP 120/80 mmHg and HR 72 bpm were recorded.",
+        "Ejection fraction was 45.5% (±2.3).",
+    ]
+    for i, line in enumerate(lines):
+        page.insert_text((60, 120 + i * 50), line, fontsize=16)
+    return _rasterize(_to_bytes(doc))
+
+
+def scanned_mixed_korean_english() -> bytes:
+    doc = _new_doc()
+    page = doc.new_page(width=PAGE_W, height=PAGE_H)
+    page.insert_text((60, 120), "심부전 환자의 NT-proBNP 수치", fontsize=24, **KOR)
+    page.insert_text((60, 200), "EF 45% BNP 350 pg/mL", fontsize=20)
+    return _rasterize(_to_bytes(doc))
+
+
+def mixed_digital_and_scanned() -> bytes:
+    """1쪽 디지털 + 2쪽 스캔(한국어)."""
+    digital = _new_doc()
+    page = digital.new_page(width=PAGE_W, height=PAGE_H)
+    y = 80
+    for i in range(15):
+        page.insert_text((72, y + i * 24), f"디지털 본문 {i + 1}", fontsize=12, **KOR)
+    digital_bytes = _to_bytes(digital)
+
+    scan_bytes = scanned_korean_clear(pages=1)
+    a = pymupdf.open(stream=digital_bytes, filetype="pdf")
+    b = pymupdf.open(stream=scan_bytes, filetype="pdf")
+    a.insert_pdf(b)
+    b.close()
+    return _to_bytes(a)
+
+
+def blank_image_page() -> bytes:
+    """빈(내용 없는) 전면 이미지 페이지."""
+    doc = _new_doc()
+    doc.new_page(width=PAGE_W, height=PAGE_H)
+    return _rasterize(_to_bytes(doc))

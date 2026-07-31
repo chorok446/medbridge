@@ -52,7 +52,7 @@ class DocumentPage(Base):
     rotation: Mapped[int] = mapped_column(Integer, default=0)  # 0/90/180/270
     raw_text: Mapped[str] = mapped_column(Text, default="")
     normalized_text: Mapped[str] = mapped_column(Text, default="")
-    extraction_method: Mapped[str] = mapped_column(String(30), default="pymupdf")
+    extraction_method: Mapped[str] = mapped_column(String(30), default="digital")
     extraction_status: Mapped[PageExtractionStatus] = mapped_column(
         _str_enum(PageExtractionStatus, "page_extraction_status"),
         default=PageExtractionStatus.PENDING,
@@ -66,6 +66,8 @@ class DocumentPage(Base):
     word_count: Mapped[int] = mapped_column(Integer, default=0)
     image_area_ratio: Mapped[float] = mapped_column(Float, default=0.0)
     requires_ocr: Mapped[bool] = mapped_column(Boolean, default=False)
+    ocr_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    ocr_mean_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
     error_message_internal: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -146,6 +148,7 @@ class DocumentWord(Base):
     text: Mapped[str] = mapped_column(Text, default="")
     normalized_text: Mapped[str] = mapped_column(Text, default="")
     confidence: Mapped[float] = mapped_column(Float, default=1.0)
+    source_method: Mapped[str] = mapped_column(String(10), default="digital")  # digital | ocr
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
 
 

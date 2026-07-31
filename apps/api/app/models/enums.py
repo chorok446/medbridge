@@ -79,6 +79,30 @@ class DocumentType(enum.StrEnum):
 class JobType(enum.StrEnum):
     VALIDATE_FILE = "validate_file"
     EXTRACT_DOCUMENT = "extract_document"
+    OCR_DOCUMENT = "ocr_document"
+
+
+class OcrRunStatus(enum.StrEnum):
+    RUNNING = "running"
+    OCR_COMPLETED = "ocr_completed"
+    OCR_LOW_CONFIDENCE = "ocr_low_confidence"
+    OCR_EMPTY = "ocr_empty"
+    OCR_FAILED = "ocr_failed"
+    OCR_CANCELLED = "ocr_cancelled"
+
+
+class WordSource(enum.StrEnum):
+    DIGITAL = "digital"
+    OCR = "ocr"
+
+
+class PageTextMethod(enum.StrEnum):
+    """document_pages.extraction_method 의미 체계."""
+
+    DIGITAL = "digital"
+    OCR = "ocr"
+    HYBRID = "hybrid"
+    NONE = "none"
 
 
 class JobStatus(enum.StrEnum):
