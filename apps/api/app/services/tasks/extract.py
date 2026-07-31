@@ -75,6 +75,9 @@ async def extract_document(document_id: uuid.UUID, correlation_id: str) -> None:
         final = summary.final_status
         transition(doc, final)
         doc.processing_progress = 100
+        if final != ProcessingStatus.EXTRACTION_FAILED:
+            # 추출 내용이 확정됨 — content revision을 올린다(기존 청크·요약이 stale이 된다).
+            doc.content_revision = (doc.content_revision or 1) + 1
         doc.extraction_engine = engine_mod.ENGINE_NAME
         doc.extraction_engine_version = engine_mod.ENGINE_VERSION
         doc.extraction_schema_version = engine_mod.SCHEMA_VERSION

@@ -189,10 +189,26 @@ async def run_ocr_job(
             job.completed_at = datetime.now(UTC)
         if doc is not None:
             await ocr_service.rollup_document_status(session, doc)
+            if processed > 0:
+                # OCR로 내용이 바뀜 — content revision을 올린다(기존 청크·요약 stale).
+                doc.content_revision = (doc.content_revision or 1) + 1
         await session.commit()
         logger.info(
             "ocr_job_done", document_id=str(document_id), processed=processed, failed=failed
         )
+
+    # 내용이 바뀌었으면 청크를 자동으로 다시 만든다(요약은 자동 생성하지 않는다 —
+    # 모델 호출은 사용자가 실행). 청크 재생성 실패는 OCR 완료 자체를 되돌리지 않는다.
+    if processed > 0:
+        async with factory() as session:
+            doc = await session.get(Document, document_id)
+            if doc is not None and doc.deleted_at is None:
+                from app.services.search import service as search_service
+
+                try:
+                    await search_service.start_chunk_rebuild(session, doc, correlation_id)
+                except Exception:
+                    logger.warning("ocr_chunk_rebuild_enqueue_failed", document_id=str(document_id))
 
 
 async def mark_ocr_job_crashed(document_id: uuid.UUID) -> None:

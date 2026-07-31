@@ -16,8 +16,22 @@ hidden = (
     + collect_submodules("aiosqlite")
     + collect_submodules("alembic")
     + collect_submodules("pymupdf")  # PDF 추출 엔진 (바이너리 포함)
+    # keyring은 백엔드를 entry point로 동적 로드하므로 PyInstaller가 놓친다 —
+    # 서브모듈 전체 + 플랫폼 백엔드를 명시적으로 포함해 API 키 저장이 동작하게 한다.
+    + collect_submodules("keyring")
+    + [
+        "keyring.backends.Windows",
+        "keyring.backends.macOS",
+        "keyring.backends.SecretService",
+        "keyring.backends.chainer",
+        "keyring.backends.fail",
+    ]
     + ["app.main"]
 )
+
+if sys.platform == "win32":
+    # Windows Credential Manager 백엔드는 win32cred(pywin32)에 의존한다.
+    hidden += collect_submodules("win32ctypes") + ["win32cred", "win32timezone"]
 
 a = Analysis(
     ["sidecar_entry.py"],

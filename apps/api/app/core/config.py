@@ -28,6 +28,14 @@ class Settings(BaseSettings):
     # 테스트에서만 "deterministic"으로 바꿔 쓴다. API 키를 여기 하드코딩하지 않는다.
     embedding_provider: str = Field(default="disabled", pattern="^(disabled|deterministic)$")
 
+    # 요약 공급자 강제 override (테스트·개발용). "auto"면 DB summary_settings + keyring에서
+    # 실제 공급자를 결정한다. "deterministic"은 테스트에서 실제 모델 없이 구조화 출력을 낸다.
+    summary_provider: str = Field(
+        default="auto", pattern="^(auto|disabled|deterministic)$"
+    )
+    # keyring service 이름 접두사 — 테스트는 in-memory 백엔드를 주입해 실제 OS 저장소를 안 건드린다.
+    keyring_service_name: str = Field(default="MedBridgeStudy")
+
     @model_validator(mode="after")
     def _production_requires_token(self) -> "Settings":
         # 패키징 앱(production)에서 토큰이 없으면 인증 없이 열리므로 기동을 거부한다

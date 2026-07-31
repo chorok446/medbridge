@@ -8,6 +8,7 @@ from app.models.extraction import (
 )
 from app.models.ocr import OcrRun
 from app.models.search import DocumentChunk
+from app.models.summary import SummaryArtifact, SummaryRun, SummarySettings
 from app.models.user import User
 
 __all__ = [
@@ -21,4 +22,7 @@ __all__ = [
     "DocumentTable",
     "OcrRun",
     "DocumentChunk",
+    "SummaryRun",
+    "SummaryArtifact",
+    "SummarySettings",
 ]

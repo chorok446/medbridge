@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { ErrorBox } from "@/components/error-box";
+import { SummaryModelSection } from "@/components/summary-model-settings";
 import { UpdateManager } from "@/components/update-manager";
 import { getProfile, updateProfile } from "@/lib/api/profile";
 import { saveErrorReport, useIsTauri } from "@/lib/tauri";
@@ -133,6 +134,11 @@ export default function SettingsPage() {
             저장
           </button>
         </form>
+      </section>
+
+      <section className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
+        <h2 className="mb-3 font-semibold">요약 모델</h2>
+        <SummaryModelSection />
       </section>
 
       <section className="mt-4 rounded-lg border border-slate-200 bg-white p-4">

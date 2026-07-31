@@ -16,6 +16,9 @@ dependencies = [
     "python-multipart>=0.0.9",
     "structlog>=24.1",
     "pymupdf==1.26.*",
+    "keyring>=25.2",
+    # Windows Credential Manager 백엔드 의존성 (keyring이 사용). 다른 OS에선 설치 안 함.
+    "pywin32>=306; sys_platform == 'win32'",
 ]
 
 [dependency-groups]

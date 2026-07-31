@@ -71,6 +71,10 @@ class Document(Base):
     failure_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
     failure_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     external_evidence_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 콘텐츠 revision — 추출/OCR 완료로 내용이 바뀔 때마다 +1. 청크/요약 stale 판정 기준.
+    content_revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    # 현재 청크 세트가 만들어진 시점의 content_revision (다르면 청크 stale). NULL=아직 없음.
+    chunk_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # 추출 캐시·재처리 판단용 (docs §18)
     extraction_engine: Mapped[str | None] = mapped_column(String(30), nullable=True)
     extraction_engine_version: Mapped[str | None] = mapped_column(String(30), nullable=True)

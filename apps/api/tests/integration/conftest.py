@@ -28,6 +28,10 @@ def alembic_config() -> AlembicConfig:
 @pytest.fixture(scope="session", autouse=True)
 def prepare_infra():
     get_path_provider().ensure_directories()
+    # API 키가 실제 OS credential storage를 건드리지 않도록 in-memory keyring 주입
+    from app.services.summary import secrets
+
+    secrets.use_in_memory_backend()
     # 빈 SQLite DB에서 alembic upgrade head 성공 (요구사항 검증을 겸한다)
     command.upgrade(alembic_config(), "head")
     yield
@@ -38,9 +42,23 @@ async def clean_db(prepare_infra):
     yield
     await get_task_runner().drain()
     async with get_session_factory()() as session:
-        for table in ("document_jobs", "documents", "app_profile"):
+        # summary_settings는 문서와 무관한 단일 행이라 명시적으로 비운다
+        for table in (
+            "summary_artifacts",
+            "summary_runs",
+            "document_chunks",
+            "document_jobs",
+            "documents",
+            "summary_settings",
+            "app_profile",
+        ):
             await session.execute(text(f"DELETE FROM {table}"))
+        await session.execute(text("DELETE FROM document_chunks_fts"))
         await session.commit()
+    # keyring도 테스트 간 격리
+    from app.services.summary import secrets
+
+    secrets.delete_api_key()
 
 
 @pytest.fixture

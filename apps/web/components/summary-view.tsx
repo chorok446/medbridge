@@ -1,0 +1,226 @@
+"use client";
+
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { PdfViewer } from "@/components/pdf-viewer";
+import { createSummary, getSummaries, getSummaryStatus, retrySummary } from "@/lib/api/summary";
+import type { DocumentSummary } from "@/types/api";
+import type { Rect } from "@/types/extraction";
+import type { SummaryArtifact, SummaryArtifactType } from "@/types/summary";
+
+interface Props {
+  doc: DocumentSummary;
+  fileUrl: string;
+}
+
+function isActiveStatus(status: string | null | undefined): boolean {
+  return status === "queued" || status === "running";
+}
+
+// 화면에 보여줄 그룹 순서와 제목 (내부 artifact_type을 사용자 용어로)
+const GROUPS: { title: string; types: SummaryArtifactType[] }[] = [
+  { title: "전체 개요", types: ["overview"] },
+  { title: "섹션별 요약", types: ["section_summary"] },
+  { title: "핵심 개념", types: ["key_concept"] },
+  { title: "선수지식", types: ["prerequisite"] },
+  { title: "주요 수치·대상", types: ["important_number", "target_population"] },
+  { title: "학습자 설명", types: ["learner_explanation"] },
+  { title: "주의할 내용", types: ["study_caution"] },
+];
+
+function artifactBody(a: SummaryArtifact): string {
+  const c = a.content;
+  return String(
+    c.text ?? c.summary ?? c.explanation ?? c.whyNeeded ?? c.context ?? c.value ?? "",
+  );
+}
+
+/**
+ * 문서 요약 — 왼쪽 원문(PDF), 오른쪽 출처 기반 구조화 요약. 모든 항목에 출처 버튼이
+ * 있고 클릭 시 해당 페이지·bbox로 이동한다. 내부 chunk id·모델명·토큰은 노출하지 않는다.
+ */
+export function SummaryView({ doc, fileUrl }: Props) {
+  const queryClient = useQueryClient();
+  const [page, setPage] = useState(1);
+  const [highlights, setHighlights] = useState<Rect[]>([]);
+  const [flashKey, setFlashKey] = useState(0);
+
+  const statusQuery = useQuery({
+    queryKey: ["summary-status", doc.id],
+    queryFn: () => getSummaryStatus(doc.id),
+    refetchInterval: (q) => (isActiveStatus(q.state.data?.status) ? 1500 : false),
+  });
+
+  const listQuery = useQuery({
+    queryKey: ["summaries", doc.id],
+    queryFn: () => getSummaries(doc.id),
+    enabled: statusQuery.data?.status === "succeeded",
+  });
+
+  const createMutation = useMutation({
+    mutationFn: () => createSummary(doc.id),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["summary-status", doc.id] }),
+  });
+  const retryMutation = useMutation({
+    mutationFn: () => retrySummary(doc.id),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["summary-status", doc.id] }),
+  });
+
+  function navigate(ref: { pageNumber: number; bbox: [number, number, number, number] }) {
+    setPage(ref.pageNumber);
+    setHighlights([{ x0: ref.bbox[0], y0: ref.bbox[1], x1: ref.bbox[2], y1: ref.bbox[3] }]);
+    setFlashKey((k) => k + 1);
+  }
+
+  const status = statusQuery.data;
+  const pageCount = doc.pageCount ?? 0;
+  const artifacts = listQuery.data?.artifacts ?? [];
+  const stale = status?.stale ?? false;
+
+  const providerUnavailable = status && !status.providerAvailable;
+  const createError = createMutation.error as { status?: number; message?: string } | null;
+  const chunksNotReady = createError?.status === 409;
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-[1fr_420px]">
+      <div className="h-[640px]">
+        <PdfViewer
+          fileUrl={fileUrl}
+          page={page}
+          pageCount={pageCount}
+          onPageChange={(p) => {
+            setPage(p);
+            setHighlights([]);
+          }}
+          highlights={highlights}
+          flashKey={flashKey}
+        />
+      </div>
+
+      <aside className="flex h-[640px] flex-col overflow-auto rounded-lg border border-slate-200 bg-white p-4">
+        <p className="mb-3 rounded bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          이 내용은 학습 보조용이며 실제 환자의 진단·처방·응급 판단에 사용하지 마세요.
+        </p>
+
+        {providerUnavailable && (
+          <div className="rounded bg-slate-50 px-3 py-3 text-sm text-slate-700">
+            <p>요약 기능을 사용하려면 앱 설정에서 요약 모델을 연결해 주세요.</p>
+            <a href="/settings" className="mt-2 inline-block text-blue-700 hover:underline">
+              설정으로 이동
+            </a>
+          </div>
+        )}
+
+        {status?.providerAvailable && (
+          <>
+            {stale && artifacts.length > 0 && (
+              <div className="mb-3 rounded bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                <p>문서가 바뀌어 이 요약은 오래된 내용일 수 있어요.</p>
+                <button
+                  type="button"
+                  onClick={() => retryMutation.mutate()}
+                  disabled={retryMutation.isPending || isActiveStatus(status.status)}
+                  className="mt-1.5 rounded bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+                >
+                  다시 요약하기
+                </button>
+              </div>
+            )}
+
+            {isActiveStatus(status.status) && (
+              <p role="status" aria-live="polite" className="text-sm text-slate-500">
+                요약을 만드는 중이에요… ({status.progress}%)
+              </p>
+            )}
+
+            {(status.status === null || status.status === "failed" || status.status === "cancelled") && (
+              <div className="rounded bg-slate-50 px-3 py-3 text-sm text-slate-700">
+                <p>
+                  {status.status === "failed"
+                    ? "요약을 만들지 못했어요. 다시 시도해 주세요."
+                    : status.status === "cancelled"
+                      ? "요약이 취소되었어요."
+                      : "아직 요약을 만들지 않았어요."}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => createMutation.mutate()}
+                  disabled={createMutation.isPending}
+                  className="mt-2 rounded bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                >
+                  요약 만들기
+                </button>
+                {chunksNotReady && (
+                  <p role="alert" className="mt-1.5 text-xs text-amber-700">
+                    문서 검색 준비가 끝난 뒤에 요약할 수 있어요. 잠시 후 다시 시도해 주세요.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {status.status === "succeeded" && artifacts.length > 0 && (
+              <div className="flex flex-col gap-4">
+                {GROUPS.map((group) => {
+                  const items = artifacts.filter((a) => group.types.includes(a.artifactType));
+                  if (items.length === 0) return null;
+                  return (
+                    <section key={group.title}>
+                      <h3 className="mb-1.5 text-sm font-semibold text-slate-800">
+                        {group.title}
+                      </h3>
+                      <ul className="flex flex-col gap-2">
+                        {items.map((a, i) => (
+                          <li
+                            key={`${a.artifactType}-${a.position}-${i}`}
+                            className="rounded border border-slate-200 px-3 py-2"
+                          >
+                            {a.title && (
+                              <p className="mb-0.5 text-sm font-medium text-slate-800">
+                                {a.title}
+                              </p>
+                            )}
+                            <p className="whitespace-pre-wrap text-sm leading-snug text-slate-700">
+                              {artifactBody(a)}
+                            </p>
+                            {a.sourceRefs.length > 0 && (
+                              <div className="mt-1.5 flex flex-wrap gap-1">
+                                <span className="text-xs text-slate-400">출처:</span>
+                                {dedupePages(a.sourceRefs).map((ref) => (
+                                  <button
+                                    key={`${ref.pageNumber}-${ref.blockId}`}
+                                    type="button"
+                                    onClick={() => navigate(ref)}
+                                    className="rounded bg-blue-50 px-2 py-0.5 text-xs text-blue-700 hover:bg-blue-100"
+                                  >
+                                    {ref.pageNumber}쪽
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        )}
+      </aside>
+    </div>
+  );
+}
+
+function dedupePages<T extends { pageNumber: number; blockId: string }>(refs: T[]): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const r of refs) {
+    const key = `${r.pageNumber}-${r.blockId}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      out.push(r);
+    }
+  }
+  return out;
+}

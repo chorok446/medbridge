@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.document import Document
 from app.models.extraction import DocumentBlock, DocumentPage, DocumentTable
 from app.models.search import DocumentChunk
 from app.services.extraction.geometry import overlap_ratio
@@ -348,5 +349,11 @@ async def rebuild_chunks(session: AsyncSession, document_id: uuid.UUID) -> int:
                 "section_title": row.section_title or "",
             },
         )
+
+    # 청크 세트가 만들어진 시점의 content_revision을 기록한다 — 이후 문서가 바뀌면
+    # chunk_revision != content_revision이 되어 청크가 stale로 판정된다.
+    doc = await session.get(Document, document_id)
+    if doc is not None:
+        doc.chunk_revision = doc.content_revision
 
     return len(rows)

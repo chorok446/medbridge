@@ -50,6 +50,51 @@ class LocalTaskRunner:
     def enqueue_chunk_rebuild(self, document_id: uuid.UUID, correlation_id: str) -> None:
         self._spawn(self._run_chunk_rebuild(document_id, correlation_id))
 
+    def enqueue_summary(
+        self,
+        document_id: uuid.UUID,
+        correlation_id: str,
+        *,
+        run_id: uuid.UUID,
+        include_sections: bool = True,
+        include_prerequisites: bool = True,
+    ) -> None:
+        self._spawn(
+            self._run_summary(
+                document_id,
+                correlation_id,
+                run_id,
+                include_sections,
+                include_prerequisites,
+            )
+        )
+
+    async def _run_summary(
+        self,
+        document_id: uuid.UUID,
+        correlation_id: str,
+        run_id: uuid.UUID,
+        include_sections: bool,
+        include_prerequisites: bool,
+    ) -> None:
+        from app.services.tasks.summary_job import mark_summary_crashed, run_summary_job
+
+        async with self._semaphore:
+            try:
+                await run_summary_job(
+                    document_id,
+                    correlation_id,
+                    run_id=run_id,
+                    include_sections=include_sections,
+                    include_prerequisites=include_prerequisites,
+                )
+            except Exception:
+                logger.error("summary_task_crashed", document_id=str(document_id))
+                try:
+                    await mark_summary_crashed(document_id)
+                except Exception:
+                    logger.error("mark_summary_crashed_failed", document_id=str(document_id))
+
     async def _run_chunk_rebuild(self, document_id: uuid.UUID, correlation_id: str) -> None:
         from app.services.tasks.chunk_job import (
             mark_chunk_rebuild_crashed,
@@ -226,6 +271,39 @@ class LocalTaskRunner:
                 job.status = JobStatus.FAILED
                 job.failure_code = "INTERRUPTED"
                 job.completed_at = _dt.now(_UTC)
+            await session.commit()
+
+        # 중단된 요약 잡·run도 실패로 확정한다 — 모델 호출은 재개 지점이 없어 사용자가
+        # 다시 실행하게 한다(청크·OCR과 동일 원칙).
+        from app.models.enums import SummaryRunStatus
+        from app.models.summary import SummaryRun
+
+        async with get_session_factory()() as session:
+            stale_summary_jobs = (
+                await session.execute(
+                    select(DocumentJob).where(
+                        DocumentJob.job_type == JobType.SUMMARIZE,
+                        DocumentJob.status.in_([JobStatus.QUEUED, JobStatus.RUNNING]),
+                    )
+                )
+            ).scalars().all()
+            for job in stale_summary_jobs:
+                job.status = JobStatus.FAILED
+                job.failure_code = "INTERRUPTED"
+                job.completed_at = _dt.now(_UTC)
+            stale_runs = (
+                await session.execute(
+                    select(SummaryRun).where(
+                        SummaryRun.status.in_(
+                            [SummaryRunStatus.QUEUED, SummaryRunStatus.RUNNING]
+                        )
+                    )
+                )
+            ).scalars().all()
+            for run in stale_runs:
+                run.status = SummaryRunStatus.FAILED
+                run.error_code = "INTERRUPTED"
+                run.completed_at = _dt.now(_UTC)
             await session.commit()
         if docs:
             logger.info(

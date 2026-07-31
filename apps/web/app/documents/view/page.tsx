@@ -8,6 +8,7 @@ import { ErrorBox } from "@/components/error-box";
 import { ExtractionReview } from "@/components/extraction-review";
 import { PdfPreview } from "@/components/pdf-preview";
 import { StatusBadge } from "@/components/status-badge";
+import { SummaryView } from "@/components/summary-view";
 import {
   deleteDocument,
   documentFileUrl,
@@ -24,7 +25,7 @@ function DocumentDetail() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [notice, setNotice] = useState<string | null>(null);
-  const [mainTab, setMainTab] = useState<"preview" | "extraction">("preview");
+  const [mainTab, setMainTab] = useState<"preview" | "extraction" | "summary">("preview");
 
   const fileUrlQuery = useQuery({
     queryKey: ["file-url", id],
@@ -168,6 +169,7 @@ function DocumentDetail() {
             [
               { key: "preview", label: "문서 보기" },
               { key: "extraction", label: "텍스트 확인" },
+              { key: "summary", label: "요약" },
             ] as const
           ).map((t) => (
             <button
@@ -189,6 +191,8 @@ function DocumentDetail() {
 
       {mainTab === "extraction" && fileUrlQuery.data ? (
         <ExtractionReview doc={doc} fileUrl={fileUrlQuery.data} />
+      ) : mainTab === "summary" && fileUrlQuery.data ? (
+        <SummaryView doc={doc} fileUrl={fileUrlQuery.data} />
       ) : (
       <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
         <PdfPreview documentId={id} />
@@ -215,10 +219,18 @@ function DocumentDetail() {
           <section className="rounded-lg border border-slate-200 bg-white p-4">
             <h2 className="mb-2 text-sm font-semibold">학습 기능</h2>
             <p className="mb-2 text-xs text-slate-500">
-              요약·질문·복습 카드는 다음 업데이트에서 열려요.
+              위쪽 [요약] 탭에서 문서 요약을 볼 수 있어요. 질문·복습 카드는 다음 업데이트에서
+              열려요.
             </p>
             <div className="flex flex-wrap gap-2">
-              {["요약", "질문하기", "복습 카드"].map((label) => (
+              <button
+                type="button"
+                onClick={() => setMainTab("summary")}
+                className="rounded border border-blue-200 px-3 py-1.5 text-sm text-blue-700 hover:bg-blue-50"
+              >
+                요약 보기
+              </button>
+              {["질문하기", "복습 카드"].map((label) => (
                 <button
                   key={label}
                   type="button"

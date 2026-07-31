@@ -124,7 +124,11 @@ def create_app() -> FastAPI:
         profile,
         reports,
         search,
+        summary,
         system,
+    )
+    from app.api.routes import (
+        settings as settings_routes,
     )
 
     configure_logging()
@@ -211,6 +215,8 @@ def create_app() -> FastAPI:
     app.include_router(extraction.router)
     app.include_router(ocr.router)
     app.include_router(search.router)
+    app.include_router(summary.router)
+    app.include_router(settings_routes.router)
     app.include_router(reports.router)
     app.include_router(system.router)
     return app

@@ -81,6 +81,32 @@ class JobType(enum.StrEnum):
     EXTRACT_DOCUMENT = "extract_document"
     OCR_DOCUMENT = "ocr_document"
     CHUNK_REBUILD = "chunk_rebuild"
+    SUMMARIZE = "summarize"
+
+
+class SummaryRunStatus(enum.StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+class SummaryArtifactType(enum.StrEnum):
+    OVERVIEW = "overview"
+    SECTION_SUMMARY = "section_summary"
+    KEY_CONCEPT = "key_concept"
+    PREREQUISITE = "prerequisite"
+    IMPORTANT_NUMBER = "important_number"
+    TARGET_POPULATION = "target_population"
+    LEARNER_EXPLANATION = "learner_explanation"
+    STUDY_CAUTION = "study_caution"
+
+
+class LearnerLevel(enum.StrEnum):
+    CONCISE = "concise"
+    NURSING_STUDENT = "nursing_student"
+    EXPERIENCED_NURSE = "experienced_nurse"
 
 
 class OcrRunStatus(enum.StrEnum):
