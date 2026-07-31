@@ -38,10 +38,14 @@ class Settings(BaseSettings):
     @property
     def app_data_dir(self) -> Path:
         if self.medbridge_app_data_dir:
-            return Path(self.medbridge_app_data_dir)
-        import platformdirs
+            path = Path(self.medbridge_app_data_dir)
+        else:
+            import platformdirs
 
-        return Path(platformdirs.user_data_dir("MedBridge", appauthor=False))
+            path = Path(platformdirs.user_data_dir("MedBridge", appauthor=False))
+        # SQLite 파일을 열기 전에 디렉터리가 반드시 존재해야 한다 (alembic 단독 실행 포함)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
 
     @property
     def database_url(self) -> str:
