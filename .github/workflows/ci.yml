@@ -125,6 +125,16 @@ jobs:
           # 상대 경로 사용: /tmp는 Windows 러너의 MSYS bash에서 경로 변환이
           # 어긋나 tauri CLI가 쓴 파일을 못 읽는 경우가 있다.
           pnpm tauri signer generate --ci -w ci-signing-key -p ""
+          # tauri.conf.json의 pubkey는 release.yml이 실제 Secrets로 채우는
+          # placeholder다. CI 빌드는 방금 만든 임시 키쌍의 공개키로 맞바꿔야
+          # updater 아티팩트 서명 검증(base64 디코딩)이 통과한다.
+          python3 - "$(cat ci-signing-key.pub)" <<'EOF'
+          import json, sys
+          p = "src-tauri/tauri.conf.json"
+          conf = json.load(open(p, encoding="utf-8"))
+          conf["plugins"]["updater"]["pubkey"] = sys.argv[1]
+          json.dump(conf, open(p, "w", encoding="utf-8"), indent=2)
+          EOF
           export TAURI_SIGNING_PRIVATE_KEY="$(cat ci-signing-key)"
           export TAURI_SIGNING_PRIVATE_KEY_PASSWORD=""
           pnpm install
