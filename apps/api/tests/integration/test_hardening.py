@@ -163,6 +163,31 @@ class TestTokenGuard:
     async def test_health_open_for_shell_monitoring(self, token_client):
         assert (await token_client.get("/health")).status_code == 200
 
+    async def test_cors_preflight_bypasses_token_check(self, token_client):
+        """OPTIONS preflight는 토큰 헤더 없이도 CORS 계층까지 통과해야 한다.
+
+        브라우저는 preflight에 커스텀 헤더(X-MedBridge-Token)를 싣지 않으므로,
+        인증 미들웨어가 이를 401로 막으면 Tauri 웹뷰의 모든 보호 API 호출이
+        CORS 단계에서부터 실패한다 (Windows 실기기에서 재현된 결함).
+        """
+        res = await token_client.options(
+            "/api/documents",
+            headers={
+                "Origin": "http://tauri.localhost",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "x-medbridge-token",
+            },
+        )
+        assert res.status_code == 200
+        assert res.headers["access-control-allow-origin"] == "http://tauri.localhost"
+
+    async def test_real_request_after_preflight_still_requires_token(self, token_client):
+        # preflight 통과가 실제 요청의 토큰 검증까지 면제해서는 안 된다
+        res = await token_client.get(
+            "/api/documents", headers={"Origin": "http://tauri.localhost"}
+        )
+        assert res.status_code == 401
+
 
 class TestProductionFailFast:
     def test_production_without_token_refuses_startup(self):

@@ -143,8 +143,11 @@ def create_app() -> FastAPI:
 
         # 로컬 API 보호: Tauri가 발급한 토큰 없이는 접근 불가 (미설정 시 개발 모드 —
         # production은 config 검증이 토큰 없는 기동 자체를 거부한다)
+        # CORS preflight(OPTIONS)는 브라우저가 커스텀 헤더 없이 보내므로 인증 대상에서
+        # 제외하고 CORSMiddleware(이 미들웨어보다 안쪽 계층)로 그대로 넘긴다. 실제
+        # GET/POST/PATCH/DELETE 요청의 토큰 검증은 그대로 유지된다.
         token = settings.medbridge_api_token
-        if token and request.url.path != "/health":
+        if request.method != "OPTIONS" and token and request.url.path != "/health":
             supplied = request.headers.get("X-MedBridge-Token")
             # query 토큰은 iframe이 헤더를 못 보내는 파일 미리보기 경로에만 허용
             if supplied is None and request.url.path.endswith("/file"):
