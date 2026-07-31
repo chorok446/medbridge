@@ -182,7 +182,13 @@ fn wait_for_sidecar(port: u16, child: &Mutex<Option<Child>>, timeout: Duration) 
             if stream.write_all(req.as_bytes()).is_ok() {
                 let mut buf = String::new();
                 let _ = stream.read_to_string(&mut buf);
-                if buf.contains("\"status\":\"ok\"") {
+                // 다른 로컬 프로세스가 포트를 선점한 경우를 걸러내기 위해
+                // 200 응답 + 우리 sidecar의 버전 필드까지 확인한다
+                let expected = format!("\"sidecarVersion\":\"{}\"", env!("CARGO_PKG_VERSION"));
+                if buf.starts_with("HTTP/1.1 200")
+                    && buf.contains("\"status\":\"ok\"")
+                    && buf.contains(&expected)
+                {
                     return Ok(());
                 }
             }

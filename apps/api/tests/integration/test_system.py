@@ -52,9 +52,15 @@ class TestErrorReport:
             "/api/documents", **upload_kwargs(make_pdf(), "환자기록_비밀문서.pdf")
         )
         await drain_jobs()
+        # 사용자 자유 입력 신고는 zip 포함 대상 로그(sidecar.log)에 남지 않아야 한다
+        await client.post(
+            "/api/reports",
+            json={"description": "환자 김민준씨 파일이 안 열려요"},
+        )
         res = await client.get("/api/system/error-report")
         assert res.status_code == 200
         report = res.json()["data"]
+        assert "김민준" not in json.dumps(report, ensure_ascii=False)
         assert report["sidecarVersion"]
         assert report["migrationRevision"] == "0001"
         assert "documentStatusCounts" in report
@@ -64,32 +70,57 @@ class TestErrorReport:
 
 
 class TestSingleInstance:
-    def test_duplicate_start_is_rejected(self):
+    def test_duplicate_lock_is_rejected(self):
+        """커널 파일 잠금 — 두 번째 잠금 시도(별도 fd)는 실패해야 한다."""
         runtime.acquire_single_instance(1111)
         try:
-            with pytest.raises(RuntimeError):
-                # 살아있는 pid(자기 자신을 다른 pid처럼 기록)로 중복 기동 시뮬레이션
-                path = runtime.runtime_file()
-                path.write_text(json.dumps({"pid": os.getppid(), "port": 1111}))
-                runtime.acquire_single_instance(2222)
+            with open(runtime.runtime_dir() / "sidecar.lock", "a+b") as second:
+                assert runtime._try_lock(second) is False
         finally:
             runtime.release_single_instance()
 
-    def test_stale_runtime_file_is_cleaned(self):
-        path = runtime.runtime_file()
-        path.write_text(json.dumps({"pid": 99999999, "port": 1234}))  # 죽은 pid
-        runtime.acquire_single_instance(5678)
-        try:
-            info = json.loads(path.read_text())
-            assert info["pid"] == os.getpid()
-            assert info["port"] == 5678
-        finally:
-            runtime.release_single_instance()
-
-    def test_release_removes_file(self):
+    def test_reacquire_after_release(self):
+        """프로세스 종료(=해제) 후에는 즉시 다시 기동할 수 있다 — stale 판정 불필요."""
         runtime.acquire_single_instance(4321)
         runtime.release_single_instance()
-        assert not runtime.runtime_file().is_file()
+        runtime.acquire_single_instance(8765)
+        try:
+            info = json.loads((runtime.runtime_dir() / "sidecar.json").read_text())
+            assert info["pid"] == os.getpid()
+            assert info["port"] == 8765
+        finally:
+            runtime.release_single_instance()
+
+    def test_release_removes_info_file(self):
+        runtime.acquire_single_instance(4321)
+        runtime.release_single_instance()
+        assert not (runtime.runtime_dir() / "sidecar.json").is_file()
+
+
+class TestQuiescence:
+    async def test_prepare_waits_for_inflight_operation(self, client):
+        """게이트를 닫은 뒤 진행 중이던 요청이 끝나야 prepare가 완료된다."""
+        import asyncio
+
+        release = asyncio.Event()
+
+        async def long_operation():
+            with runtime.operation():
+                await release.wait()
+
+        op_task = asyncio.create_task(long_operation())
+        await asyncio.sleep(0)  # operation 등록 보장
+        assert runtime.active_operations() == 1
+
+        prepare_task = asyncio.create_task(client.post("/api/system/prepare-update"))
+        await asyncio.sleep(0.2)
+        assert not prepare_task.done()  # 진행 중 작업이 있는 동안 완료되지 않는다
+
+        release.set()
+        await op_task
+        res = await asyncio.wait_for(prepare_task, timeout=10)
+        assert res.status_code == 200
+        runtime.set_updating(False)
 
 
 class TestVersionConsistency:

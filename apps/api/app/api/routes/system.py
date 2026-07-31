@@ -14,7 +14,6 @@ from app.db.session import get_db
 from app.models.document import Document, DocumentJob
 from app.schemas.common import CamelModel, Envelope
 from app.services.system import runtime
-from app.services.tasks.runner import get_task_runner
 from app.utils.responses import wrap
 
 router = APIRouter(prefix="/api/system", tags=["system"])
@@ -28,9 +27,9 @@ class PrepareUpdateOut(CamelModel):
 
 @router.post("/prepare-update", response_model=Envelope[PrepareUpdateOut])
 async def prepare_update() -> dict:
-    """업데이트 직전 호출: 새 작업 차단 → 실행 중 작업 완료 대기 → checkpoint+백업."""
+    """업데이트 직전 호출: 새 작업 차단 → 진행 중 요청·작업 완전 종료 대기 → checkpoint+백업."""
     runtime.set_updating(True)
-    await get_task_runner().drain()
+    await runtime.wait_for_quiescence()
     backup = runtime.checkpoint_and_backup()
     return wrap(PrepareUpdateOut(ready=True, backup_file=backup))
 
@@ -73,6 +72,8 @@ async def error_report(db: AsyncSession = Depends(get_db)) -> dict:
         ).all()
     ]
 
+    # sidecar.log만 포함한다 — user-reports.log(사용자 자유 입력)는 개인정보가
+    # 섞일 수 있어 오류 보고서에 절대 넣지 않는다
     log_tail: list[str] = []
     log_file = get_path_provider().logs_dir / "sidecar.log"
     if log_file.is_file():

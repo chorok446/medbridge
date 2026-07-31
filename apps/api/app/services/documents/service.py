@@ -91,7 +91,20 @@ async def create_document(
     - 객체 저장 후 DB 갱신 실패 → 업로드된 객체 삭제 시도
     - 큐 등록 실패 → 문서 failed(retryable)
     """
+    from app.services.system import runtime
+
     _reject_if_updating()
+    with runtime.operation():  # 업데이트 정지 지점 계산용 (검사 직후 같은 틱에 등록)
+        return await _create_document_inner(db, user, file, title, correlation_id)
+
+
+async def _create_document_inner(
+    db: AsyncSession,
+    user: User,
+    file: UploadFile,
+    title: str | None,
+    correlation_id: str,
+) -> tuple[Document, bool]:
     settings = get_settings()
     data = await _read_limited(file, settings.max_upload_bytes)
     validation.check_size(len(data), settings.max_upload_bytes)

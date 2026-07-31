@@ -39,4 +39,9 @@ if len(set(versions.values())) != 1:
     print("::error::버전이 일치하지 않습니다. 모든 파일의 버전을 동일하게 맞추세요.")
     sys.exit(1)
 
+# 버전 정책: X.Y.Z만 허용 (prerelease 금지 — 릴리스 게이트의 sort -V 비교가 안전해지는 전제)
+if not re.fullmatch(r"\d+\.\d+\.\d+", web):
+    print(f"::error::버전 '{web}' 은 X.Y.Z 형식이어야 합니다 (prerelease 미지원).")
+    sys.exit(1)
+
 print(f"OK: 모든 구성요소가 {web} 로 일치")
