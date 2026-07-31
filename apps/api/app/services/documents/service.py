@@ -280,9 +280,17 @@ async def delete_document(db: AsyncSession, user: User, document_id: uuid.UUID) 
                 retryable=True,
             ) from exc
 
+    # 파생 추출 데이터 정리 (soft delete라 FK cascade가 돌지 않으므로 명시 삭제;
+    # pages 삭제가 blocks/lines/words/tables로 cascade된다)
+    from sqlalchemy import delete as sa_delete
+
+    from app.models.extraction import DocumentPage
+
+    await db.execute(sa_delete(DocumentPage).where(DocumentPage.document_id == doc.id))
     transition(doc, ProcessingStatus.DELETED)
     doc.deleted_at = datetime.now(UTC)
     doc.storage_key = None
+    doc.extraction_completed_at = None
     await db.commit()
     return doc
 

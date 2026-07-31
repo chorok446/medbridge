@@ -66,7 +66,7 @@ class TestCrashBoundary:
         await client.post(f"/api/documents/{doc_id}/retry")
         await drain_jobs()
         after = (await client.get(f"/api/documents/{doc_id}")).json()["data"]
-        assert after["processingStatus"] == "ready"
+        assert after["processingStatus"] == "extracted"
 
 
 class TestStartupRecovery:
@@ -88,7 +88,7 @@ class TestStartupRecovery:
         await get_task_runner().recover_interrupted()
         await drain_jobs()
         detail = (await client.get(f"/api/documents/{doc_id}")).json()["data"]
-        assert detail["processingStatus"] == "ready"
+        assert detail["processingStatus"] == "extracted"
 
     async def test_uploading_state_is_failed_with_guidance(self, client):
         res = await client.post("/api/documents", **upload_kwargs(make_pdf(pages=2)))
@@ -127,7 +127,7 @@ class TestDuplicateAfterFailure:
         detail = (await client.get(f"/api/documents/{second.json()['data']['id']}")).json()[
             "data"
         ]
-        assert detail["processingStatus"] == "ready"
+        assert detail["processingStatus"] == "extracted"
 
 
 class TestTokenGuard:

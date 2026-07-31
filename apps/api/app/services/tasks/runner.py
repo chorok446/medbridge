@@ -32,11 +32,28 @@ class LocalTaskRunner:
         self._tasks: set[asyncio.Task] = set()
 
     def enqueue_validate(self, document_id: uuid.UUID, correlation_id: str) -> None:
-        task = asyncio.get_running_loop().create_task(
-            self._run_validate(document_id, correlation_id)
-        )
+        self._spawn(self._run_validate(document_id, correlation_id))
+
+    def enqueue_extract(self, document_id: uuid.UUID, correlation_id: str) -> None:
+        self._spawn(self._run_extract(document_id, correlation_id))
+
+    def _spawn(self, coro) -> None:
+        task = asyncio.get_running_loop().create_task(coro)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+
+    async def _run_extract(self, document_id: uuid.UUID, correlation_id: str) -> None:
+        from app.services.tasks.extract import extract_document, mark_extraction_crashed
+
+        async with self._semaphore:
+            try:
+                await extract_document(document_id, correlation_id)
+            except Exception:
+                logger.error("extract_task_crashed", document_id=str(document_id))
+                try:
+                    await mark_extraction_crashed(document_id)
+                except Exception:
+                    logger.error("mark_extract_crashed_failed", document_id=str(document_id))
 
     async def _run_validate(self, document_id: uuid.UUID, correlation_id: str) -> None:
         from app.services.tasks.validate import mark_validation_crashed, validate_document
@@ -59,6 +76,7 @@ class LocalTaskRunner:
         - created/uploading: 파일 저장이 보장되지 않으므로 실패로 확정 (재업로드 안내)
         """
         to_enqueue: list[uuid.UUID] = []
+        to_extract: list[uuid.UUID] = []
         async with get_session_factory()() as session:
             stmt = select(Document).where(
                 Document.processing_status.in_(
@@ -68,6 +86,7 @@ class LocalTaskRunner:
                         ProcessingStatus.UPLOADED,
                         ProcessingStatus.QUEUED,
                         ProcessingStatus.VALIDATING,
+                        ProcessingStatus.EXTRACTING,
                     ]
                 ),
                 Document.deleted_at.is_(None),
@@ -84,6 +103,9 @@ class LocalTaskRunner:
                     doc.failure_message = (
                         "업로드가 중단되었습니다. 파일을 다시 업로드해 주세요."
                     )
+                elif doc.processing_status == ProcessingStatus.EXTRACTING:
+                    # 중단된 추출 재실행 (페이지 단위 교체 저장이라 안전)
+                    to_extract.append(doc.id)
                 else:
                     if doc.processing_status != ProcessingStatus.QUEUED:
                         doc.processing_status = ProcessingStatus.QUEUED  # 내부 복구 경로
@@ -91,6 +113,9 @@ class LocalTaskRunner:
             await session.commit()
         for doc_id in to_enqueue:
             self.enqueue_validate(doc_id, f"recovery-{uuid.uuid4().hex[:8]}")
+        for doc_id in to_extract:
+            self.enqueue_extract(doc_id, f"recovery-{uuid.uuid4().hex[:8]}")
+        to_enqueue.extend(to_extract)
         if docs:
             logger.info(
                 "recovered_interrupted_jobs", requeued=len(to_enqueue), total=len(docs)
@@ -98,9 +123,12 @@ class LocalTaskRunner:
         return len(to_enqueue)
 
     async def drain(self) -> None:
-        """테스트·종료 시 남은 작업 완료 대기."""
-        if self._tasks:
+        """남은 작업 완료 대기 — 작업이 새 작업을 연쇄 등록(검증→추출)해도 전부 기다린다."""
+        while self._tasks:
             await asyncio.gather(*list(self._tasks), return_exceptions=True)
+
+    def has_pending(self) -> bool:
+        return bool(self._tasks)
 
 
 _runner: LocalTaskRunner | None = None

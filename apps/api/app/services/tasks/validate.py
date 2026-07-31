@@ -135,3 +135,11 @@ async def validate_document(document_id: uuid.UUID, correlation_id: str) -> None
             job.completed_at = datetime.now(UTC)
         await session.commit()
         logger.info("validate_ready", document_id=str(document_id), pages=result.page_count)
+
+        # 검증 완료 → 본문 추출 자동 시작 (업로드→추출→검수 흐름을 클릭 없이 연결)
+        try:
+            from app.services.extraction.control import start_extraction
+
+            await start_extraction(session, doc, correlation_id)
+        except Exception:
+            logger.warning("auto_extract_start_failed", document_id=str(document_id))

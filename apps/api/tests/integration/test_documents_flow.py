@@ -41,13 +41,13 @@ class TestUploadFlow:
         await drain_jobs()
 
         detail = (await client.get(f"/api/documents/{created['id']}")).json()["data"]
-        assert detail["processingStatus"] == "ready"
+        assert detail["processingStatus"] == "extracted"  # 검증 후 자동 추출까지 완료
         assert detail["pageCount"] == 2
         assert detail["processingProgress"] == 100
 
         jobs = (await client.get(f"/api/documents/{created['id']}/jobs")).json()["data"]
-        assert len(jobs) == 1
-        assert jobs[0]["status"] == "succeeded"
+        assert len(jobs) == 2  # validate_file + extract_document
+        assert all(j["status"] == "succeeded" for j in jobs)
 
     async def test_non_pdf_rejected(self, client):
         res = await client.post(
@@ -113,8 +113,9 @@ class TestWorkerValidation:
         created = (await client.post("/api/documents", **upload_kwargs(make_pdf()))).json()["data"]
         await drain_jobs()
         await validate_document(uuid.UUID(created["id"]), "cid-rerun")  # 중복 실행 무해
+        await drain_jobs()
         detail = (await client.get(f"/api/documents/{created['id']}")).json()["data"]
-        assert detail["processingStatus"] == "ready"
+        assert detail["processingStatus"] == "extracted"
 
     async def test_retry_after_failure(self, client):
         detail = await upload_and_wait(client, make_encrypted_pdf())
@@ -153,7 +154,7 @@ class TestWorkerValidation:
         assert recovered == 1
         await drain_jobs()
         detail = (await client.get(f"/api/documents/{created['id']}")).json()["data"]
-        assert detail["processingStatus"] == "ready"
+        assert detail["processingStatus"] == "extracted"
         assert detail["pageCount"] == 3
 
 
@@ -273,7 +274,7 @@ class TestCompensation:
         assert res.status_code == 200
         await drain_jobs()
         after = (await client.get(f"/api/documents/{created['id']}")).json()["data"]
-        assert after["processingStatus"] == "ready"
+        assert after["processingStatus"] == "extracted"
 
 
 class TestPersistence:
@@ -283,7 +284,7 @@ class TestPersistence:
         from app.services.documents.storage import reset_storage_cache
 
         detail = await upload_and_wait(client, make_pdf())
-        assert detail["processingStatus"] == "ready"
+        assert detail["processingStatus"] == "extracted"
 
         reset_engine_cache()
         reset_storage_cache()

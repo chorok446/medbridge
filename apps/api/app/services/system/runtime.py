@@ -117,10 +117,11 @@ async def wait_for_quiescence(timeout_seconds: float = 60.0) -> None:
     """진행 중 요청과 백그라운드 작업이 모두 끝날 때까지 대기."""
     from app.services.tasks.runner import get_task_runner
 
+    runner = get_task_runner()
     deadline = asyncio.get_event_loop().time() + timeout_seconds
     while asyncio.get_event_loop().time() < deadline:
-        await get_task_runner().drain()
-        if _active_operations == 0:
+        await runner.drain()
+        if _active_operations == 0 and not runner.has_pending():
             return
         await asyncio.sleep(0.05)
     logger.warning("quiescence_timeout", active=_active_operations)

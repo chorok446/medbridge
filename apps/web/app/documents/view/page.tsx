@@ -5,16 +5,18 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 import { ErrorBox } from "@/components/error-box";
+import { ExtractionReview } from "@/components/extraction-review";
 import { PdfPreview } from "@/components/pdf-preview";
 import { StatusBadge } from "@/components/status-badge";
 import {
   deleteDocument,
+  documentFileUrl,
   getDocument,
   listJobs,
   reportError,
   retryDocument,
 } from "@/lib/api/documents";
-import { failureGuide, formatBytes, formatDate, isActive } from "@/lib/format";
+import { failureGuide, formatBytes, formatDate, hasExtraction, isActive } from "@/lib/format";
 
 function DocumentDetail() {
   const searchParams = useSearchParams();
@@ -22,6 +24,13 @@ function DocumentDetail() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [notice, setNotice] = useState<string | null>(null);
+  const [mainTab, setMainTab] = useState<"preview" | "extraction">("preview");
+
+  const fileUrlQuery = useQuery({
+    queryKey: ["file-url", id],
+    queryFn: () => documentFileUrl(id),
+    staleTime: Infinity,
+  });
 
   const docQuery = useQuery({
     queryKey: ["document", id],
@@ -151,6 +160,36 @@ function DocumentDetail() {
         </div>
       )}
 
+      {(hasExtraction(doc.processingStatus) ||
+        doc.processingStatus === "extracting" ||
+        doc.processingStatus === "extraction_failed") && (
+        <div role="tablist" className="mb-4 flex gap-1 border-b border-slate-200 text-sm">
+          {(
+            [
+              { key: "preview", label: "문서 보기" },
+              { key: "extraction", label: "텍스트 확인" },
+            ] as const
+          ).map((t) => (
+            <button
+              key={t.key}
+              role="tab"
+              aria-selected={mainTab === t.key}
+              onClick={() => setMainTab(t.key)}
+              className={`rounded-t px-4 py-2 ${
+                mainTab === t.key
+                  ? "border border-b-0 border-slate-200 bg-white font-semibold text-blue-700"
+                  : "text-slate-500 hover:text-slate-800"
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {mainTab === "extraction" && fileUrlQuery.data ? (
+        <ExtractionReview doc={doc} fileUrl={fileUrlQuery.data} />
+      ) : (
       <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
         <PdfPreview documentId={id} />
 
@@ -213,6 +252,7 @@ function DocumentDetail() {
           </details>
         </aside>
       </div>
+      )}
     </div>
   );
 }

@@ -25,17 +25,22 @@ DOC_ID=$(curl -sf -X POST "$API/api/documents" \
   | python3 -c 'import json,sys;print(json.load(sys.stdin)["data"]["id"])')
 echo "   document id: $DOC_ID"
 
-echo "4) 검증 완료 대기"
+echo "4) 검증·추출 완료 대기"
 STATUS=""
-for _ in $(seq 1 30); do
+for _ in $(seq 1 60); do
   STATUS=$(curl -sf "$API/api/documents/$DOC_ID" \
     | python3 -c 'import json,sys;print(json.load(sys.stdin)["data"]["processingStatus"])')
   echo "   status: $STATUS"
-  [ "$STATUS" = "ready" ] && break
-  [ "$STATUS" = "failed" ] && { echo "검증 실패"; exit 1; }
+  case "$STATUS" in
+    extracted|partially_extracted|ocr_required) break ;;
+    failed|extraction_failed) echo "처리 실패"; exit 1 ;;
+  esac
   sleep 1
 done
-[ "$STATUS" = "ready" ] || { echo "시간 초과"; exit 1; }
+case "$STATUS" in
+  extracted|partially_extracted|ocr_required) ;;
+  *) echo "시간 초과"; exit 1 ;;
+esac
 
 echo "5) PDF 파일 응답 확인"
 curl -sf "$API/api/documents/$DOC_ID/file" -o /dev/null -w "   content-type ok: %{content_type}\n"

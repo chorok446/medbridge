@@ -24,6 +24,11 @@ export type ProcessingStatus =
   | "queued"
   | "validating"
   | "ready"
+  | "extracting"
+  | "extracted"
+  | "partially_extracted"
+  | "ocr_required"
+  | "extraction_failed"
   | "failed"
   | "deleting"
   | "deleted";

@@ -15,6 +15,7 @@ dependencies = [
     "pypdf>=4.2",
     "python-multipart>=0.0.9",
     "structlog>=24.1",
+    "pymupdf==1.26.*",
 ]
 
 [dependency-groups]

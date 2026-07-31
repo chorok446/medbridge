@@ -23,7 +23,12 @@ export const STATUS_LABELS: Record<ProcessingStatus, string> = {
   uploaded: "파일 업로드 완료",
   queued: "분석을 준비하는 중",
   validating: "파일을 확인하는 중",
-  ready: "학습 준비 완료",
+  ready: "내용 읽기를 준비하는 중",
+  extracting: "문서 내용을 확인하는 중",
+  extracted: "학습 준비 완료",
+  partially_extracted: "본문을 읽었습니다 (일부 페이지 제외)",
+  ocr_required: "이미지로 된 문서예요",
+  extraction_failed: "문서 내용을 읽지 못했습니다",
   failed: "파일을 처리하지 못했습니다",
   deleting: "파일을 삭제하는 중",
   deleted: "삭제 완료",
@@ -50,5 +55,19 @@ export function failureGuide(code: string | null): string {
 
 /** 처리 진행 중(폴링 필요) 상태 */
 export function isActive(status: ProcessingStatus): boolean {
-  return ["created", "uploading", "uploaded", "queued", "validating", "deleting"].includes(status);
+  return [
+    "created",
+    "uploading",
+    "uploaded",
+    "queued",
+    "validating",
+    "ready",
+    "extracting",
+    "deleting",
+  ].includes(status);
+}
+
+/** 본문 추출 결과를 볼 수 있는 상태 */
+export function hasExtraction(status: ProcessingStatus): boolean {
+  return ["extracted", "partially_extracted", "ocr_required"].includes(status);
 }

@@ -15,6 +15,7 @@ hidden = (
     collect_submodules("uvicorn")
     + collect_submodules("aiosqlite")
     + collect_submodules("alembic")
+    + collect_submodules("pymupdf")  # PDF 추출 엔진 (바이너리 포함)
     + ["app.main"]
 )
 

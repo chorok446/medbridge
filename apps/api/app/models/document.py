@@ -71,6 +71,13 @@ class Document(Base):
     failure_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
     failure_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     external_evidence_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # 추출 캐시·재처리 판단용 (docs §18)
+    extraction_engine: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    extraction_engine_version: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    extraction_schema_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    extraction_completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now()
     )

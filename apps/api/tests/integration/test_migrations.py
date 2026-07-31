@@ -21,9 +21,17 @@ def test_full_downgrade_upgrade_cycle():
     command.upgrade(cfg, "head")
     with engine.connect() as conn:
         names = set(inspect(conn).get_table_names())
-        assert {"app_profile", "documents", "document_jobs"} <= names
+        assert {
+            "app_profile",
+            "documents",
+            "document_jobs",
+            "document_pages",
+            "document_blocks",
+            "document_words",
+            "document_tables",
+        } <= names
         revision = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-        assert revision == "0001"
+        assert revision == "0002"
     engine.dispose()
 
 

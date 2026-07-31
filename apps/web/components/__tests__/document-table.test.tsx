@@ -12,7 +12,7 @@ function doc(overrides: Partial<DocumentSummary> = {}): DocumentSummary {
     fileSize: 1024 * 500,
     pageCount: 12,
     documentType: "unknown",
-    processingStatus: "ready",
+    processingStatus: "extracted",
     processingStage: "file_validation",
     processingProgress: 100,
     failureCode: null,

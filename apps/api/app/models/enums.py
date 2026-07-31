@@ -19,7 +19,12 @@ class ProcessingStatus(enum.StrEnum):
     UPLOADED = "uploaded"
     QUEUED = "queued"
     VALIDATING = "validating"
-    READY = "ready"
+    READY = "ready"  # 파일 검증 완료 (추출 대기)
+    EXTRACTING = "extracting"
+    EXTRACTED = "extracted"
+    PARTIALLY_EXTRACTED = "partially_extracted"
+    OCR_REQUIRED = "ocr_required"
+    EXTRACTION_FAILED = "extraction_failed"
     FAILED = "failed"
     DELETING = "deleting"
     DELETED = "deleted"
@@ -28,6 +33,30 @@ class ProcessingStatus(enum.StrEnum):
 class ProcessingStage(enum.StrEnum):
     UPLOAD = "upload"
     FILE_VALIDATION = "file_validation"
+    EXTRACTION = "extraction"
+
+
+class PageExtractionStatus(enum.StrEnum):
+    PENDING = "pending"
+    EXTRACTED = "extracted"
+    OCR_REQUIRED = "ocr_required"
+    FAILED = "failed"
+
+
+class ScanVerdict(enum.StrEnum):
+    DIGITAL = "digital"
+    MIXED = "mixed"
+    SCANNED = "scanned"
+    UNKNOWN = "unknown"
+
+
+class BlockType(enum.StrEnum):
+    TEXT = "text"
+    IMAGE = "image"
+    VECTOR = "vector"
+    TABLE = "table"
+    CAPTION = "caption"
+    UNKNOWN = "unknown"
 
 
 class DocumentType(enum.StrEnum):
@@ -49,6 +78,7 @@ class DocumentType(enum.StrEnum):
 
 class JobType(enum.StrEnum):
     VALIDATE_FILE = "validate_file"
+    EXTRACT_DOCUMENT = "extract_document"
 
 
 class JobStatus(enum.StrEnum):

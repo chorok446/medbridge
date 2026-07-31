@@ -287,3 +287,26 @@ Sprint 1에서 하지 않는 것: OCR, 개인정보 탐지(Sprint 2), 임베딩�
 - NSIS 설치·시작 메뉴·재실행 데이터 유지·제거 후 데이터 보존
 - 0.1.0 → 0.1.1 실제 업데이트 시나리오 (서명 검증·마이그레이션·데이터 유지)
 - 사전 준비: updater 키 생성, GitHub Secrets 4종 등록, medbridge-releases 저장소 생성
+
+## Sprint 2: PDF 원문 추출·문서 구조 분석·페이지 인용 기반 (완료 범위)
+
+- PyMuPDF 1.26.x 고정. 페이지별 독립 추출: 블록·줄·단어·이미지·표(find_tables)·크기·회전
+- 테이블 5종(document_pages/blocks/lines/words/tables) + 마이그레이션 0002 (up/down)
+- 좌표: PyMuPDF 페이지 공간(pt·좌상단·회전 적용 후), 2자리 반올림, 경계 클램프 —
+  docs/pdf/coordinate-system.md
+- 읽기 순서(단일/2단/전체 폭 제목/각주/캡션, band 정렬, confidence), 텍스트 정규화
+  (하이픈 연결·NFC·제어문자, 수치·단위 보존), 머리말·꼬리말 반복 탐지(플래그만),
+  스캔 판정(digital/mixed/scanned/unknown, 페이지 단위, 임계값 모듈)
+- 검증 완료 시 자동 추출 체인 + extract/retry/cancel/status/pages/blocks/tables API
+  (단어 대량 데이터는 페이지 단위 로드), 진행률·취소·재시작 복구·엔진/스키마 캐시,
+  삭제 시 파생 행 정리
+- GUI: 문서 상세 "텍스트 확인" 탭 — PDF.js 캔버스 뷰어(이동·확대·회전),
+  블록 클릭↔원본 bbox 하이라이트(양방향), 본문/구역/표/안내 패널, "페이지 N/M" 진행,
+  기술 용어 비노출
+- OCR: Sprint 2B로 분리 (스캔 판정 + OcrEngine 인터페이스 + 사용자 안내까지)
+- 테스트 154개(백엔드 130 + 프론트 24) 전부 통과, 코드 생성 fixture 8종,
+  실 HTTP E2E(업로드→자동 추출→2단 순서·머리말 제외·삭제) 검증 완료
+
+Windows 실기기 검증(설치본에서 PyMuPDF 동작·한국어 경로)은 Sprint 1.5 잔여 항목과
+함께 수행한다. Sprint 3(AI 요약·질의응답)을 위한 준비: normalized_text(머리말·표 중복
+제거, 읽기 순서 정렬)와 블록 단위 bbox가 페이지 인용의 근거 데이터로 사용 가능한 상태다.

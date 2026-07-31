@@ -62,7 +62,7 @@ class TestErrorReport:
         report = res.json()["data"]
         assert "김민준" not in json.dumps(report, ensure_ascii=False)
         assert report["sidecarVersion"]
-        assert report["migrationRevision"] == "0001"
+        assert report["migrationRevision"] == "0002"
         assert "documentStatusCounts" in report
         # 원본 파일명·PDF 내용은 보고서에 포함되지 않는다
         raw = json.dumps(report, ensure_ascii=False)
