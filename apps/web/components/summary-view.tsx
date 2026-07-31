@@ -51,10 +51,12 @@ export function SummaryView({ doc, fileUrl }: Props) {
     refetchInterval: (q) => (isActiveStatus(q.state.data?.status) ? 1500 : false),
   });
 
+  // 최신 run 상태와 무관하게 조회한다 — 백엔드는 "최신 성공 run"의 artifact를 돌려주므로,
+  // 이후 재시도가 실패해도 이전 성공 요약이 사라지지 않는다.
   const listQuery = useQuery({
     queryKey: ["summaries", doc.id],
     queryFn: () => getSummaries(doc.id),
-    enabled: statusQuery.data?.status === "succeeded",
+    enabled: statusQuery.data?.providerAvailable ?? false,
   });
 
   const createMutation = useMutation({
@@ -80,6 +82,7 @@ export function SummaryView({ doc, fileUrl }: Props) {
   const providerUnavailable = status && !status.providerAvailable;
   const createError = createMutation.error as { status?: number; message?: string } | null;
   const chunksNotReady = createError?.status === 409;
+  const consentNeeded = createError?.status === 403;
 
   return (
     <div className="grid gap-4 lg:grid-cols-[1fr_420px]">
@@ -133,7 +136,9 @@ export function SummaryView({ doc, fileUrl }: Props) {
               </p>
             )}
 
-            {(status.status === null || status.status === "failed" || status.status === "cancelled") && (
+            {/* 표시할 요약이 없고 진행 중도 아닐 때만 생성/실패 안내를 보여준다.
+                (이전 성공 요약이 있으면 최신 시도가 실패해도 그 요약을 유지한다) */}
+            {artifacts.length === 0 && !isActiveStatus(status.status) && (
               <div className="rounded bg-slate-50 px-3 py-3 text-sm text-slate-700">
                 <p>
                   {status.status === "failed"
@@ -155,10 +160,31 @@ export function SummaryView({ doc, fileUrl }: Props) {
                     문서 검색 준비가 끝난 뒤에 요약할 수 있어요. 잠시 후 다시 시도해 주세요.
                   </p>
                 )}
+                {consentNeeded && (
+                  <p role="alert" className="mt-1.5 text-xs text-amber-700">
+                    외부 요약 모델을 쓰려면 앱 설정과 이 문서에서 외부 전송을 먼저 허용해 주세요.
+                  </p>
+                )}
               </div>
             )}
 
-            {status.status === "succeeded" && artifacts.length > 0 && (
+            {/* 최신 시도가 실패했지만 이전 성공 요약이 남아 있는 경우 */}
+            {artifacts.length > 0 && (status.status === "failed" || status.status === "cancelled") && (
+              <div className="mb-3 rounded bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                최근 다시 요약이 {status.status === "failed" ? "실패" : "취소"}되어 이전 요약을
+                보여드려요.
+                <button
+                  type="button"
+                  onClick={() => retryMutation.mutate()}
+                  disabled={retryMutation.isPending}
+                  className="ml-1 text-blue-700 hover:underline disabled:opacity-50"
+                >
+                  다시 시도
+                </button>
+              </div>
+            )}
+
+            {artifacts.length > 0 && (
               <div className="flex flex-col gap-4">
                 {GROUPS.map((group) => {
                   const items = artifacts.filter((a) => group.types.includes(a.artifactType));

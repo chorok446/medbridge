@@ -9,6 +9,7 @@ import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError, ErrorCode
@@ -111,7 +112,12 @@ async def start_ocr(
         # 실행 옵션은 correlation 로그로 추적, DPI는 ocr_runs에 기록된다
     )
     db.add(job)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # 활성 잡 유니크 인덱스 — 동시 요청이 이미 시작함(멱등하게 처리)
+        await db.rollback()
+        return doc, 0
     get_task_runner().enqueue_ocr(doc.id, correlation_id, language=language, quality=quality)
     return doc, len(targets)
 

@@ -108,6 +108,28 @@ def upgrade() -> None:
         ),
     )
 
+    # 인덱스 생성 전에, 기존(체크-후-삽입) 코드가 허용했을 수 있는 중복 활성 잡을 정리한다.
+    # (document_id, job_type)별로 가장 최근 것만 남기고 나머지 활성 잡을 FAILED로 확정한다 —
+    # 그러지 않으면 유니크 인덱스 생성이 실패해 앱이 기동되지 않는다.
+    op.execute(
+        """
+        UPDATE document_jobs
+        SET status = 'failed', failure_code = 'SUPERSEDED'
+        WHERE status IN ('queued','running')
+          AND id NOT IN (
+            SELECT id FROM (
+              SELECT id,
+                     ROW_NUMBER() OVER (
+                       PARTITION BY document_id, job_type ORDER BY created_at DESC, id DESC
+                     ) AS rn
+              FROM document_jobs
+              WHERE status IN ('queued','running')
+            ) ranked
+            WHERE rn = 1
+          )
+        """
+    )
+
     # 문서별·유형별 활성 잡(queued/running)을 DB 레벨에서 1개로 제한한다.
     # 체크-후-삽입 경쟁을 제거 — 중복 요약/OCR/청크/추출 잡 삽입은 IntegrityError로 막힌다.
     op.execute(

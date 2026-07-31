@@ -123,6 +123,17 @@ describe("SummaryView", () => {
     expect(screen.getByTestId("pdf-viewer").getAttribute("data-highlights")).toBe("1");
   });
 
+  it("최신 시도가 실패해도 이전 성공 요약을 계속 보여준다", async () => {
+    apiMock.getSummaryStatus.mockResolvedValue(status({ status: "failed" }));
+    apiMock.getSummaries.mockResolvedValue({ stale: false, artifacts: [overviewArtifact] });
+    renderView();
+    // 이전 성공 요약이 보이고, 실패 안내 + 다시 시도 링크가 함께 뜬다
+    expect(await screen.findByText("이 문서는 심부전을 다룹니다.")).toBeInTheDocument();
+    expect(screen.getByText(/최근 다시 요약이 실패되어 이전 요약을 보여드려요/)).toBeInTheDocument();
+    // "요약 만들기" 초기 프롬프트는 뜨지 않는다(이전 요약이 있으므로)
+    expect(screen.queryByRole("button", { name: "요약 만들기" })).not.toBeInTheDocument();
+  });
+
   it("기술 정보(chunk id·모델명·토큰)를 노출하지 않는다", async () => {
     apiMock.getSummaryStatus.mockResolvedValue(status());
     apiMock.getSummaries.mockResolvedValue({ stale: false, artifacts: [overviewArtifact] });

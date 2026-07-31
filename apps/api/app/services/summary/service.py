@@ -18,6 +18,7 @@ from app.models.document import Document, DocumentJob
 from app.models.enums import JobStatus, JobType, SummaryRunStatus
 from app.models.search import DocumentChunk
 from app.models.summary import SummaryArtifact, SummaryRun
+from app.models.user import User
 from app.services.summary.factory import get_summary_provider
 from app.services.summary.pipeline import ChunkSnapshot
 from app.services.summary.settings import (
@@ -27,9 +28,14 @@ from app.services.summary.settings import (
 )
 
 
-def compute_chunk_hash(content_hashes: list[str]) -> str:
-    """청크 세트의 안정적 해시 — 정렬된 content_hash 목록 기준."""
-    joined = "\n".join(sorted(content_hashes))
+def compute_chunk_hash(id_hash_pairs: list[tuple[str, str]]) -> str:
+    """청크 세트의 안정적 해시 — (chunk_id, content_hash) 쌍 기준.
+
+    chunk_id를 포함해야 한다: 재생성은 동일 텍스트라도 새 UUID·새 source_refs로
+    청크를 교체하므로, content_hash만 쓰면 그 교체를 감지하지 못한다(요약이 삭제된
+    청크의 출처를 저장하게 됨).
+    """
+    joined = "\n".join(f"{cid}:{chash}" for cid, chash in sorted(id_hash_pairs))
     return hashlib.sha256(joined.encode("utf-8")).hexdigest()
 
 
@@ -57,14 +63,14 @@ async def load_chunk_snapshots(
 
 
 async def current_chunk_hash(db: AsyncSession, document_id: uuid.UUID) -> str:
-    hashes = (
+    rows = (
         await db.execute(
-            select(DocumentChunk.content_hash).where(
+            select(DocumentChunk.id, DocumentChunk.content_hash).where(
                 DocumentChunk.document_id == document_id
             )
         )
-    ).scalars().all()
-    return compute_chunk_hash(list(hashes))
+    ).all()
+    return compute_chunk_hash([(str(r.id), r.content_hash) for r in rows])
 
 
 async def _chunk_count(db: AsyncSession, document_id: uuid.UUID) -> int:
@@ -120,11 +126,30 @@ async def _active_summary_job(
     ).scalars().first()
 
 
+def provider_is_external(provider) -> bool:
+    """네트워크로 문서 내용을 외부에 보내는 공급자인지. 로컬·Disabled·Deterministic은 아니다."""
+    return (
+        getattr(provider, "provider_name", "") == "openai_compatible"
+        and not getattr(provider, "is_local", False)
+    )
+
+
+def ensure_external_consent(user: User, doc: Document) -> None:
+    """외부 공급자 사용 전 문서·전역 동의를 모두 확인한다."""
+    if not (doc.external_evidence_enabled and user.external_ai_allowed):
+        raise AppError(
+            ErrorCode.INVALID_STATE,
+            "외부 요약 모델을 쓰려면 문서와 앱 설정에서 외부 전송을 먼저 허용해 주세요.",
+            status_code=403,
+        )
+
+
 async def start_summary(
     db: AsyncSession,
     doc: Document,
     correlation_id: str,
     *,
+    user: User,
     learner_level: str,
     language: str,
     include_sections: bool,
@@ -140,6 +165,9 @@ async def start_summary(
             "요약 기능을 사용하려면 앱 설정에서 요약 모델을 연결해 주세요.",
             status_code=501,
         )
+    # 외부 공급자는 문서·전역 외부 전송 동의가 모두 있어야 한다
+    if provider_is_external(provider):
+        ensure_external_consent(user, doc)
     if learner_level not in VALID_LEARNER_LEVELS:
         raise AppError(ErrorCode.VALIDATION_FAILED, "잘못된 학습자 수준입니다.", status_code=422)
 
@@ -191,10 +219,14 @@ async def start_summary(
         run = await _latest_run(db, doc.id)
         return False, run.id if run else None
     await db.refresh(run)
+    await db.refresh(job)
+    # 정확히 이 run에 대응하는 job.id를 넘긴다 — 실행기가 최신 잡을 다시 고르면
+    # 취소+재시도 사이에서 서로 다른 run/job이 교차될 수 있다.
     get_task_runner().enqueue_summary(
         doc.id,
         correlation_id,
         run_id=run.id,
+        job_id=job.id,
         include_sections=include_sections,
         include_prerequisites=include_prerequisites,
     )
@@ -281,7 +313,18 @@ async def cancel_summary(db: AsyncSession, doc: Document) -> None:
 
 
 async def delete_summaries(db: AsyncSession, doc: Document) -> None:
-    """이 문서의 모든 요약 run·artifact 삭제 (soft-delete 문서라 명시 삭제)."""
+    """이 문서의 모든 요약 run·artifact 삭제 (soft-delete 문서라 명시 삭제).
+
+    진행 중 잡이 있으면 먼저 FAILED로 확정한다 — 그러지 않으면 run이 사라진 뒤에도
+    잡이 QUEUED로 남아 활성 잡 유니크 인덱스가 이후 모든 요약을 영구 차단한다.
+    """
+    from datetime import UTC
+
+    job = await _active_summary_job(db, doc.id)
+    if job is not None:
+        job.status = JobStatus.FAILED
+        job.failure_code = "CANCELLED"
+        job.completed_at = datetime.now(UTC)
     await db.execute(
         delete(SummaryArtifact).where(SummaryArtifact.document_id == doc.id)
     )

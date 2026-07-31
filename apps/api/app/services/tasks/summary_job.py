@@ -15,6 +15,7 @@ from app.db.session import get_session_factory
 from app.models.document import Document, DocumentJob
 from app.models.enums import JobStatus, JobType, SummaryRunStatus
 from app.models.summary import SummaryArtifact, SummaryRun
+from app.models.user import User
 from app.services.summary import service as summary_service
 from app.services.summary.factory import get_summary_provider
 from app.services.summary.pipeline import run_summary
@@ -23,6 +24,7 @@ logger = get_logger(__name__)
 
 
 async def _job_is_current(session, document_id: uuid.UUID, job_id: uuid.UUID) -> bool:
+    """이 job_id가 여전히 이 문서의 최신 요약 잡이며 활성 상태인지 — 취소·교체 감지."""
     latest = (
         await session.execute(
             select(DocumentJob)
@@ -34,11 +36,10 @@ async def _job_is_current(session, document_id: uuid.UUID, job_id: uuid.UUID) ->
             .limit(1)
         )
     ).scalars().first()
-    return (
-        latest is not None
-        and latest.id == job_id
-        and latest.status in (JobStatus.QUEUED, JobStatus.RUNNING)
-    )
+    if latest is None or latest.id != job_id:
+        return False
+    job = await session.get(DocumentJob, job_id)
+    return job is not None and job.status in (JobStatus.QUEUED, JobStatus.RUNNING)
 
 
 async def _fail_run(session, run_id: uuid.UUID, job_id: uuid.UUID, code: str) -> None:
@@ -60,6 +61,7 @@ async def run_summary_job(
     correlation_id: str,
     *,
     run_id: uuid.UUID,
+    job_id: uuid.UUID,
     include_sections: bool = True,
     include_prerequisites: bool = True,
 ) -> None:
@@ -67,25 +69,15 @@ async def run_summary_job(
     factory = get_session_factory()
 
     # 1) 잡·run을 RUNNING으로. 시작 시점 revision·청크 해시 스냅샷은 이미 run에 저장돼 있다.
+    #    job_id는 이 run에 대응하는 정확한 잡 — 최신 잡을 다시 고르지 않는다(교차 방지).
     async with factory() as session:
         doc = await session.get(Document, document_id)
         run = await session.get(SummaryRun, run_id)
-        if doc is None or doc.deleted_at is not None or run is None:
+        job = await session.get(DocumentJob, job_id)
+        if doc is None or doc.deleted_at is not None or run is None or job is None:
             return
-        job = (
-            await session.execute(
-                select(DocumentJob)
-                .where(
-                    DocumentJob.document_id == document_id,
-                    DocumentJob.job_type == JobType.SUMMARIZE,
-                )
-                .order_by(DocumentJob.created_at.desc())
-                .limit(1)
-            )
-        ).scalars().first()
-        if job is None:
-            return
-        job_id = job.id
+        if not await _job_is_current(session, document_id, job_id):
+            return  # 이미 취소·교체됨
         job.status = JobStatus.RUNNING
         job.attempt_count += 1
         job.started_at = datetime.now(UTC)
@@ -104,6 +96,15 @@ async def run_summary_job(
             if not provider.available:
                 await _fail_run(session, run_id, job_id, "PROVIDER_UNAVAILABLE")
                 return
+            # 전송 직전 동의 재확인 — 시작 후 사용자가 외부 전송을 껐을 수 있다
+            if summary_service.provider_is_external(provider):
+                doc = await session.get(Document, document_id)
+                user = (await session.execute(select(User).limit(1))).scalars().first()
+                if doc is None or user is None or not (
+                    doc.external_evidence_enabled and user.external_ai_allowed
+                ):
+                    await _fail_run(session, run_id, job_id, "EXTERNAL_CONSENT_MISSING")
+                    return
             chunks = await summary_service.load_chunk_snapshots(session, document_id)
 
         drafts = await asyncio.to_thread(
@@ -169,21 +170,11 @@ async def run_summary_job(
     )
 
 
-async def mark_summary_crashed(document_id: uuid.UUID) -> None:
-    """크래시 경계 — RUNNING/QUEUED 요약 잡·run을 실패로 확정한다."""
+async def mark_summary_crashed(document_id: uuid.UUID, *, job_id: uuid.UUID) -> None:
+    """크래시 경계 — 이 잡·대응 run을 실패로 확정한다."""
     factory = get_session_factory()
     async with factory() as session:
-        job = (
-            await session.execute(
-                select(DocumentJob)
-                .where(
-                    DocumentJob.document_id == document_id,
-                    DocumentJob.job_type == JobType.SUMMARIZE,
-                )
-                .order_by(DocumentJob.created_at.desc())
-                .limit(1)
-            )
-        ).scalars().first()
+        job = await session.get(DocumentJob, job_id)
         if job is not None and job.status in (JobStatus.QUEUED, JobStatus.RUNNING):
             job.status = JobStatus.FAILED
             job.failure_code = "SUMMARY_CRASHED"

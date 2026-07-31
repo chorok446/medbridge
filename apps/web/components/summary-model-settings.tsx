@@ -33,9 +33,6 @@ export function SummaryModelSection() {
 function SummaryModelForm({ initial }: { initial: SummaryModelSettings }) {
   const queryClient = useQueryClient();
   const [enabled, setEnabled] = useState(initial.enabled);
-  const [providerType, setProviderType] = useState(
-    initial.providerType === "disabled" ? "openai_compatible" : initial.providerType,
-  );
   const [endpoint, setEndpoint] = useState(initial.endpoint ?? "");
   const [modelName, setModelName] = useState(initial.modelName ?? "");
   const [isLocal, setIsLocal] = useState(initial.isLocal);
@@ -47,7 +44,7 @@ function SummaryModelForm({ initial }: { initial: SummaryModelSettings }) {
     mutationFn: () =>
       updateSummarySettings({
         enabled,
-        providerType,
+        providerType: "openai_compatible",
         endpoint,
         modelName,
         isLocal,
@@ -87,17 +84,7 @@ function SummaryModelForm({ initial }: { initial: SummaryModelSettings }) {
         요약 모델 사용
       </label>
 
-      <label className="flex flex-col gap-1">
-        연결 방식
-        <select
-          value={providerType}
-          onChange={(e) => setProviderType(e.target.value)}
-          className="rounded border border-slate-300 px-3 py-2"
-        >
-          <option value="openai_compatible">외부 모델 서비스 (OpenAI 호환)</option>
-          <option value="deterministic">테스트용(내장)</option>
-        </select>
-      </label>
+      <p className="text-xs text-slate-500">연결 방식: OpenAI 호환 모델 서비스</p>
 
       <label className="flex items-center gap-2">
         <input type="checkbox" checked={isLocal} onChange={(e) => setIsLocal(e.target.checked)} />내

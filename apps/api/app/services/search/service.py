@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError, ErrorCode
@@ -50,7 +51,13 @@ async def start_chunk_rebuild(
         correlation_id=correlation_id,
     )
     db.add(job)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # 활성 잡 유니크 인덱스 — 동시 요청이 이미 시작함(멱등하게 처리)
+        await db.rollback()
+        running = await _latest_chunk_job(db, doc.id)
+        return False, running.id if running else None
     await db.refresh(job)
     get_task_runner().enqueue_chunk_rebuild(doc.id, correlation_id)
     return True, job.id

@@ -56,6 +56,7 @@ class LocalTaskRunner:
         correlation_id: str,
         *,
         run_id: uuid.UUID,
+        job_id: uuid.UUID,
         include_sections: bool = True,
         include_prerequisites: bool = True,
     ) -> None:
@@ -64,6 +65,7 @@ class LocalTaskRunner:
                 document_id,
                 correlation_id,
                 run_id,
+                job_id,
                 include_sections,
                 include_prerequisites,
             )
@@ -74,6 +76,7 @@ class LocalTaskRunner:
         document_id: uuid.UUID,
         correlation_id: str,
         run_id: uuid.UUID,
+        job_id: uuid.UUID,
         include_sections: bool,
         include_prerequisites: bool,
     ) -> None:
@@ -85,13 +88,14 @@ class LocalTaskRunner:
                     document_id,
                     correlation_id,
                     run_id=run_id,
+                    job_id=job_id,
                     include_sections=include_sections,
                     include_prerequisites=include_prerequisites,
                 )
             except Exception:
                 logger.error("summary_task_crashed", document_id=str(document_id))
                 try:
-                    await mark_summary_crashed(document_id)
+                    await mark_summary_crashed(document_id, job_id=job_id)
                 except Exception:
                     logger.error("mark_summary_crashed_failed", document_id=str(document_id))
 

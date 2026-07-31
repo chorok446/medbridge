@@ -63,11 +63,18 @@ class TestSummarySettings:
         assert res.status_code == 200
         assert res.json()["data"]["ok"] is False
 
-    async def test_connection_test_deterministic_ok(self, client):
-        await client.put(
-            "/api/settings/summary",
-            json={"enabled": True, "providerType": "deterministic"},
+    async def test_deterministic_rejected_by_public_api(self, client):
+        # deterministic은 테스트 전용 — 공개 설정 API로는 선택할 수 없다
+        res = await client.put(
+            "/api/settings/summary", json={"providerType": "deterministic"}
         )
+        assert res.status_code == 422
+
+    async def test_connection_test_deterministic_ok(self, client):
+        # deterministic은 공개 API로 못 켜므로 행을 직접 넣어 확인한다(테스트 경로)
+        async with get_session_factory()() as s:
+            s.add(SummarySettings(enabled=True, provider_type="deterministic"))
+            await s.commit()
         res = await client.post("/api/settings/summary/test")
         assert res.status_code == 200
         assert res.json()["data"]["ok"] is True

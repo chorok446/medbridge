@@ -2,6 +2,7 @@
 
 import uuid
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError, ErrorCode
@@ -71,7 +72,12 @@ async def start_extraction(
         correlation_id=correlation_id,
     )
     db.add(job)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # 활성 잡 유니크 인덱스 — 동시 요청이 이미 추출을 시작함(멱등하게 처리)
+        await db.rollback()
+        return doc, False
     get_task_runner().enqueue_extract(doc.id, correlation_id)
     return doc, True
 

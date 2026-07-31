@@ -17,7 +17,9 @@ from app.services.summary.provider import (
     build_summary_provider,
 )
 
-VALID_PROVIDER_TYPES = ("disabled", "deterministic", "openai_compatible")
+# deterministic은 테스트 전용 공급자라 공개 설정 API로는 선택할 수 없다
+# (테스트는 summary_settings 행을 직접 넣거나 config override를 쓴다).
+VALID_PROVIDER_TYPES = ("disabled", "openai_compatible")
 
 
 @dataclass
