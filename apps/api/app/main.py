@@ -122,20 +122,14 @@ def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(title="MedBridge Sidecar", version="0.1.0", lifespan=lifespan)
 
-    # 개발 브라우저와 Tauri 웹뷰 오리진만 허용
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=[
-            "tauri://localhost",
-            "http://tauri.localhost",
-            "https://tauri.localhost",
-            "http://localhost:3000",
-        ],
-        allow_credentials=False,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-
+    # 미들웨어 등록 순서가 실행 순서를 뒤집는다: Starlette는 나중에 등록한
+    # 미들웨어를 더 바깥(먼저 실행)에 둔다. 토큰 검사를 먼저 등록하고
+    # CORSMiddleware를 나중에 등록해, CORS가 전체 앱의 최외곽 래퍼가 되게
+    # 한다 — 그래야 preflight(OPTIONS)뿐 아니라 토큰 검사가 반환하는 401
+    # 응답까지도 CORSMiddleware를 통과하며 Access-Control-Allow-Origin이
+    # 붙는다. 순서가 반대면(CORS를 먼저 등록) 토큰 검사가 CORS보다 바깥에
+    # 있게 되어, preflight도 401로 막히고 그 401에는 CORS 헤더가 없어
+    # 브라우저가 이를 "CORS 차단"으로 보고한다 (Windows 실기기에서 재현).
     @app.middleware("http")
     async def correlation_and_token_middleware(request: Request, call_next):
         cid = request.headers.get("X-Correlation-ID") or str(uuid.uuid4())
@@ -144,8 +138,8 @@ def create_app() -> FastAPI:
         # 로컬 API 보호: Tauri가 발급한 토큰 없이는 접근 불가 (미설정 시 개발 모드 —
         # production은 config 검증이 토큰 없는 기동 자체를 거부한다)
         # CORS preflight(OPTIONS)는 브라우저가 커스텀 헤더 없이 보내므로 인증 대상에서
-        # 제외하고 CORSMiddleware(이 미들웨어보다 안쪽 계층)로 그대로 넘긴다. 실제
-        # GET/POST/PATCH/DELETE 요청의 토큰 검증은 그대로 유지된다.
+        # 제외한다. CORS 우회를 위해 인증 자체를 끄는 것이 아니라, 이 메서드에
+        # 한해서만 통과시키고 실제 GET/POST/PATCH/DELETE 요청은 그대로 검증한다.
         token = settings.medbridge_api_token
         if request.method != "OPTIONS" and token and request.url.path != "/health":
             supplied = request.headers.get("X-MedBridge-Token")
@@ -158,6 +152,23 @@ def create_app() -> FastAPI:
         response = await call_next(request)
         response.headers["X-Correlation-ID"] = cid
         return response
+
+    # 개발 브라우저와 Tauri 웹뷰 오리진만 허용. allow_credentials=False +
+    # 명시적 origin 목록(와일드카드 아님) 조합만 사용한다 — 쿠키를 쓰지 않고
+    # 커스텀 헤더 토큰만 쓰므로 credentialed CORS는 필요 없고, 그 조합에서만
+    # Starlette가 요청 origin이 목록에 있을 때만 정확히 반사(echo)한다.
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "tauri://localhost",
+            "http://tauri.localhost",
+            "https://tauri.localhost",
+            "http://localhost:3000",
+        ],
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["X-MedBridge-Token", "Content-Type"],
+    )
 
     @app.exception_handler(AppError)
     async def app_error_handler(_request: Request, exc: AppError) -> JSONResponse:

@@ -178,8 +178,9 @@ class TestTokenGuard:
                 "Access-Control-Request-Headers": "x-medbridge-token",
             },
         )
-        assert res.status_code == 200
+        assert res.status_code in (200, 204)
         assert res.headers["access-control-allow-origin"] == "http://tauri.localhost"
+        assert "x-medbridge-token" in res.headers["access-control-allow-headers"].lower()
 
     async def test_real_request_after_preflight_still_requires_token(self, token_client):
         # preflight 통과가 실제 요청의 토큰 검증까지 면제해서는 안 된다
@@ -187,6 +188,66 @@ class TestTokenGuard:
             "/api/documents", headers={"Origin": "http://tauri.localhost"}
         )
         assert res.status_code == 401
+
+    async def test_valid_token_request_succeeds_with_cors_header(self, token_client):
+        res = await token_client.get(
+            "/api/documents",
+            headers={
+                "Origin": "http://tauri.localhost",
+                "X-MedBridge-Token": "test-token-123",
+            },
+        )
+        assert res.status_code == 200
+        assert res.headers["access-control-allow-origin"] == "http://tauri.localhost"
+
+    async def test_unauthorized_response_still_carries_cors_header(self, token_client):
+        """CORSMiddleware가 최외곽에 있어야 401 응답에도 CORS 헤더가 붙는다.
+
+        헤더가 없으면 브라우저는 실제 401 본문을 읽지 못하고 'CORS 차단'으로만
+        보고해, 프런트엔드가 원인(토큰 문제)을 전혀 구분할 수 없게 된다.
+        """
+        res = await token_client.get(
+            "/api/documents", headers={"Origin": "http://tauri.localhost"}
+        )
+        assert res.status_code == 401
+        assert res.headers["access-control-allow-origin"] == "http://tauri.localhost"
+
+    async def test_settings_path_preflight_succeeds(self, token_client):
+        res = await token_client.options(
+            "/api/profile",
+            headers={
+                "Origin": "http://tauri.localhost",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "x-medbridge-token",
+            },
+        )
+        assert res.status_code in (200, 204)
+        assert res.headers["access-control-allow-origin"] == "http://tauri.localhost"
+
+    async def test_upload_path_preflight_allows_content_type_and_token(self, token_client):
+        res = await token_client.options(
+            "/api/documents",
+            headers={
+                "Origin": "http://tauri.localhost",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type, x-medbridge-token",
+            },
+        )
+        assert res.status_code in (200, 204)
+        allow_headers = res.headers["access-control-allow-headers"].lower()
+        assert "content-type" in allow_headers
+        assert "x-medbridge-token" in allow_headers
+
+    async def test_disallowed_origin_gets_no_cors_header(self, token_client):
+        res = await token_client.options(
+            "/api/documents",
+            headers={
+                "Origin": "http://evil.example.com",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "x-medbridge-token",
+            },
+        )
+        assert "access-control-allow-origin" not in res.headers
 
 
 class TestProductionFailFast:
