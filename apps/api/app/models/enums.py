@@ -80,6 +80,7 @@ class JobType(enum.StrEnum):
     VALIDATE_FILE = "validate_file"
     EXTRACT_DOCUMENT = "extract_document"
     OCR_DOCUMENT = "ocr_document"
+    CHUNK_REBUILD = "chunk_rebuild"
 
 
 class OcrRunStatus(enum.StrEnum):

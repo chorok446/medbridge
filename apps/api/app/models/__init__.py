@@ -7,6 +7,7 @@ from app.models.extraction import (
     DocumentWord,
 )
 from app.models.ocr import OcrRun
+from app.models.search import DocumentChunk
 from app.models.user import User
 
 __all__ = [
@@ -19,4 +20,5 @@ __all__ = [
     "DocumentWord",
     "DocumentTable",
     "OcrRun",
+    "DocumentChunk",
 ]

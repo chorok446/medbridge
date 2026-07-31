@@ -47,6 +47,27 @@ class LocalTaskRunner:
     ) -> None:
         self._spawn(self._run_ocr(document_id, correlation_id, language, quality))
 
+    def enqueue_chunk_rebuild(self, document_id: uuid.UUID, correlation_id: str) -> None:
+        self._spawn(self._run_chunk_rebuild(document_id, correlation_id))
+
+    async def _run_chunk_rebuild(self, document_id: uuid.UUID, correlation_id: str) -> None:
+        from app.services.tasks.chunk_job import (
+            mark_chunk_rebuild_crashed,
+            run_chunk_rebuild_job,
+        )
+
+        async with self._semaphore:
+            try:
+                await run_chunk_rebuild_job(document_id, correlation_id)
+            except Exception:
+                logger.error("chunk_rebuild_task_crashed", document_id=str(document_id))
+                try:
+                    await mark_chunk_rebuild_crashed(document_id)
+                except Exception:
+                    logger.error(
+                        "mark_chunk_rebuild_crashed_failed", document_id=str(document_id)
+                    )
+
     async def _run_ocr(
         self, document_id: uuid.UUID, correlation_id: str, language: str, quality: str
     ) -> None:
@@ -185,6 +206,23 @@ class LocalTaskRunner:
                 stale_stmt = stale_stmt.where(DocumentJob.document_id.notin_(ocr_docs))
             stale_jobs = (await session.execute(stale_stmt)).scalars().all()
             for job in stale_jobs:
+                job.status = JobStatus.FAILED
+                job.failure_code = "INTERRUPTED"
+                job.completed_at = _dt.now(_UTC)
+            await session.commit()
+
+        # 청크 재생성은 페이지 단위 재개 지점이 없다 — 중단된 잡은 실패로 확정하고
+        # 사용자가 다시 요청하게 한다(OCR stale job과 동일 원칙).
+        async with get_session_factory()() as session:
+            stale_chunk_jobs = (
+                await session.execute(
+                    select(DocumentJob).where(
+                        DocumentJob.job_type == JobType.CHUNK_REBUILD,
+                        DocumentJob.status.in_([JobStatus.QUEUED, JobStatus.RUNNING]),
+                    )
+                )
+            ).scalars().all()
+            for job in stale_chunk_jobs:
                 job.status = JobStatus.FAILED
                 job.failure_code = "INTERRUPTED"
                 job.completed_at = _dt.now(_UTC)

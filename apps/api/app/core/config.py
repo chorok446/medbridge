@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     max_pdf_size_mb: int = 50
     max_concurrent_jobs: int = 2
 
+    # 실제 상용 임베딩 공급자는 아직 없다 — "disabled"가 유일한 기본값이며,
+    # 테스트에서만 "deterministic"으로 바꿔 쓴다. API 키를 여기 하드코딩하지 않는다.
+    embedding_provider: str = Field(default="disabled", pattern="^(disabled|deterministic)$")
+
     @model_validator(mode="after")
     def _production_requires_token(self) -> "Settings":
         # 패키징 앱(production)에서 토큰이 없으면 인증 없이 열리므로 기동을 거부한다

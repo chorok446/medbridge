@@ -283,10 +283,18 @@ async def delete_document(db: AsyncSession, user: User, document_id: uuid.UUID) 
     # 파생 추출 데이터 정리 (soft delete라 FK cascade가 돌지 않으므로 명시 삭제;
     # pages 삭제가 blocks/lines/words/tables로 cascade된다)
     from sqlalchemy import delete as sa_delete
+    from sqlalchemy import text as sa_text
 
     from app.models.extraction import DocumentPage
+    from app.models.search import DocumentChunk
 
     await db.execute(sa_delete(DocumentPage).where(DocumentPage.document_id == doc.id))
+    # document_chunks는 documents.id를 직접 FK로 참조하므로(soft delete 대상 밖) 별도 명시 삭제 필요
+    await db.execute(sa_delete(DocumentChunk).where(DocumentChunk.document_id == doc.id))
+    await db.execute(
+        sa_text("DELETE FROM document_chunks_fts WHERE document_id = :doc_id"),
+        {"doc_id": str(doc.id)},
+    )
     transition(doc, ProcessingStatus.DELETED)
     doc.deleted_at = datetime.now(UTC)
     doc.storage_key = None
