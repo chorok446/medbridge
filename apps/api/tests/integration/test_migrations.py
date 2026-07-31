@@ -35,7 +35,7 @@ def test_full_downgrade_upgrade_cycle():
             "summary_artifacts",
         } <= names
         revision = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-        assert revision == "0005"
+        assert revision == "0006"
     engine.dispose()
 
 
