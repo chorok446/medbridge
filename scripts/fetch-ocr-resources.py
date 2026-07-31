@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.request
 from pathlib import Path
 
@@ -91,8 +92,23 @@ def main() -> None:
         # NSIS 무설치 추출 (silent install to temp dir)
         install_dir = tmp_path / "tesseract"
         subprocess.run(
-            [str(installer), "/S", f"/D={install_dir}"], check=True, timeout=600
+            ["cmd", "/c", "start", "/wait", "", str(installer), "/S", f"/D={install_dir}"],
+            check=True,
+            timeout=600,
         )
+        # 설치기가 자식 프로세스로 분기해 먼저 반환하는 경우 대비: 완료를 폴링으로 확인
+        deadline = time.monotonic() + 300
+        default_dir = Path("C:/Program Files/Tesseract-OCR")  # /D 미적용 시 기본 경로
+        while time.monotonic() < deadline:
+            if (install_dir / "tesseract.exe").is_file():
+                break
+            if (default_dir / "tesseract.exe").is_file():
+                install_dir = default_dir
+                break
+            time.sleep(2)
+        else:
+            print("::error::Tesseract 설치 추출 실패 — tesseract.exe를 찾지 못했습니다.")
+            sys.exit(1)
         # 실행 파일 + DLL 복사
         for item in install_dir.iterdir():
             if item.suffix.lower() in (".exe", ".dll") and item.name.lower() != "uninstall.exe":
