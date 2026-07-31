@@ -118,8 +118,22 @@ jobs:
           mkdir -p apps/desktop/src-tauri/binaries
           cp apps/api/dist/medbridge-sidecar.exe \
             apps/desktop/src-tauri/binaries/medbridge-sidecar-x86_64-pc-windows-msvc.exe
+      - name: 임시 updater 서명 키 생성 (CI 전용, 실제 릴리스 키 아님)
+        id: throwaway_key
+        shell: bash
+        working-directory: apps/desktop
+        run: |
+          pnpm tauri signer generate --ci -w /tmp/ci-signing-key -p ""
+          {
+            echo "key<<EOF"
+            cat /tmp/ci-signing-key
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
       - name: Tauri Windows build (NSIS, 서명 없음)
         working-directory: apps/desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ steps.throwaway_key.outputs.key }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         run: |
           pnpm install
           pnpm tauri build
