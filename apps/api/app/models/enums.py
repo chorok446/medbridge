@@ -116,12 +116,25 @@ class QaMessageRole(enum.StrEnum):
 
 class QaMessageStatus(enum.StrEnum):
     PENDING = "pending"
+    STREAMING = "streaming"
+    FINALIZING = "finalizing"
     COMPLETED = "completed"
     NOT_FOUND = "not_found"
     INSUFFICIENT_EVIDENCE = "insufficient_evidence"
     CONFLICTING_EVIDENCE = "conflicting_evidence"
     FAILED = "failed"
+    CANCELLED = "cancelled"
+    INTERRUPTED = "interrupted"
     REVISION_CHANGED = "revision_changed"
+    CONSENT_REVOKED = "consent_revoked"
+
+
+# 활성(진행 중) assistant 상태 — 부분 유니크 인덱스·복구·취소 대상
+QA_ACTIVE_STATUSES = (
+    QaMessageStatus.PENDING,
+    QaMessageStatus.STREAMING,
+    QaMessageStatus.FINALIZING,
+)
 
 
 class QaClaimVerification(enum.StrEnum):

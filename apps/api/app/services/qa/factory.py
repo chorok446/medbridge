@@ -16,17 +16,11 @@ from app.services.summary import secrets
 from app.services.summary.factory import ResolvedProviderConfig, load_settings_row
 
 
-async def get_qa_provider(session: AsyncSession) -> QaProvider:
-    override = get_settings().qa_provider
-    if override == "deterministic":
-        return DeterministicQaProvider()
-    if override == "disabled":
-        return DisabledQaProvider()
-
+async def _resolved_config(session: AsyncSession) -> ResolvedProviderConfig | None:
     row = await load_settings_row(session)
     if row is None or not row.enabled:
-        return DisabledQaProvider()
-    config = ResolvedProviderConfig(
+        return None
+    return ResolvedProviderConfig(
         enabled=row.enabled,
         provider_type=row.provider_type,
         endpoint=row.endpoint,
@@ -34,4 +28,28 @@ async def get_qa_provider(session: AsyncSession) -> QaProvider:
         is_local=row.is_local,
         api_key=secrets.get_api_key(),
     )
-    return build_qa_provider(config)
+
+
+async def get_qa_provider(session: AsyncSession) -> QaProvider:
+    override = get_settings().qa_provider
+    if override == "deterministic":
+        return DeterministicQaProvider()
+    if override == "disabled":
+        return DisabledQaProvider()
+    return build_qa_provider(await _resolved_config(session))
+
+
+async def get_qa_streaming_provider(session: AsyncSession):
+    """스트리밍 공급자. 요약 모델 설정·keyring을 그대로 재사용한다."""
+    from app.services.qa.streaming import (
+        DeterministicStreamingQaProvider,
+        _DisabledStreaming,
+        build_qa_streaming_provider,
+    )
+
+    override = get_settings().qa_provider
+    if override == "deterministic":
+        return DeterministicStreamingQaProvider()
+    if override == "disabled":
+        return _DisabledStreaming()
+    return build_qa_streaming_provider(await _resolved_config(session))

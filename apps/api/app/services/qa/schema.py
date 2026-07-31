@@ -23,6 +23,9 @@ from app.services.qa.settings import (
 _CLAIM_NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?%?")
 # 어절 토큰(길이 2 이상) — claim이 근거 청크에 실제로 어휘적으로 연결되는지 확인용
 _WORD_RE = re.compile(r"[0-9A-Za-z가-힣]{2,}")
+# 부정 극성 표지 — 어휘 중복만으로 "A는 X한다"의 반대인 "A는 X하지 않는다"가 통과하는
+# 것을 막는다(의료 안전상 극성 뒤집힘이 가장 위험). 한국어 부정소 + 영어 부정어.
+_NEGATION_MARKERS = ("않", "없", "아니", "못", " 안 ", " no ", " not ", "n't", "없이")
 
 
 @dataclass
@@ -40,6 +43,31 @@ class VerifiedAnswer:
     answer_status: str  # completed|not_found|insufficient_evidence|conflicting_evidence
     claims: list[VerifiedClaim]
     followups: list[str] = field(default_factory=list)
+
+
+def verify_claim_event(
+    event: dict, lookup: dict[str, QaChunkRef], *, claim_index: int
+) -> VerifiedClaim | None:
+    """스트리밍 claim 이벤트 하나를 검증한다. 지원(supported)일 때만 반환, 아니면 None.
+
+    4A와 동일한 검증(현재 검색 청크 부분집합·문서 소속·어휘 연결·수치 원문 존재)을 쓴다.
+    출처(page/bbox)는 저장된 source_refs에서 재구성한다.
+    """
+    text = str(event.get("text") or "").strip()[:CLAIM_TEXT_MAX_CHARS]
+    if not text:
+        return None
+    ids = _valid_ids(event.get("sourceChunkIds"), lookup)
+    if not ids or not _numbers_present(text, ids, lookup) or not _lexically_grounded(
+        text, ids, lookup
+    ):
+        return None  # unsupported → 스트림으로 내보내지 않는다
+    return VerifiedClaim(
+        claim_index=claim_index,
+        text=text,
+        verification_status=QaClaimVerification.SUPPORTED,
+        source_chunk_ids=ids,
+        source_refs=_refs_for(ids, lookup),
+    )
 
 
 def _valid_ids(raw_ids, lookup: dict[str, QaChunkRef]) -> list[str]:
@@ -95,7 +123,25 @@ def _lexically_grounded(claim_text: str, ids: list[str], lookup: dict[str, QaChu
     shared = len(claim_tokens & hay_tokens)
     # claim 토큰의 1/3 이상(최소 1개)이 근거 청크에 나타나야 한다. 공유 어휘가 거의
     # 없는(=사실상 0) 무관한 날조를 걸러내는 게 목적이며, 완전한 함의 검증은 아니다.
-    return shared >= max(1, math.ceil(len(claim_tokens) / 3)) or shared == len(claim_tokens)
+    if not (shared >= max(1, math.ceil(len(claim_tokens) / 3)) or shared == len(claim_tokens)):
+        return False
+    return _polarity_consistent(claim_text, haystack)
+
+
+def _polarity_consistent(claim_text: str, haystack: str) -> bool:
+    """claim이 근거 청크에 없는 부정을 새로 도입하지 않는지 확인한다.
+
+    어휘 중복만으로는 "A는 X한다"의 반대인 "A는 X하지 않는다"가 통과한다(핵심 토큰이
+    거의 겹치므로). claim에 나타난 부정 표지가 근거 원문에도 있어야 supported로 인정한다.
+    ponytail: 명시적 부정소만 잡는다. 증가↔감소 같은 반의어 뒤집힘은 함의 검증(NLI)
+    모델이 있어야 하며 이번 스프린트 범위 밖 — 알려진 상한.
+    """
+    hay = f" {haystack} "
+    claim = f" {claim_text.lower()} "
+    for marker in _NEGATION_MARKERS:
+        if marker in claim and marker not in hay:
+            return False
+    return True
 
 
 def verify(

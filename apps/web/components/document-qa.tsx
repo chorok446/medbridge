@@ -3,8 +3,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { PdfViewer } from "@/components/pdf-viewer";
+import { useQaStream } from "@/hooks/use-qa-stream";
 import {
-  askQuestion,
   createThread,
   deleteThread,
   getThread,
@@ -14,6 +14,16 @@ import {
 import type { DocumentSummary } from "@/types/api";
 import type { Rect } from "@/types/extraction";
 import type { QaClaim, QaMessage } from "@/types/qa";
+
+type NavigateRef = { pageNumber: number; bbox: [number, number, number, number] };
+
+const PHASE_LABEL: Record<string, string> = {
+  connecting: "질문을 준비하고 있어요…",
+  retrieving: "문서에서 근거를 찾고 있어요…",
+  generating: "답변을 작성하고 있어요…",
+  finalizing: "출처를 확인하고 마무리하고 있어요…",
+  cancelling: "중단하고 있어요…",
+};
 
 interface Props {
   doc: DocumentSummary;
@@ -36,6 +46,10 @@ function statusNotice(status: QaMessage["status"]): string | null {
       return "문서 안에 서로 다른 내용이 있어요. 양쪽 출처를 함께 확인해 주세요.";
     case "revision_changed":
       return "문서 내용이 변경되어 답변을 다시 만들어야 합니다.";
+    case "cancelled":
+      return "답변을 중단했어요.";
+    case "interrupted":
+      return "연결이 끊겨 답변을 완료하지 못했어요. 다시 시도해 주세요.";
     case "failed":
       return "답변을 만들지 못했어요.";
     default:
@@ -50,7 +64,9 @@ export function DocumentQa({ doc, fileUrl }: Props) {
   const [flashKey, setFlashKey] = useState(0);
   const [input, setInput] = useState("");
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
+  const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
   const pageCount = doc.pageCount ?? 0;
+  const stream = useQaStream(doc.id);
 
   const threadsQuery = useQuery({
     queryKey: ["qa-threads", doc.id],
@@ -65,23 +81,6 @@ export function DocumentQa({ doc, fileUrl }: Props) {
     enabled: effectiveThreadId !== null,
   });
   const messages = detailQuery.data?.messages ?? [];
-
-  const askMutation = useMutation({
-    mutationFn: async (question: string) => {
-      let threadId = effectiveThreadId;
-      if (threadId === null) {
-        const created = await createThread(doc.id);
-        threadId = created.thread.id;
-        setSelectedThreadId(threadId);
-      }
-      return askQuestion(doc.id, threadId, question);
-    },
-    onSuccess: (detail) => {
-      queryClient.setQueryData(["qa-thread", doc.id, detail.thread.id], detail);
-      void queryClient.invalidateQueries({ queryKey: ["qa-threads", doc.id] });
-      setInput("");
-    },
-  });
 
   const retryMutation = useMutation({
     mutationFn: () => retryAnswer(doc.id, effectiveThreadId as string),
@@ -105,21 +104,33 @@ export function DocumentQa({ doc, fileUrl }: Props) {
     },
   });
 
-  const askError = askMutation.error as { status?: number } | null;
-  const providerUnavailable = askError?.status === 501;
-  const consentNeeded = askError?.status === 403;
-  const busy = askMutation.isPending || retryMutation.isPending;
+  const providerUnavailable = stream.state.phase === "failed" && stream.state.errorStatus === 501;
+  const consentNeeded = stream.state.phase === "failed" && stream.state.errorStatus === 403;
+  const busy = stream.active || retryMutation.isPending;
 
-  function navigate(ref: { pageNumber: number; bbox: [number, number, number, number] }) {
+  function navigate(ref: NavigateRef) {
     setPage(ref.pageNumber);
     setHighlights([{ x0: ref.bbox[0], y0: ref.bbox[1], x1: ref.bbox[2], y1: ref.bbox[3] }]);
     setFlashKey((k) => k + 1);
   }
 
-  function submit() {
+  async function submit() {
     const q = input.trim();
     if (!q || busy) return;
-    askMutation.mutate(q);
+    let threadId = effectiveThreadId;
+    if (threadId === null) {
+      const created = await createThread(doc.id);
+      threadId = created.thread.id;
+      setSelectedThreadId(threadId);
+      void queryClient.invalidateQueries({ queryKey: ["qa-threads", doc.id] });
+    }
+    setPendingQuestion(q);
+    setInput("");
+    await stream.ask(threadId, q);
+    // 스트림 종료(완료/취소/중단/실패) → DB에 확정된 메시지를 다시 불러온다.
+    setPendingQuestion(null);
+    void queryClient.invalidateQueries({ queryKey: ["qa-thread", doc.id, threadId] });
+    void queryClient.invalidateQueries({ queryKey: ["qa-threads", doc.id] });
   }
 
   return (
@@ -208,10 +219,39 @@ export function DocumentQa({ doc, fileUrl }: Props) {
             )}
           </ol>
 
-          {busy && (
-            <p role="status" className="mt-3 text-sm text-slate-500">
-              답변을 찾고 있어요…
-            </p>
+          {stream.active && (
+            <div className="mt-3 flex flex-col gap-2">
+              {pendingQuestion && (
+                <p className="self-end rounded-lg bg-blue-600 px-3 py-2 text-sm text-white">
+                  {pendingQuestion}
+                </p>
+              )}
+              <div className="rounded-lg bg-slate-50 px-3 py-2 text-sm">
+                {stream.state.claims.length > 0 && (
+                  <ul className="mb-2 flex flex-col gap-1.5">
+                    {stream.state.claims.map((c) => (
+                      <li key={c.claimIndex} className="border-t border-slate-200 pt-1.5 first:border-0 first:pt-0">
+                        <p className="text-xs leading-snug text-slate-700">{c.text}</p>
+                        <StreamSources sources={c.sources} onNavigate={navigate} />
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                <div className="flex items-center justify-between gap-2">
+                  <p role="status" className="text-sm text-slate-500">
+                    {PHASE_LABEL[stream.state.phase] ?? "답변을 찾고 있어요…"}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => void stream.cancel()}
+                    disabled={stream.state.phase === "cancelling"}
+                    className="rounded border border-slate-300 px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-100 disabled:opacity-50"
+                  >
+                    중단
+                  </button>
+                </div>
+              </div>
+            </div>
           )}
 
           {providerUnavailable && (
@@ -228,8 +268,13 @@ export function DocumentQa({ doc, fileUrl }: Props) {
             </p>
           )}
 
-          {(retryMutation.isSuccess || askMutation.isSuccess) &&
-            messages.some((m) => m.status === "failed" || m.status === "revision_changed") && (
+          {!stream.active &&
+            messages.some(
+              (m) =>
+                m.status === "failed" ||
+                m.status === "revision_changed" ||
+                m.status === "interrupted",
+            ) && (
               <button
                 type="button"
                 onClick={() => retryMutation.mutate()}
@@ -304,15 +349,17 @@ function AssistantMessage({
   );
 }
 
-function ClaimSources({
-  claim,
+type SourceRef = { pageNumber: number; blockId: string; bbox: [number, number, number, number] };
+
+function SourceBadges({
+  sources,
   onNavigate,
 }: {
-  claim: QaClaim;
-  onNavigate: (ref: { pageNumber: number; bbox: [number, number, number, number] }) => void;
+  sources: SourceRef[];
+  onNavigate: (ref: NavigateRef) => void;
 }) {
   const seen = new Set<string>();
-  const refs = claim.sourceRefs.filter((r) => {
+  const refs = sources.filter((r) => {
     const key = `${r.pageNumber}-${r.blockId}`;
     if (seen.has(key)) return false;
     seen.add(key);
@@ -334,4 +381,24 @@ function ClaimSources({
       ))}
     </div>
   );
+}
+
+function ClaimSources({
+  claim,
+  onNavigate,
+}: {
+  claim: QaClaim;
+  onNavigate: (ref: NavigateRef) => void;
+}) {
+  return <SourceBadges sources={claim.sourceRefs} onNavigate={onNavigate} />;
+}
+
+function StreamSources({
+  sources,
+  onNavigate,
+}: {
+  sources: SourceRef[];
+  onNavigate: (ref: NavigateRef) => void;
+}) {
+  return <SourceBadges sources={sources} onNavigate={onNavigate} />;
 }

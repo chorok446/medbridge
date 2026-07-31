@@ -6,7 +6,8 @@
 
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import StreamingResponse
 from pydantic import Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +18,8 @@ from app.models.user import User
 from app.schemas.common import CamelModel, Envelope
 from app.services.documents.service import get_owned_document
 from app.services.qa import service as qa_service
+from app.services.qa import stream_protocol as sp
+from app.services.qa import stream_service as qa_stream
 from app.utils.responses import wrap
 
 router = APIRouter(prefix="/api/documents", tags=["qa"])
@@ -78,7 +81,8 @@ def _claim_out(c: QaClaim) -> ClaimOut:
     return ClaimOut(
         text=c.claim_text,
         verification_status=c.verification_status.value,
-        source_refs=c.source_refs_json,
+        # 스트림 경로와 동일한 공개 변환 — 내부 chunkId·readingOrder 등을 응답에서 제거한다.
+        source_refs=[sp.public_source_ref(r) for r in c.source_refs_json],
     )
 
 
@@ -209,3 +213,84 @@ async def retry_message(
     thread = await qa_service.get_owned_thread(db, doc, thread_id)
     await qa_service.retry_last(db, doc, user, thread)
     return wrap(await _answer_detail(db, thread))
+
+
+# --- Sprint 4B: 스트리밍 ---
+
+
+class MessageStatusOut(CamelModel):
+    id: uuid.UUID
+    status: str
+    error_code: str | None
+
+
+@router.post("/{document_id}/qa/threads/{thread_id}/messages/stream")
+async def stream_message(
+    document_id: uuid.UUID,
+    thread_id: uuid.UUID,
+    body: QuestionIn,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> StreamingResponse:
+    # 스트림 시작 전 검증 오류는 여기서 AppError(JSON)로 반환된다.
+    doc = await get_owned_document(db, user, document_id)
+    thread = await qa_service.get_owned_thread(db, doc, thread_id)
+    user_msg, assistant_msg, request_id = await qa_stream.prepare_stream(
+        db, doc, user, thread, body.question
+    )
+    aid = assistant_msg.id
+    user_content = user_msg.content
+    start_content_rev = doc.content_revision
+    start_chunk_rev = doc.chunk_revision
+
+    async def _gen():
+        async for event in qa_stream.run_stream(
+            document_id, thread_id, aid, user_content, request_id,
+            start_content_rev, start_chunk_rev, request,
+        ):
+            yield sp.encode_event(event)
+
+    return StreamingResponse(
+        _gen(),
+        media_type=sp.CONTENT_TYPE,
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post(
+    "/{document_id}/qa/threads/{thread_id}/messages/{message_id}/cancel",
+    response_model=Envelope[MessageStatusOut],
+)
+async def cancel_message(
+    document_id: uuid.UUID,
+    thread_id: uuid.UUID,
+    message_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    doc = await get_owned_document(db, user, document_id)
+    thread = await qa_service.get_owned_thread(db, doc, thread_id)
+    msg = await qa_stream.request_cancel(db, thread, message_id)
+    return wrap(
+        MessageStatusOut(id=msg.id, status=msg.status.value, error_code=msg.error_code)
+    )
+
+
+@router.get(
+    "/{document_id}/qa/threads/{thread_id}/messages/{message_id}/status",
+    response_model=Envelope[MessageStatusOut],
+)
+async def message_status(
+    document_id: uuid.UUID,
+    thread_id: uuid.UUID,
+    message_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    doc = await get_owned_document(db, user, document_id)
+    thread = await qa_service.get_owned_thread(db, doc, thread_id)
+    msg = await qa_stream.get_message_status(db, thread, message_id)
+    return wrap(
+        MessageStatusOut(id=msg.id, status=msg.status.value, error_code=msg.error_code)
+    )
