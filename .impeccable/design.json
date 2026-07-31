@@ -1,0 +1,172 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-07-31T00:00:00Z",
+  "title": "Design System: MedBridge Study",
+  "extensions": {
+    "colorMeta": {
+      "study-blue": {
+        "role": "primary",
+        "displayName": "Study Blue",
+        "canonical": "oklch(55% 0.18 259)",
+        "tonalRamp": [
+          "oklch(20% 0.06 259)",
+          "oklch(30% 0.10 259)",
+          "oklch(40% 0.14 259)",
+          "oklch(50% 0.17 259)",
+          "oklch(55% 0.18 259)",
+          "oklch(65% 0.16 259)",
+          "oklch(80% 0.09 259)",
+          "oklch(94% 0.03 259)"
+        ]
+      },
+      "desk-bg": {
+        "role": "neutral",
+        "displayName": "Desk Background",
+        "canonical": "oklch(98% 0.004 247)",
+        "tonalRamp": ["oklch(20% 0.004 247)", "oklch(98% 0.004 247)", "oklch(100% 0 0)"]
+      },
+      "paper-surface": {
+        "role": "neutral",
+        "displayName": "Paper Surface",
+        "canonical": "oklch(100% 0 0)",
+        "tonalRamp": ["oklch(100% 0 0)"]
+      },
+      "night-ink": {
+        "role": "neutral",
+        "displayName": "Night Ink",
+        "canonical": "oklch(21% 0.03 259)",
+        "tonalRamp": ["oklch(21% 0.03 259)", "oklch(97% 0.005 259)"]
+      },
+      "calm-green-ink": {
+        "role": "tertiary",
+        "displayName": "Calm Green",
+        "canonical": "oklch(43% 0.13 152)",
+        "tonalRamp": ["oklch(43% 0.13 152)", "oklch(97% 0.02 152)"]
+      },
+      "caution-amber-ink": {
+        "role": "tertiary",
+        "displayName": "Caution Amber",
+        "canonical": "oklch(41% 0.12 55)",
+        "tonalRamp": ["oklch(41% 0.12 55)", "oklch(97% 0.03 55)"]
+      },
+      "alert-red-ink": {
+        "role": "tertiary",
+        "displayName": "Alert Red",
+        "canonical": "oklch(40% 0.16 25)",
+        "tonalRamp": ["oklch(40% 0.16 25)", "oklch(97% 0.02 25)"]
+      }
+    },
+    "typographyMeta": {
+      "headline": { "displayName": "Headline", "purpose": "페이지 제목 하나. 화면당 1회." },
+      "title": { "displayName": "Title", "purpose": "카드 제목·문서명·섹션 헤더." },
+      "body": { "displayName": "Body", "purpose": "UI 안내문. 읽기 패널 본문은 야간 가독 규칙에 따라 별도 상향 목표." },
+      "label": { "displayName": "Label", "purpose": "배지·메타·버튼 보조 텍스트. 12px 미만 금지." }
+    },
+    "shadows": [],
+    "motion": [
+      { "name": "pulse-status", "value": "animate-pulse (Tailwind default)", "purpose": "진행 중 상태 점 표시. motion-reduce 필요." },
+      { "name": "spin-loading", "value": "animate-spin (Tailwind default)", "purpose": "시작 화면 로딩 스피너. motion-reduce 필요." },
+      { "name": "transition-fill", "value": "transition-all (width/opacity only)", "purpose": "진행바 채움, 버튼 hover 색 전환." }
+    ],
+    "breakpoints": [
+      { "name": "sm", "value": "640px" },
+      { "name": "lg", "value": "1024px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "화면당 하나의 주 행동 (PDF 파일 선택, 업로드, 지금 업데이트).",
+      "html": "<button class=\"ds-btn-primary\">PDF 파일 선택</button>",
+      "css": ".ds-btn-primary { background: #2563eb; color: #fff; border: none; border-radius: 6px; padding: 10px 20px; font-weight: 600; font-size: 0.9375rem; font-family: 'Pretendard Variable', Pretendard, 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', sans-serif; transition: background 0.15s ease-out, opacity 0.15s ease-out; cursor: pointer; } .ds-btn-primary:hover { background: #1d4ed8; } .ds-btn-primary:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; } .ds-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "보조 행동 (취소, 나중에, 선택 취소).",
+      "html": "<button class=\"ds-btn-secondary\">취소</button>",
+      "css": ".ds-btn-secondary { background: #fff; color: #0f172a; border: 1px solid #e2e8f0; border-radius: 4px; padding: 8px 16px; font-weight: 500; font-size: 0.875rem; font-family: 'Pretendard Variable', Pretendard, 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', sans-serif; transition: background 0.15s ease-out; cursor: pointer; } .ds-btn-secondary:hover { background: #f8fafc; } .ds-btn-secondary:focus-visible { outline: 2px solid #2563eb; outline-offset: 2px; }"
+    },
+    {
+      "name": "Danger Outline Button",
+      "kind": "button",
+      "refersTo": "button-danger-outline",
+      "description": "삭제 진입, 실패 후 재시도 등 위험/실패 관련 행동.",
+      "html": "<button class=\"ds-btn-danger\">삭제</button>",
+      "css": ".ds-btn-danger { background: #fff; color: #991b1b; border: 1px solid #fecaca; border-radius: 4px; padding: 6px 12px; font-weight: 500; font-size: 0.75rem; font-family: 'Pretendard Variable', Pretendard, 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', sans-serif; cursor: pointer; transition: background 0.15s ease-out; } .ds-btn-danger:hover { background: #fef2f2; }"
+    },
+    {
+      "name": "Status Badge",
+      "kind": "chip",
+      "refersTo": "badge-status",
+      "description": "문서 처리 상태를 사람 말로 보여주는 알약형 배지. 진행 중이면 점 애니메이션 동반.",
+      "html": "<span class=\"ds-badge\"><span class=\"ds-badge-dot\" aria-hidden=\"true\"></span>학습 준비 완료</span>",
+      "css": ".ds-badge { display: inline-flex; align-items: center; gap: 4px; background: #eff6ff; color: #1e40af; border-radius: 9999px; padding: 2px 8px; font-size: 0.75rem; font-weight: 500; font-family: 'Pretendard Variable', Pretendard, 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', sans-serif; } .ds-badge-dot { width: 8px; height: 8px; border-radius: 9999px; background: currentColor; animation: ds-pulse 2s ease-in-out infinite; } @media (prefers-reduced-motion: reduce) { .ds-badge-dot { animation: none; } } @keyframes ds-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }"
+    },
+    {
+      "name": "Notice Box (Success)",
+      "kind": "custom",
+      "refersTo": "card",
+      "description": "안심 문구 박스 — 완료·정상 상태. 틴트-잉크 쌍 규칙의 초록 변형.",
+      "html": "<div class=\"ds-notice ds-notice-success\">본문을 읽었습니다. 특별한 주의사항이 없어요.</div>",
+      "css": ".ds-notice { border-radius: 4px; padding: 8px 12px; font-size: 0.875rem; line-height: 1.625; font-family: 'Pretendard Variable', Pretendard, 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', sans-serif; } .ds-notice-success { background: #f0fdf4; color: #166534; }"
+    },
+    {
+      "name": "Notice Box (Alert)",
+      "kind": "custom",
+      "refersTo": "card",
+      "description": "오류 안내 박스 — 반드시 원인+행동 버튼 동반. role=alert.",
+      "html": "<div class=\"ds-notice ds-notice-alert\" role=\"alert\"><p>파일을 처리하지 못했습니다.</p><button class=\"ds-btn-danger\" style=\"margin-top:8px\">다시 시도</button></div>",
+      "css": ".ds-notice-alert { background: #fef2f2; color: #991b1b; border-radius: 4px; padding: 8px 12px; font-family: 'Pretendard Variable', Pretendard, 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', sans-serif; }"
+    },
+    {
+      "name": "Progress Bar",
+      "kind": "custom",
+      "refersTo": "card",
+      "description": "업로드·추출·OCR·업데이트 진행률. role=progressbar 필수.",
+      "html": "<div class=\"ds-progress\" role=\"progressbar\" aria-valuenow=\"60\" aria-valuemin=\"0\" aria-valuemax=\"100\"><div class=\"ds-progress-fill\" style=\"width:60%\"></div></div>",
+      "css": ".ds-progress { height: 10px; border-radius: 9999px; background: #e2e8f0; overflow: hidden; } .ds-progress-fill { height: 100%; background: #2563eb; transition: width 0.2s ease-out; } @media (prefers-reduced-motion: reduce) { .ds-progress-fill { transition: none; } }"
+    },
+    {
+      "name": "Document Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "학습자료 목록의 항목 카드 — 종이 한 장 규칙, 그림자 없음.",
+      "html": "<div class=\"ds-card\"><p class=\"ds-card-title\">심부전 논문</p><p class=\"ds-card-meta\">paper.pdf · 2.4MB · 2026.07.31 추가</p></div>",
+      "css": ".ds-card { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; font-family: 'Pretendard Variable', Pretendard, 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', sans-serif; } .ds-card-title { font-size: 1rem; font-weight: 600; color: #0f172a; } .ds-card-meta { font-size: 0.75rem; color: #64748b; margin-top: 2px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "밤의 공부방",
+    "overview": "퇴근한 간호사가 조용한 방에서 켜는 따뜻한 스탠드 조명 같은 화면. 이 시스템의 임무는 눈에 띄는 것이 아니라 눈이 편한 것이다. 밝은 회백색 책상 위에 흰 종이를 올려놓은 구성이 기본이고, 색은 상태를 전달할 때만 조용히 등장한다. 장식적 효과·그림자·움직임은 모두 절제되며, 유일하게 허용되는 강조는 지금 눌러야 할 하나의 파란 버튼이다. 이 시스템은 개발자 도구처럼 보여서는 안 되고, 병원 EMR처럼 보여서도 안 된다. 컴포넌트의 손맛은 크고 분명하게 — 큰 터치 영역, 넉넉한 패딩, 모호함 없는 라벨로 컴퓨터가 익숙지 않은 사용자도 망설이지 않게 한다.",
+    "keyCharacteristics": [
+      "흰 종이 + 회백색 책상 + 1px 연필선 테두리의 플랫 구성",
+      "단일 한국어 산세리프(Pretendard)만 사용, 위계는 크기·굵기로",
+      "상태 4색(파랑=진행/안내, 초록=안심, 호박=주의, 빨강=실패)은 항상 연한 배경 틴트 + 진한 같은 계열 잉크 쌍으로",
+      "모션은 상태 전달용 최소한(진행바 폭, 스피너)만"
+    ],
+    "rules": [
+      { "name": "틴트-잉크 쌍 규칙", "body": "상태 색은 반드시 같은 계열의 연한 배경 + 진한 텍스트 쌍으로만 쓴다. 색 배경 위에 회색 텍스트는 금지 — 씻겨 보인다.", "section": "colors" },
+      { "name": "야간 가독 규칙", "body": "사용자가 실제로 공부하는 텍스트(추출 본문 읽기 패널)는 최소 17px + 행간 1.7을 목표로 한다. 14px 본문은 UI 안내문까지만 허용된다.", "section": "typography" },
+      { "name": "종이 한 장 규칙", "body": "화면에는 책상과 그 위의 종이, 두 층만 존재한다. 종이 위에 또 떠 있는 종이(중첩 카드, 그림자 스택)는 금지.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do 상태 색은 항상 틴트-잉크 쌍으로 쓰고, 오류 박스에는 반드시 다음 행동 버튼을 붙인다.",
+      "Do 주 행동은 화면당 하나의 Study Blue 버튼으로 유지한다. 나머지는 Secondary.",
+      "Do 모든 애니메이션에 motion-reduce: 변형을 제공한다.",
+      "Do 읽기용 본문은 17px+ / 행간 1.7을 향해 키운다. UI 라벨 최소 12px.",
+      "Do 내부 상태·실패 코드는 lib/format.ts의 STATUS_LABELS / FAILURE_GUIDES를 거쳐서만 화면에 낸다."
+    ],
+    "donts": [
+      "Don't 개발자 도구처럼 보이게 하지 않는다 — 로그, 오류 코드, 포트/토큰/DPI/엔진명, 마크다운 원문을 사용자에게 노출 금지.",
+      "Don't 병원 EMR처럼 보이게 하지 않는다 — 빽빽한 데이터 표, 회색 관공서풍 레이아웃 금지.",
+      "Don't box-shadow, 중첩 카드, 글래스모피즘, 그라디언트 텍스트, 1px 초과 색 사이드 스트라이프를 쓰지 않는다.",
+      "Don't 색 배경 위에 회색 글자를 올리지 않는다.",
+      "Don't 10px 이하 텍스트를 만들지 않는다.",
+      "Don't 시스템 네이티브 confirm/prompt로 앱의 목소리를 끊지 않는다 — 확인은 앱 안의 다이얼로그로."
+    ]
+  }
+}
