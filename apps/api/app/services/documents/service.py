@@ -1,5 +1,6 @@
 """문서 서비스 계층. 상태 전이·보상 처리는 전부 여기서만 수행한다."""
 
+import asyncio
 import base64
 import uuid
 from datetime import UTC, datetime
@@ -22,21 +23,27 @@ logger = get_logger(__name__)
 
 _CHUNK = 1024 * 1024
 
+# 대용량(최대 800MB) 업로드는 메모리에 통째로 올라간다. 동시 업로드를 직렬화해 최대
+# 상주 메모리를 한 파일 크기로 묶는다(개인용 단일 사용자 앱이라 직렬화가 UX에 무해).
+# ponytail: 전역 세마포어(1), 스트리밍 저장이 필요할 만큼 커지면 그때 교체.
+_upload_gate = asyncio.Semaphore(1)
 
-async def _read_limited(file: UploadFile, max_bytes: int) -> bytes:
-    """크기 제한을 넘는 순간 즉시 중단한다. 전체를 읽은 뒤 검사하지 않는다."""
-    chunks: list[bytes] = []
-    total = 0
+
+async def _read_limited(file: UploadFile, max_bytes: int) -> bytearray:
+    """크기 제한을 넘는 순간 즉시 중단한다. 전체를 읽은 뒤 검사하지 않는다.
+
+    list+join(피크 ~2배)을 피하려고 단일 bytearray로 누적한다.
+    """
+    buf = bytearray()
     while chunk := await file.read(_CHUNK):
-        total += len(chunk)
-        if total > max_bytes:
+        if len(buf) + len(chunk) > max_bytes:
             raise AppError(
                 ErrorCode.FILE_TOO_LARGE,
                 f"파일이 최대 크기({max_bytes // (1024 * 1024)}MB)를 초과했습니다.",
                 status_code=413,
             )
-        chunks.append(chunk)
-    return b"".join(chunks)
+        buf.extend(chunk)
+    return buf
 
 
 async def _find_duplicate(db: AsyncSession, user_id: uuid.UUID, sha256: str) -> Document | None:
@@ -94,8 +101,10 @@ async def create_document(
     from app.services.system import runtime
 
     _reject_if_updating()
-    with runtime.operation():  # 업데이트 정지 지점 계산용 (검사 직후 같은 틱에 등록)
-        return await _create_document_inner(db, user, file, title, correlation_id)
+    # 대용량 업로드 메모리를 묶기 위해 읽기·저장 구간을 직렬화한다
+    async with _upload_gate:
+        with runtime.operation():  # 업데이트 정지 지점 계산용 (검사 직후 같은 틱에 등록)
+            return await _create_document_inner(db, user, file, title, correlation_id)
 
 
 async def _create_document_inner(

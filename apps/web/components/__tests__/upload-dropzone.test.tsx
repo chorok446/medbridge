@@ -47,6 +47,14 @@ describe("UploadDropzone", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("최대 크기");
   });
 
+  it("최대 크기(800MB)와 같은 파일은 허용한다", async () => {
+    render(<UploadDropzone onUploaded={vi.fn()} />);
+    await userEvent.upload(getInput(), pdfFile("exact.pdf", 800 * 1024 * 1024));
+    // 크기 초과 오류가 뜨지 않고 파일이 선택된다(경계값 포함 허용)
+    expect(screen.queryByText(/최대 크기/)).not.toBeInTheDocument();
+    expect(screen.getByText("exact.pdf")).toBeInTheDocument();
+  });
+
   it("개인정보 확인 체크박스 없이는 업로드 버튼이 비활성화된다", async () => {
     render(<UploadDropzone onUploaded={vi.fn()} />);
     await userEvent.upload(getInput(), pdfFile());

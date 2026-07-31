@@ -29,7 +29,7 @@ def check_size(size: int, max_bytes: int) -> None:
         raise AppError(ErrorCode.EMPTY_PDF, "빈 파일은 업로드할 수 없습니다.", status_code=400)
 
 
-def check_pdf_signature(head: bytes) -> None:
+def check_pdf_signature(head: bytes | bytearray) -> None:
     """확장자가 아닌 실제 파일 시그니처(%PDF-)를 검사한다."""
     if not head.startswith(PDF_SIGNATURE):
         raise AppError(
@@ -39,7 +39,7 @@ def check_pdf_signature(head: bytes) -> None:
         )
 
 
-def compute_sha256(data: bytes) -> str:
+def compute_sha256(data: bytes | bytearray) -> str:
     return hashlib.sha256(data).hexdigest()
 
 

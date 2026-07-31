@@ -21,7 +21,7 @@ def object_key(document_id: uuid.UUID) -> str:
 
 
 class FileStorage(Protocol):
-    def save_original(self, key: str, data: bytes) -> None: ...
+    def save_original(self, key: str, data: bytes | bytearray) -> None: ...
     def read_original(self, key: str) -> bytes: ...
     def original_exists(self, key: str) -> bool: ...
     def delete_original(self, key: str) -> None: ...
@@ -43,7 +43,7 @@ class LocalFileStorage:
             )
         return path
 
-    def save_original(self, key: str, data: bytes) -> None:
+    def save_original(self, key: str, data: bytes | bytearray) -> None:
         """임시 파일에 쓴 뒤 os.replace로 원자적 이동. 실패 시 임시 파일 정리."""
         target = self.resolve_path(key)
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -99,7 +99,7 @@ def reset_storage_cache() -> None:
 
 
 # 기존 서비스 코드와의 호환 표면 (모듈 함수 → 싱글턴 위임)
-def put_original(key: str, data: bytes) -> None:
+def put_original(key: str, data: bytes | bytearray) -> None:
     get_storage().save_original(key, data)
 
 
