@@ -9,7 +9,7 @@ interface Props {
   items: DocumentSummary[];
   onRetry: (id: string) => void;
   onRename: (id: string, currentTitle: string) => void;
-  onDelete: (id: string) => void;
+  onDelete: (id: string, title: string) => void;
   onReport: (id: string) => void;
   busyId?: string | null;
 }
@@ -94,7 +94,7 @@ export function DocumentTable({ items, onRetry, onRename, onDelete, onReport, bu
             <button
               type="button"
               disabled={busyId === doc.id}
-              onClick={() => onDelete(doc.id)}
+              onClick={() => onDelete(doc.id, doc.title)}
               className="rounded border border-red-200 px-3 py-1.5 text-xs text-red-700 hover:bg-red-50 disabled:opacity-50"
             >
               삭제

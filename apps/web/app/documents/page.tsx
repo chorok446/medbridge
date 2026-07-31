@@ -68,13 +68,15 @@ export default function DocumentsPage() {
   const reportMutation = useMutation({
     mutationFn: (id: string) => reportError(id, "문서 처리 실패 신고"),
     onSuccess: () =>
-      setNotice("오류가 접수되었습니다. 확인 후 개선하겠습니다. 감사합니다."),
-    onError: () => setActionError("오류 신고를 보내지 못했습니다. 잠시 후 다시 시도해 주세요."),
+      setNotice(
+        "오류 내용을 기록했어요. [설정]에서 [오류 정보 저장]을 누르면 개발자에게 전달할 파일이 만들어집니다.",
+      ),
+    onError: () => setActionError("오류 신고를 저장하지 못했습니다. 잠시 후 다시 시도해 주세요."),
   });
 
-  function handleDelete(id: string) {
-    // 확인 모달: 기본(Esc/취소)은 취소 행동
-    if (window.confirm("이 학습자료를 삭제할까요? 파일과 학습 기록이 함께 삭제됩니다.")) {
+  function handleDelete(id: string, title: string) {
+    // 확인 모달: 기본(Esc/취소)은 취소 행동. 삭제 대상 이름을 명시한다.
+    if (window.confirm(`'${title}'을(를) 삭제할까요?\n파일과 학습 기록이 함께 삭제되며 되돌릴 수 없습니다.`)) {
       deleteMutation.mutate(id);
     }
   }
@@ -118,7 +120,7 @@ export default function DocumentsPage() {
             busyId={busyId}
             onRetry={(id) => retryMutation.mutate(id)}
             onRename={handleRename}
-            onDelete={handleDelete}
+            onDelete={(id, title) => handleDelete(id, title)}
             onReport={(id) => reportMutation.mutate(id)}
           />
         )}

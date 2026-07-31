@@ -93,7 +93,7 @@ describe("DocumentTable", () => {
     await userEvent.click(screen.getByRole("button", { name: "이름 변경" }));
     expect(onRename).toHaveBeenCalledWith("d1", "심부전 논문");
     await userEvent.click(screen.getByRole("button", { name: "삭제" }));
-    expect(onDelete).toHaveBeenCalledWith("d1");
+    expect(onDelete).toHaveBeenCalledWith("d1", "심부전 논문");
   });
 
   it("다시 시도 버튼이 onRetry를 호출한다", async () => {

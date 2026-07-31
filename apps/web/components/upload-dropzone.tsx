@@ -134,7 +134,8 @@ export function UploadDropzone({ onUploaded }: Props) {
               className="mt-0.5 h-5 w-5"
             />
             <span>
-              이 파일에 실제 환자를 식별할 수 있는 정보가 포함되어 있지 않음을 확인했습니다.
+              이 파일에 실제 환자를 알아볼 수 있는 정보(이름·등록번호 등)가 없는 것을
+              확인했어요.
             </span>
           </label>
           <div className="mt-3 flex gap-2">

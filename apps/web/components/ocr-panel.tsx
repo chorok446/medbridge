@@ -80,7 +80,8 @@ export function OcrPanel({ documentId, ocrPageCount }: { documentId: string; ocr
       {s.remainingOcrPages.length > 0 && (
         <div className="rounded bg-amber-50 px-3 py-3 text-amber-800">
           <p>
-            이미지로 된 페이지 {s.remainingOcrPages.length}개의 글자를 읽을 수 있어요.
+            이미지로 저장된 페이지가 {s.remainingOcrPages.length}개 있어요. 아래 버튼을 누르면
+            글자를 읽어 본문에 추가합니다. 페이지당 몇 초 정도 걸려요.
           </p>
           <button
             type="button"

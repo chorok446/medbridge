@@ -133,7 +133,9 @@ export function ExtractionReview({ doc, fileUrl }: Props) {
       <div role="alert" className="rounded-lg border border-red-200 bg-red-50 p-6 text-center">
         <p className="font-semibold text-red-800">문서 내용을 읽지 못했습니다.</p>
         <p className="mt-1 text-sm text-red-700">
-          다시 시도하거나, 파일이 이미지로만 되어 있지 않은지 확인해 주세요.
+          다시 시도해 보세요. 스캔한 이미지로만 된 문서라면
+          <br />
+          [안내] 탭의 [이미지 페이지 읽기]로 글자를 읽을 수 있어요.
         </p>
         <button
           type="button"

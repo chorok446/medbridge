@@ -55,7 +55,7 @@ describe("UploadDropzone", () => {
 
     await userEvent.click(
       screen.getByRole("checkbox", {
-        name: /실제 환자를 식별할 수 있는 정보가 포함되어 있지 않음/,
+        name: /실제 환자를 알아볼 수 있는 정보/,
       }),
     );
     expect(uploadButton).toBeEnabled();
