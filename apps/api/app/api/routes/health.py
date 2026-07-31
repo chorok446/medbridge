@@ -17,4 +17,6 @@ async def health(db: AsyncSession = Depends(get_db)) -> dict:
         revision = row.scalar_one_or_none() or "none"
     except Exception:
         revision = "not-initialized"
-    return {"status": "ok", "migrationRevision": revision}
+    from app import __version__
+
+    return {"status": "ok", "migrationRevision": revision, "sidecarVersion": __version__}

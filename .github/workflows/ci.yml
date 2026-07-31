@@ -1,11 +1,20 @@
-name: CI
+name: CI (Windows 검증)
 
 on:
   push:
     branches: [develop]
   pull_request:
+    branches: [develop, main]
+  workflow_dispatch:
 
 jobs:
+  versions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 버전 일치 검증
+        run: python3 scripts/check-versions.py
+
   backend:
     runs-on: ubuntu-latest
     defaults:
@@ -20,8 +29,15 @@ jobs:
         run: uv run ruff check .
       - name: Typecheck
         run: uv run mypy app
-      - name: Tests (unit + integration, 외부 인프라 불필요)
+      - name: Tests (외부 인프라 불필요)
         run: uv run pytest -q
+      - name: SQLite migration cycle
+        env:
+          MEDBRIDGE_APP_DATA_DIR: /tmp/medbridge-ci
+        run: |
+          uv run alembic upgrade head
+          uv run alembic downgrade base
+          uv run alembic upgrade head
 
   frontend:
     runs-on: ubuntu-latest
@@ -49,27 +65,10 @@ jobs:
       - name: Static export build
         run: pnpm build
 
-  migrations:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps/api
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - name: Install dependencies
-        run: uv sync
-      - name: Empty-DB upgrade → downgrade → upgrade cycle
-        env:
-          MEDBRIDGE_APP_DATA_DIR: /tmp/medbridge-ci
-        run: |
-          uv run alembic upgrade head
-          uv run alembic downgrade base
-          uv run alembic upgrade head
-
-  # develop/PR에서는 Windows 빌드가 깨지지 않는지만 검증한다 (Release 생성 안 함)
-  windows-build-check:
+  # Windows 빌드 검증 — Release는 생성하지 않고 artifact만 업로드한다
+  windows-build:
     runs-on: windows-latest
+    needs: [versions]
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -85,19 +84,41 @@ jobs:
         run: |
           pnpm install --frozen-lockfile
           pnpm build
-      - name: Sidecar exe build
+      - name: Backend tests (Windows)
         working-directory: apps/api
         run: |
           uv sync
-          uv run pyinstaller sidecar.spec
+          uv run pytest -q
+      - name: Sidecar exe build
+        working-directory: apps/api
+        run: uv run pyinstaller sidecar.spec
+      - name: Sidecar smoke test (Windows 실행 확인)
+        shell: bash
+        working-directory: apps/api
+        run: |
+          ./dist/medbridge-sidecar.exe --host 127.0.0.1 --port 18900 &
+          SIDECAR_PID=$!
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:18900/health > /dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:18900/health
+          kill $SIDECAR_PID || true
       - name: Place sidecar for Tauri
         shell: bash
         run: |
           mkdir -p apps/desktop/src-tauri/binaries
           cp apps/api/dist/medbridge-sidecar.exe \
             apps/desktop/src-tauri/binaries/medbridge-sidecar-x86_64-pc-windows-msvc.exe
-      - name: Tauri Windows build (bundle 검증, 서명 없음)
+      - name: Tauri Windows build (NSIS, 서명 없음)
         working-directory: apps/desktop
         run: |
           pnpm install
-          pnpm tauri build -- --no-sign 2>$null; if ($LASTEXITCODE -ne 0) { pnpm tauri build }
+          pnpm tauri build
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: medbridge-windows-setup
+          path: |
+            apps/desktop/src-tauri/target/release/bundle/nsis/*.exe
+          retention-days: 14

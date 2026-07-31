@@ -3,7 +3,35 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { ErrorBox } from "@/components/error-box";
+import { UpdateManager } from "@/components/update-manager";
 import { getProfile, updateProfile } from "@/lib/api/profile";
+import { isTauri, saveErrorReport } from "@/lib/tauri";
+
+function ErrorReportButton() {
+  const [saved, setSaved] = useState<string | null>(null);
+  if (!isTauri()) {
+    return <p className="text-sm text-slate-500">데스크톱 앱에서 사용할 수 있어요.</p>;
+  }
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={async () => {
+          const ok = await saveErrorReport().catch(() => false);
+          setSaved(ok ? "오류 정보를 저장했습니다." : null);
+        }}
+        className="rounded border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50"
+      >
+        오류 정보 저장
+      </button>
+      {saved && (
+        <p role="status" className="mt-2 text-sm text-green-700">
+          {saved}
+        </p>
+      )}
+    </div>
+  );
+}
 
 const LEVELS = [
   { value: 0, label: "의학 입문" },
@@ -104,6 +132,20 @@ export default function SettingsPage() {
             저장
           </button>
         </form>
+      </section>
+
+      <section className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
+        <h2 className="mb-2 font-semibold">업데이트</h2>
+        <UpdateManager />
+      </section>
+
+      <section className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
+        <h2 className="mb-2 font-semibold">문제 해결</h2>
+        <p className="mb-3 text-sm text-slate-500">
+          문제가 반복되면 오류 정보를 파일로 저장해 개발자에게 전달할 수 있어요. 학습자료
+          내용은 포함되지 않습니다.
+        </p>
+        <ErrorReportButton />
       </section>
 
       <section className="mt-4 rounded-lg border border-slate-200 bg-white p-4">

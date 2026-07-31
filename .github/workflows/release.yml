@@ -3,6 +3,7 @@ name: Release (Windows)
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 jobs:
   release:
@@ -21,39 +22,75 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: astral-sh/setup-uv@v5
 
+      - name: 버전 일치 검증
+        shell: bash
+        run: python3 scripts/check-versions.py
+
       - name: Read app version
         id: version
         shell: bash
         run: echo "version=$(node -p "require('./apps/desktop/src-tauri/tauri.conf.json').version")" >> "$GITHUB_OUTPUT"
 
-      - name: Fail if release already exists (덮어쓰기 금지)
+      - name: Updater signing secret 존재 확인
+        shell: bash
+        env:
+          KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
+        run: |
+          if [ -z "$KEY" ] || [ -z "$PUBKEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY / TAURI_UPDATER_PUBKEY secret이 없습니다. docs/release/windows-release-process.md 참조."
+            exit 1
+          fi
+
+      - name: 릴리스 게이트 — 버전 증가·중복 확인
+        id: gate
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
         run: |
-          if gh release view "v${{ steps.version.outputs.version }}" --repo chorok446/medbridge-releases > /dev/null 2>&1; then
-            echo "::error::v${{ steps.version.outputs.version }} 릴리스가 이미 존재합니다. 버전을 올린 뒤 다시 병합하세요."
+          VERSION="${{ steps.version.outputs.version }}"
+          LATEST=$(gh release list --repo chorok446/medbridge-releases --limit 1 --json tagName --jq '.[0].tagName // ""' | sed 's/^v//')
+          echo "latest=$LATEST current=$VERSION"
+          if [ "$LATEST" = "$VERSION" ]; then
+            echo "::notice::버전($VERSION)이 최신 릴리스와 같습니다. 릴리스를 건너뜁니다."
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ -n "$LATEST" ] && [ "$(printf '%s\n%s' "$LATEST" "$VERSION" | sort -V | tail -1)" != "$VERSION" ]; then
+            echo "::error::버전($VERSION)이 최신 릴리스($LATEST)보다 낮습니다."
             exit 1
           fi
+          if gh release view "v$VERSION" --repo chorok446/medbridge-releases > /dev/null 2>&1; then
+            echo "::error::v$VERSION 릴리스가 이미 존재합니다."
+            exit 1
+          fi
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
 
-      - name: Frontend deps + checks
+      - name: Frontend checks + build
+        if: steps.gate.outputs.proceed == 'true'
         working-directory: apps/web
         run: |
           pnpm install --frozen-lockfile
+          pnpm lint
           pnpm typecheck
           pnpm test
+          pnpm build
 
-      - name: Backend deps + tests
+      - name: Backend checks
+        if: steps.gate.outputs.proceed == 'true'
         working-directory: apps/api
         run: |
           uv sync
+          uv run ruff check .
           uv run pytest -q
 
       - name: Build sidecar exe
+        if: steps.gate.outputs.proceed == 'true'
         working-directory: apps/api
         run: uv run pyinstaller sidecar.spec
 
       - name: Place sidecar for Tauri
+        if: steps.gate.outputs.proceed == 'true'
         shell: bash
         run: |
           mkdir -p apps/desktop/src-tauri/binaries
@@ -61,19 +98,21 @@ jobs:
             apps/desktop/src-tauri/binaries/medbridge-sidecar-x86_64-pc-windows-msvc.exe
 
       - name: Inject updater public key
+        if: steps.gate.outputs.proceed == 'true'
         shell: bash
-        run: |
-          python -c "
-          import json, os
-          p = 'apps/desktop/src-tauri/tauri.conf.json'
-          conf = json.load(open(p))
-          conf['plugins']['updater']['pubkey'] = os.environ['TAURI_UPDATER_PUBKEY']
-          json.dump(conf, open(p, 'w'), indent=2)
-          "
         env:
           TAURI_UPDATER_PUBKEY: ${{ secrets.TAURI_UPDATER_PUBKEY }}
+        run: |
+          python - <<'EOF'
+          import json, os
+          p = 'apps/desktop/src-tauri/tauri.conf.json'
+          conf = json.load(open(p, encoding='utf-8'))
+          conf['plugins']['updater']['pubkey'] = os.environ['TAURI_UPDATER_PUBKEY']
+          json.dump(conf, open(p, 'w', encoding='utf-8'), indent=2)
+          EOF
 
       - name: Tauri build (NSIS + updater 서명)
+        if: steps.gate.outputs.proceed == 'true'
         working-directory: apps/desktop
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -83,30 +122,40 @@ jobs:
           pnpm tauri build
 
       - name: Compose latest.json
+        if: steps.gate.outputs.proceed == 'true'
         shell: bash
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           BUNDLE_DIR="apps/desktop/src-tauri/target/release/bundle/nsis"
           SIG_FILE=$(ls "$BUNDLE_DIR"/*.sig | head -1)
-          PKG_FILE=$(ls "$BUNDLE_DIR"/*.exe.zip 2>/dev/null || ls "$BUNDLE_DIR"/*setup*.exe | head -1)
-          python - "$VERSION" "$SIG_FILE" "$(basename "$PKG_FILE")" <<'EOF'
-          import json, sys, datetime
+          PKG_FILE=$(basename "$(ls "$BUNDLE_DIR"/*.exe | head -1)")
+          python - "$VERSION" "$SIG_FILE" "$PKG_FILE" <<'EOF'
+          import datetime
+          import json
+          import sys
+
           version, sig_path, pkg_name = sys.argv[1:4]
           latest = {
               "version": version,
-              "notes": f"MedBridge Study {version}",
-              "pub_date": datetime.datetime.now(datetime.UTC).isoformat(),
+              "notes": f"MedBridge Study {version} 업데이트",
+              "pub_date": datetime.datetime.now(datetime.UTC)
+              .isoformat()
+              .replace("+00:00", "Z"),
               "platforms": {
                   "windows-x86_64": {
-                      "signature": open(sig_path).read(),
-                      "url": f"https://github.com/chorok446/medbridge-releases/releases/download/v{version}/{pkg_name}",
+                      "signature": open(sig_path, encoding="utf-8").read(),
+                      "url": (
+                          "https://github.com/chorok446/medbridge-releases/"
+                          f"releases/download/v{version}/{pkg_name}"
+                      ),
                   }
               },
           }
-          json.dump(latest, open("latest.json", "w"), indent=2)
+          json.dump(latest, open("latest.json", "w", encoding="utf-8"), indent=2)
           EOF
 
       - name: Publish to public releases repo
+        if: steps.gate.outputs.proceed == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.RELEASES_REPO_TOKEN }}
@@ -116,8 +165,7 @@ jobs:
           gh release create "v$VERSION" \
             --repo chorok446/medbridge-releases \
             --title "MedBridge Study v$VERSION" \
-            --notes "MedBridge Study v$VERSION 업데이트" \
-            "$BUNDLE_DIR"/*setup*.exe \
-            "$BUNDLE_DIR"/*.zip \
+            --notes "MedBridge Study v$VERSION — 자세한 변경 내용은 앱의 업데이트 안내를 확인하세요." \
+            "$BUNDLE_DIR"/*.exe \
             "$BUNDLE_DIR"/*.sig \
             latest.json

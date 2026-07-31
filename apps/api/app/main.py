@@ -58,8 +58,10 @@ def run_migrations() -> None:
         Path(sync_url.removeprefix("sqlite:///")) if sync_url.startswith("sqlite:///") else None
     )
     if db_path is not None and db_path.is_file() and current != head:
-        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-        backup = provider.backups_dir / f"medbridge-{current or 'empty'}-{stamp}.db"
+        from app import __version__
+
+        stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+        backup = provider.backups_dir / f"pre-migration-{__version__}-{stamp}.db"
         shutil.copy2(db_path, backup)
         logger.info("db_backup_created", backup=backup.name)
     elif db_path is None:
@@ -74,14 +76,21 @@ def run_migrations() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     import asyncio
+    import os
 
+    from app.services.system import runtime
     from app.services.tasks.runner import get_task_runner
 
-    await asyncio.to_thread(run_migrations)
-    recovered = await get_task_runner().recover_interrupted()
-    logger.info("sidecar_ready", recovered_jobs=recovered)
-    yield
-    await get_task_runner().drain()
+    # 중복 sidecar 실행 방지 + stale runtime 파일 정리
+    runtime.acquire_single_instance(int(os.environ.get("MEDBRIDGE_BOUND_PORT", "0")))
+    try:
+        await asyncio.to_thread(run_migrations)
+        recovered = await get_task_runner().recover_interrupted()
+        logger.info("sidecar_ready", recovered_jobs=recovered)
+        yield
+        await get_task_runner().drain()
+    finally:
+        runtime.release_single_instance()
 
 
 def _error_response(
@@ -107,7 +116,7 @@ def _error_response(
 
 
 def create_app() -> FastAPI:
-    from app.api.routes import documents, health, profile, reports
+    from app.api.routes import documents, health, profile, reports, system
 
     configure_logging()
     settings = get_settings()
@@ -177,6 +186,7 @@ def create_app() -> FastAPI:
     app.include_router(profile.router)
     app.include_router(documents.router)
     app.include_router(reports.router)
+    app.include_router(system.router)
     return app
 
 

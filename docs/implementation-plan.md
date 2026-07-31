@@ -256,3 +256,34 @@ Sprint 1에서 하지 않는 것: OCR, 개인정보 탐지(Sprint 2), 임베딩�
   4. worker는 api의 모델·서비스 코드를 import해서 쓰고 별도 사본을 만들지 않는다.
   5. 워크스페이스의 다른 프로젝트(`dasida`, `stem-tab` 등)는 이 저장소와 무관하며 참조·수정하지 않는다.
   6. 이후 Sprint에서 이 계획과 명세가 충돌하면 명세가 우선하고, 계획 문서를 갱신한 뒤 구현한다.
+
+---
+
+# 부록: 실행 구조 변경 이력
+
+이 계획서의 1–10장은 최초 웹서비스(PostgreSQL/Redis/MinIO) 기준이며, 이후 지시로
+실행 구조가 **Windows 단일 사용자 데스크톱 앱(Tauri 2 + SQLite + 로컬 파일)**으로
+전환되었다. 현재 구조의 기준 문서는 `docs/architecture/system-overview.md` 와
+`docs/desktop/` 디렉터리다.
+
+## Sprint 1.5: Windows 패키징·실사용 검증·자동 업데이트 기반 (완료 범위)
+
+구현 완료:
+1. sidecar: 버전 노출(/health), runtime/sidecar.json 중복 실행 방지·stale 정리,
+   파일 로그(logs/sidecar.log), prepare-update API(작업 차단→drain→WAL checkpoint→
+   pre-update 백업), resume API, 오류 보고 데이터 API(파일명·토큰·원문 제외)
+2. Tauri: 비동기 준비 상태(starting/ready/failed), /health 검증 후 메인 표시,
+   process 플러그인(재시작), 오류 보고 zip 저장(파일 저장 대화상자),
+   RunEvent::Exit 포함 sidecar 정리, 패키징 sidecar 논리 이름 해석
+3. GUI: 준비 화면("MedBridge를 준비하고 있습니다"), 시작 실패 화면([다시 시작]
+   [오류 정보 저장]), 업데이트 안내·진행률·실패 화면([나중에][업데이트]),
+   설정의 수동 업데이트 확인·오류 정보 저장
+4. CI: 검증 워크플로(버전 일치→테스트→Windows sidecar.exe 빌드+스모크→NSIS→artifact),
+   릴리스 워크플로(버전 증가·중복 skip·secret 게이트→서명→latest.json→
+   medbridge-releases 게시), scripts/check-versions.py
+5. 테스트 122개(백엔드 98+프론트 24) — 외부 인프라 없이 전부 통과
+
+실기기 검증 대기 (Sprint 1.5 완료 게이트 — Windows PC 필요):
+- NSIS 설치·시작 메뉴·재실행 데이터 유지·제거 후 데이터 보존
+- 0.1.0 → 0.1.1 실제 업데이트 시나리오 (서명 검증·마이그레이션·데이터 유지)
+- 사전 준비: updater 키 생성, GitHub Secrets 4종 등록, medbridge-releases 저장소 생성

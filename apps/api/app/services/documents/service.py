@@ -58,6 +58,19 @@ async def _find_duplicate(db: AsyncSession, user_id: uuid.UUID, sha256: str) -> 
     return (await db.execute(stmt)).scalar_one_or_none()
 
 
+def _reject_if_updating() -> None:
+    """업데이트 준비 중에는 새 문서 작업을 시작하지 않는다."""
+    from app.services.system import runtime
+
+    if runtime.is_updating():
+        raise AppError(
+            ErrorCode.INTERNAL_ERROR,
+            "업데이트를 준비하는 중입니다. 잠시 후 다시 시도해 주세요.",
+            status_code=503,
+            retryable=True,
+        )
+
+
 def _enqueue_validate(document_id: uuid.UUID, correlation_id: str) -> None:
     from app.services.tasks.runner import get_task_runner
 
@@ -78,6 +91,7 @@ async def create_document(
     - 객체 저장 후 DB 갱신 실패 → 업로드된 객체 삭제 시도
     - 큐 등록 실패 → 문서 failed(retryable)
     """
+    _reject_if_updating()
     settings = get_settings()
     data = await _read_limited(file, settings.max_upload_bytes)
     validation.check_size(len(data), settings.max_upload_bytes)
@@ -263,6 +277,7 @@ async def delete_document(db: AsyncSession, user: User, document_id: uuid.UUID) 
 async def retry_document(
     db: AsyncSession, user: User, document_id: uuid.UUID, correlation_id: str
 ) -> Document:
+    _reject_if_updating()
     doc = await get_owned_document(db, user, document_id)
     if doc.processing_status != ProcessingStatus.FAILED:
         raise AppError(

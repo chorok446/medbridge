@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import "./globals.css";
+import { StartupGate } from "@/components/startup-gate";
+import { UpdateManager } from "@/components/update-manager";
 import { Providers } from "./providers";
 
 export const metadata: Metadata = {
@@ -35,7 +37,14 @@ export default function RootLayout({
               </div>
             </nav>
           </header>
-          <main className="flex-1">{children}</main>
+          <main className="flex-1">
+            <StartupGate>
+              <div className="mx-auto w-full max-w-5xl px-4 pt-4 empty:hidden">
+                <UpdateManager autoCheck />
+              </div>
+              {children}
+            </StartupGate>
+          </main>
           <footer className="border-t border-slate-200 bg-white px-6 py-3 text-xs text-slate-500">
             MedBridge Study는 의학 학습 보조 도구입니다. 실제 환자의 진단·처방·응급 판단에
             사용하지 마세요. 응급 상황에서는 119에 연락하세요.
