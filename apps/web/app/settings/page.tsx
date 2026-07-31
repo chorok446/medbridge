@@ -5,11 +5,12 @@ import { useState } from "react";
 import { ErrorBox } from "@/components/error-box";
 import { UpdateManager } from "@/components/update-manager";
 import { getProfile, updateProfile } from "@/lib/api/profile";
-import { isTauri, saveErrorReport } from "@/lib/tauri";
+import { saveErrorReport, useIsTauri } from "@/lib/tauri";
 
 function ErrorReportButton() {
+  const desktop = useIsTauri();
   const [saved, setSaved] = useState<string | null>(null);
-  if (!isTauri()) {
+  if (!desktop) {
     return <p className="text-sm text-slate-500">데스크톱 앱에서 사용할 수 있어요.</p>;
   }
   return (

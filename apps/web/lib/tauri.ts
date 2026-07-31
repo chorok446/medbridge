@@ -1,7 +1,22 @@
 /** Tauri 셸 연동 헬퍼. 브라우저 개발 모드에서는 전부 no-op으로 동작한다. */
 
+import { useSyncExternalStore } from "react";
+
 export function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+}
+
+const noSubscription = () => () => {}; // Tauri 여부는 마운트 후 바뀌지 않으므로 구독이 필요 없다
+
+/**
+ * 하이드레이션 안전한 isTauri — 렌더 중 isTauri()를 직접 분기하면 정적 export
+ * 빌드(Node, window 없음 → 항상 false)와 실제 Tauri 런타임(true)의 첫 렌더
+ * 결과가 달라져 하이드레이션 오류(React #418)가 난다. useSyncExternalStore의
+ * getServerSnapshot(항상 false, 빌드와 동일)으로 첫 렌더를 맞추고,
+ * getSnapshot(실제 isTauri())은 마운트 이후에만 반영된다.
+ */
+export function useIsTauri(): boolean {
+  return useSyncExternalStore(noSubscription, isTauri, () => false);
 }
 
 export type SidecarStatus = "starting" | "ready" | "failed";

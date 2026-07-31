@@ -1,35 +1,37 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { isTauri, relaunchApp, saveErrorReport, sidecarStatus } from "@/lib/tauri";
+import { relaunchApp, saveErrorReport, sidecarStatus, useIsTauri } from "@/lib/tauri";
 
 /**
  * 앱 준비 게이트 — sidecar와 데이터베이스가 준비되기 전에는 메인 화면을 보여주지 않는다.
  * 기술 정보(포트·경로·오류 원문)는 표시하지 않는다.
  */
 export function StartupGate({ children }: { children: React.ReactNode }) {
-  const [status, setStatus] = useState<"starting" | "ready" | "failed">(
-    isTauri() ? "starting" : "ready",
-  );
+  // useIsTauri()는 하이드레이션 안전(정적 export 빌드와 첫 렌더가 항상 일치)하다.
+  // 브라우저 개발 모드에서는 desktop이 계속 false이므로 아래에서 children을
+  // 즉시 렌더한다 — 별도의 "starting → ready" 전환이 필요 없다.
+  const desktop = useIsTauri();
+  const [sidecarState, setSidecarState] = useState<"starting" | "ready" | "failed">("starting");
 
   useEffect(() => {
-    if (!isTauri() || status !== "starting") return;
+    if (!desktop || sidecarState !== "starting") return;
     let cancelled = false;
     const timer = setInterval(async () => {
       const s = await sidecarStatus().catch(() => "starting" as const);
       if (!cancelled && s !== "starting") {
-        setStatus(s);
+        setSidecarState(s);
       }
     }, 700);
     return () => {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [status]);
+  }, [desktop, sidecarState]);
 
-  if (status === "ready") return <>{children}</>;
+  if (!desktop || sidecarState === "ready") return <>{children}</>;
 
-  if (status === "failed") {
+  if (sidecarState === "failed") {
     return (
       <div className="flex min-h-[70vh] flex-col items-center justify-center gap-4 px-6 text-center">
         <h1 className="text-xl font-bold">MedBridge를 시작하지 못했습니다.</h1>

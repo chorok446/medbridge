@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { prepareUpdate, resumeAfterUpdateCancel } from "@/lib/api/system";
-import { isTauri, relaunchApp, saveErrorReport } from "@/lib/tauri";
+import { isTauri, relaunchApp, saveErrorReport, useIsTauri } from "@/lib/tauri";
 
 type Phase =
   | { name: "idle" }
@@ -37,6 +37,7 @@ async function checkForUpdate(): Promise<TauriUpdate | null> {
  * 기술 오류·URL·서명값은 표시하지 않는다.
  */
 export function UpdateManager({ autoCheck = false }: { autoCheck?: boolean }) {
+  const desktop = useIsTauri();
   const [phase, setPhase] = useState<Phase>({ name: "idle" });
   const updateRef = useRef<TauriUpdate | null>(null);
   const checkedOnce = useRef(false);
@@ -105,7 +106,7 @@ export function UpdateManager({ autoCheck = false }: { autoCheck?: boolean }) {
     void resumeAfterUpdateCancel().catch(() => undefined);
   }
 
-  if (!isTauri()) {
+  if (!desktop) {
     return autoCheck ? null : (
       <p className="text-sm text-slate-500">업데이트는 데스크톱 앱에서 확인할 수 있어요.</p>
     );
