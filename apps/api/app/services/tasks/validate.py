@@ -42,6 +42,22 @@ def _mark_failed(doc: Document, job: DocumentJob | None, code: str, message: str
         job.completed_at = datetime.now(UTC)
 
 
+async def mark_validation_crashed(document_id: uuid.UUID) -> None:
+    """작업 크래시 복구 경로 — validating에 고착된 문서를 실패로 확정한다."""
+    async with get_session_factory()() as session:
+        doc = await session.get(Document, document_id)
+        if doc is None or doc.processing_status != ProcessingStatus.VALIDATING:
+            return
+        job = await _latest_job(session, document_id)
+        _mark_failed(
+            doc,
+            job,
+            ErrorCode.VALIDATION_FAILED,
+            "파일을 확인하는 중 문제가 발생했습니다. 다시 시도해 주세요.",
+        )
+        await session.commit()
+
+
 async def validate_document(document_id: uuid.UUID, correlation_id: str) -> None:
     correlation_id_var.set(correlation_id)
     async with get_session_factory()() as session:

@@ -47,6 +47,11 @@ async def _find_duplicate(db: AsyncSession, user_id: uuid.UUID, sha256: str) -> 
             Document.sha256 == sha256,
             Document.deleted_at.is_(None),
             Document.processing_status != ProcessingStatus.DELETED,
+            # 원본 파일이 사라진 실패 문서는 중복으로 취급하지 않는다 (재업로드 허용)
+            ~(
+                (Document.processing_status == ProcessingStatus.FAILED)
+                & Document.storage_key.is_(None)
+            ),
         )
         .limit(1)
     )
@@ -111,28 +116,40 @@ async def create_document(
         await db.commit()
         raise
 
-    try:
-        doc.storage_key = key
-        transition(doc, ProcessingStatus.UPLOADED)
-        await db.commit()
-    except Exception:
-        # DB 갱신 실패 → 방금 올린 객체 정리 시도 (실패해도 원본 오류를 우선 보고)
-        try:
-            await run_in_threadpool(storage.delete_original, key)
-        except Exception:
-            logger.warning("compensation_delete_failed", document_id=str(doc.id))
-        raise
-
+    # storage_key·상태 전이·작업 생성을 단일 커밋으로 묶어 중간 상태가 남지 않게 한다
     job = DocumentJob(
         document_id=doc.id,
         job_type=JobType.VALIDATE_FILE,
         status=JobStatus.QUEUED,
         correlation_id=correlation_id,
     )
-    db.add(job)
-    transition(doc, ProcessingStatus.QUEUED)
-    doc.processing_stage = ProcessingStage.FILE_VALIDATION
-    await db.commit()
+    try:
+        doc.storage_key = key
+        transition(doc, ProcessingStatus.UPLOADED)
+        transition(doc, ProcessingStatus.QUEUED)
+        doc.processing_stage = ProcessingStage.FILE_VALIDATION
+        db.add(job)
+        await db.commit()
+    except Exception:
+        # DB 갱신 실패 보상: 저장한 파일 제거 + 문서를 실패로 확정 (재업로드 가능하게)
+        await db.rollback()
+        try:
+            await run_in_threadpool(storage.delete_original, key)
+        except Exception:
+            logger.warning("compensation_delete_failed", document_id=str(doc.id))
+        try:
+            stranded = await db.get(Document, doc.id)  # uploading 상태로 커밋돼 있는 행
+            if stranded is not None:
+                transition(stranded, ProcessingStatus.FAILED)
+                stranded.storage_key = None
+                stranded.failure_code = ErrorCode.INTERNAL_ERROR
+                stranded.failure_message = (
+                    "업로드 처리 중 오류가 발생했습니다. 파일을 다시 업로드해 주세요."
+                )
+                await db.commit()
+        except Exception:
+            logger.error("compensation_mark_failed_failed", document_id=str(doc.id))
+        raise
 
     try:
         _enqueue_validate(doc.id, correlation_id)
@@ -216,8 +233,10 @@ async def list_documents(
 
 async def delete_document(db: AsyncSession, user: User, document_id: uuid.UUID) -> Document:
     doc = await get_owned_document(db, user, document_id)
-    transition(doc, ProcessingStatus.DELETING)
-    await db.commit()
+    # idempotent: 이전 삭제가 파일 삭제 단계에서 실패해 deleting에 머문 경우 재시도 허용
+    if doc.processing_status != ProcessingStatus.DELETING:
+        transition(doc, ProcessingStatus.DELETING)
+        await db.commit()
 
     if doc.storage_key:
         try:

@@ -52,12 +52,18 @@ def run_migrations() -> None:
     provider.ensure_directories()
 
     current, head = _current_and_head_revision()
-    db_path = provider.db_path
-    if db_path.is_file() and current != head:
+    # 백업은 마이그레이션이 실제 적용되는 DB 파일을 대상으로 한다 (DATABASE_URL override 포함)
+    sync_url = get_settings().database_url_sync
+    db_path = (
+        Path(sync_url.removeprefix("sqlite:///")) if sync_url.startswith("sqlite:///") else None
+    )
+    if db_path is not None and db_path.is_file() and current != head:
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         backup = provider.backups_dir / f"medbridge-{current or 'empty'}-{stamp}.db"
         shutil.copy2(db_path, backup)
         logger.info("db_backup_created", backup=backup.name)
+    elif db_path is None:
+        logger.warning("db_backup_skipped_non_sqlite_url")
 
     cfg = Config(str(ALEMBIC_INI))
     cfg.set_main_option("script_location", str(ALEMBIC_DIR))
@@ -126,12 +132,14 @@ def create_app() -> FastAPI:
         cid = request.headers.get("X-Correlation-ID") or str(uuid.uuid4())
         correlation_id_var.set(cid)
 
-        # 로컬 API 보호: Tauri가 발급한 토큰 없이는 접근 불가 (미설정 시 개발 모드)
+        # 로컬 API 보호: Tauri가 발급한 토큰 없이는 접근 불가 (미설정 시 개발 모드 —
+        # production은 config 검증이 토큰 없는 기동 자체를 거부한다)
         token = settings.medbridge_api_token
         if token and request.url.path != "/health":
-            supplied = request.headers.get("X-MedBridge-Token") or request.query_params.get(
-                "token"
-            )
+            supplied = request.headers.get("X-MedBridge-Token")
+            # query 토큰은 iframe이 헤더를 못 보내는 파일 미리보기 경로에만 허용
+            if supplied is None and request.url.path.endswith("/file"):
+                supplied = request.query_params.get("token")
             if supplied != token:
                 return _error_response(401, ErrorCode.UNAUTHORIZED, "인증되지 않은 요청입니다.")
 

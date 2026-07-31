@@ -1,7 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,6 +23,13 @@ class Settings(BaseSettings):
 
     max_pdf_size_mb: int = 50
     max_concurrent_jobs: int = 2
+
+    @model_validator(mode="after")
+    def _production_requires_token(self) -> "Settings":
+        # 패키징 앱(production)에서 토큰이 없으면 인증 없이 열리므로 기동을 거부한다
+        if self.app_env == "production" and not self.medbridge_api_token:
+            raise ValueError("production 모드에서는 MEDBRIDGE_API_TOKEN이 필수입니다.")
+        return self
 
     @property
     def max_upload_bytes(self) -> int:
