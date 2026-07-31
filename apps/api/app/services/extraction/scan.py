@@ -57,9 +57,13 @@ def classify_page(
     if valid_ratio < SCAN_VALID_CHAR_RATIO:
         return ScanResult(ScanVerdict.UNKNOWN, requires_ocr=True, confidence=0.5)
 
-    # 텍스트 + 큰 이미지 공존 — full_page_image가 실패해도 텍스트가 페이지의 극히
-    # 일부만 차지한다면(text_area_ratio) 나머지는 이미지라는 신호로 함께 쓴다.
-    sparse_text_area = full_page_image or text_area_ratio < SCAN_MIN_TEXT_AREA_RATIO
+    # 텍스트 + 큰 이미지 공존 — full_page_image가 실패해도 이미지가 있고 텍스트가
+    # 페이지의 극히 일부만 차지한다면(text_area_ratio) 나머지는 이미지라는 신호로
+    # 함께 쓴다. has_images 없이는 쓰지 않는다 — 그렇지 않으면 큰 글자 한 줄짜리
+    # 제목·구분 페이지처럼 이미지가 전혀 없는 정상 디지털 페이지까지
+    # SCANNED로 잘못 승격된다 (Codex 리뷰로 발견).
+    low_text_area = text_area_ratio < SCAN_MIN_TEXT_AREA_RATIO
+    sparse_text_area = has_images and (full_page_image or low_text_area)
     if sparse_text_area and char_count < SCAN_DIGITAL_MIN_CHARS:
         return ScanResult(ScanVerdict.SCANNED, requires_ocr=True, confidence=0.7)
     if image_area_ratio >= SCAN_IMAGE_RATIO_MIXED:

@@ -231,10 +231,12 @@ pub fn run() {
     let token = uuid::Uuid::new_v4().to_string();
 
     let app = tauri::Builder::default()
-        // 반드시 첫 플러그인으로 등록한다: 이미 실행 중인 창이 있으면 새 프로세스는
-        // sidecar를 다시 띄우지 않고 여기서 끝난다. 그렇지 않으면 두 번째 실행이
-        // 서로 다른 포트의 두 번째 sidecar를 띄우면서, 첫 창은 죽은 sidecar를 보고
-        // 있는데 실제로 살아있는 sidecar는 다른 포트라는 혼란스러운 상태가 된다.
+        // 반드시 첫 플러그인으로 등록한다: 이미 실행 중인 창이 있으면 이 콜백이
+        // 새 프로세스의 .setup() 이전에 개입해, sidecar를 다시 띄우지 못하게
+        // 막는다(포트 예약·토큰 생성 자체는 이보다 앞서 일어나지만 무해하다).
+        // 그렇지 않으면 두 번째 실행이 서로 다른 포트의 두 번째 sidecar를
+        // 띄우면서, 첫 창은 죽은 sidecar를 보고 있는데 실제로 살아있는 sidecar는
+        // 다른 포트라는 혼란스러운 상태가 된다.
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize();

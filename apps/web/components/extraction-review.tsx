@@ -79,6 +79,9 @@ export function ExtractionReview({ doc, fileUrl }: Props) {
   const ocrRunning = ocrStatusQuery.data?.running ?? false;
   const ocrWasRunning = useRef(false);
   useEffect(() => {
+    // 일시적 조회 실패를 "방금 완료됨"으로 오인하지 않는다 — 성공한 응답을
+    // 받을 때까지 이전 상태를 그대로 유지한다.
+    if (ocrStatusQuery.isError) return;
     if (ocrWasRunning.current && !ocrRunning) {
       void queryClient.invalidateQueries({ queryKey: ["document", doc.id] });
       void queryClient.invalidateQueries({ queryKey: ["extraction-status", doc.id] });
@@ -87,7 +90,7 @@ export function ExtractionReview({ doc, fileUrl }: Props) {
       void queryClient.invalidateQueries({ queryKey: ["extraction-blocks", doc.id] });
     }
     ocrWasRunning.current = ocrRunning;
-  }, [ocrRunning, doc.id, queryClient]);
+  }, [ocrRunning, ocrStatusQuery.isError, doc.id, queryClient]);
 
   const pageOcrMutation = useMutation({
     mutationFn: (pageNumber: number) => startPageOcr(doc.id, pageNumber),
@@ -259,6 +262,11 @@ export function ExtractionReview({ doc, fileUrl }: Props) {
                   >
                     현재 페이지 이미지로 읽기
                   </button>
+                  {pageOcrMutation.isError && (
+                    <p role="alert" className="mt-2 text-red-700">
+                      이미지 페이지 읽기를 시작하지 못했습니다. 다시 시도해 주세요.
+                    </p>
+                  )}
                 </div>
               )}
             </div>

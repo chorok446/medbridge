@@ -147,6 +147,19 @@ class TestScanClassify:
         )
         assert r.verdict == ScanVerdict.DIGITAL and not r.requires_ocr
 
+    def test_sparse_digital_title_page_without_images_not_flagged(self):
+        """Codex 리뷰로 발견한 회귀: 큰 글자 제목 한 줄처럼 텍스트 면적 비율이
+        작아도(text_area_ratio 낮음), char_count가 SCAN_DIGITAL_MIN_CHARS
+        미만이어도, 이미지가 전혀 없다면(has_images=False) SCANNED로 잘못
+        승격되면 안 된다 — 앞선 수정에서 text_area_ratio만으로 판정하다
+        정상 디지털 제목/구분 페이지까지 OCR 대상으로 만드는 결함이 있었다."""
+        r = classify_page(
+            char_count=25, word_count=3, image_area_ratio=0.0,
+            full_page_image=False, has_text_blocks=True, has_images=False,
+            text_area_ratio=0.01, raw_text="심부전의 이해",
+        )
+        assert r.verdict == ScanVerdict.DIGITAL and not r.requires_ocr
+
 
 class TestEngineOnFixtures:
     def test_page_dims_and_rotation(self):
