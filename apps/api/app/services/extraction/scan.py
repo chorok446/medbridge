@@ -14,6 +14,8 @@ from app.services.extraction.thresholds import (
     SCAN_IMAGE_RATIO_MIXED,
     SCAN_IMAGE_RATIO_SCANNED,
     SCAN_MIN_CHARS,
+    SCAN_MIN_TEXT_AREA_RATIO,
+    SCAN_MIN_WORDS,
     SCAN_VALID_CHAR_RATIO,
 )
 
@@ -32,16 +34,22 @@ def classify_page(
     image_area_ratio: float,
     full_page_image: bool,
     has_text_blocks: bool,
+    has_images: bool,
+    text_area_ratio: float,
     raw_text: str,
 ) -> ScanResult:
     valid_ratio = valid_char_ratio(raw_text)
 
-    # 텍스트가 사실상 없는 페이지
-    if char_count < SCAN_MIN_CHARS or not has_text_blocks:
-        if full_page_image or image_area_ratio >= SCAN_IMAGE_RATIO_SCANNED:
-            return ScanResult(ScanVerdict.SCANNED, requires_ocr=True, confidence=0.9)
-        if image_area_ratio > 0.05:
-            return ScanResult(ScanVerdict.SCANNED, requires_ocr=True, confidence=0.6)
+    # 텍스트가 사실상 없는 페이지 — 글자 수만이 아니라 단어 수·블록 존재까지 함께 본다.
+    # (실제 스캐너 인코딩에서 raw_text가 소량의 깨진 문자만 뽑아내는 경우가 있다)
+    if char_count < SCAN_MIN_CHARS or word_count < SCAN_MIN_WORDS or not has_text_blocks:
+        if has_images:
+            # image_area_ratio/full_page_image는 CCITT·JBIG2 등 일부 스캐너 인코딩에서
+            # 신뢰할 수 없게 작게 나올 수 있다. 텍스트가 없고 이미지가 하나라도 있으면
+            # (면적 계산 성패와 무관하게) OCR 대상으로 판정한다 — 면적 값은 확신도에만 반영.
+            confident = full_page_image or image_area_ratio >= SCAN_IMAGE_RATIO_SCANNED
+            confidence = 0.9 if confident else 0.6
+            return ScanResult(ScanVerdict.SCANNED, requires_ocr=True, confidence=confidence)
         # 이미지도 텍스트도 없는 빈 페이지
         return ScanResult(ScanVerdict.UNKNOWN, requires_ocr=False, confidence=0.5)
 
@@ -49,8 +57,10 @@ def classify_page(
     if valid_ratio < SCAN_VALID_CHAR_RATIO:
         return ScanResult(ScanVerdict.UNKNOWN, requires_ocr=True, confidence=0.5)
 
-    # 텍스트 + 큰 이미지 공존
-    if full_page_image and char_count < SCAN_DIGITAL_MIN_CHARS:
+    # 텍스트 + 큰 이미지 공존 — full_page_image가 실패해도 텍스트가 페이지의 극히
+    # 일부만 차지한다면(text_area_ratio) 나머지는 이미지라는 신호로 함께 쓴다.
+    sparse_text_area = full_page_image or text_area_ratio < SCAN_MIN_TEXT_AREA_RATIO
+    if sparse_text_area and char_count < SCAN_DIGITAL_MIN_CHARS:
         return ScanResult(ScanVerdict.SCANNED, requires_ocr=True, confidence=0.7)
     if image_area_ratio >= SCAN_IMAGE_RATIO_MIXED:
         requires_ocr = char_count <= OCR_REQUIRED_MIXED_MAX_CHARS

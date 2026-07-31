@@ -176,6 +176,8 @@ async def _persist_page(
         image_area_ratio=page.image_area_ratio,
         full_page_image=page.full_page_image,
         has_text_blocks=any(b.block_type == "text" and b.text.strip() for b in page.blocks),
+        has_images=page.has_images,
+        text_area_ratio=page.text_area_ratio,
         raw_text=page.raw_text,
     )
 

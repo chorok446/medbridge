@@ -1,7 +1,7 @@
 "use client";
 
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { OcrPanel } from "@/components/ocr-panel";
 import { PdfViewer } from "@/components/pdf-viewer";
 import {
@@ -13,6 +13,7 @@ import {
   listTables,
   retryExtraction,
 } from "@/lib/api/extraction";
+import { getOcrStatus, startPageOcr } from "@/lib/api/ocr";
 import type { DocumentSummary } from "@/types/api";
 import type { ExtractionBlock, Rect } from "@/types/extraction";
 
@@ -64,6 +65,36 @@ export function ExtractionReview({ doc, fileUrl }: Props) {
     queryKey: ["extraction-tables", doc.id],
     queryFn: () => listTables(doc.id),
     enabled: !extracting && tab === "tables",
+  });
+
+  // "안내" 탭(OcrPanel)을 보고 있지 않아도 OCR 완료를 감지해 새로고침한다 —
+  // 탭은 조건부 렌더링이라 다른 탭에서 수동 OCR을 실행하면 OcrPanel이 마운트돼
+  // 있지 않은 채로 끝날 수 있다. 쿼리 키가 같아 OcrPanel과 폴링을 공유한다.
+  const ocrStatusQuery = useQuery({
+    queryKey: ["ocr-status", doc.id],
+    queryFn: () => getOcrStatus(doc.id),
+    enabled: !extracting,
+    refetchInterval: (q) => (q.state.data?.running ? 1000 : false),
+  });
+  const ocrRunning = ocrStatusQuery.data?.running ?? false;
+  const ocrWasRunning = useRef(false);
+  useEffect(() => {
+    if (ocrWasRunning.current && !ocrRunning) {
+      void queryClient.invalidateQueries({ queryKey: ["document", doc.id] });
+      void queryClient.invalidateQueries({ queryKey: ["extraction-status", doc.id] });
+      void queryClient.invalidateQueries({ queryKey: ["extraction-pages", doc.id] });
+      void queryClient.invalidateQueries({ queryKey: ["extraction-page", doc.id] });
+      void queryClient.invalidateQueries({ queryKey: ["extraction-blocks", doc.id] });
+    }
+    ocrWasRunning.current = ocrRunning;
+  }, [ocrRunning, doc.id, queryClient]);
+
+  const pageOcrMutation = useMutation({
+    mutationFn: (pageNumber: number) => startPageOcr(doc.id, pageNumber),
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ["ocr-status", doc.id] });
+      void queryClient.invalidateQueries({ queryKey: ["extraction-pages", doc.id] });
+    },
   });
 
   const pageCount = doc.pageCount ?? pagesQuery.data?.length ?? 0;
@@ -207,11 +238,28 @@ export function ExtractionReview({ doc, fileUrl }: Props) {
                 정리하지 않은 원문 그대로 보기
               </label>
               {pageQuery.isLoading && <p className="text-slate-500">불러오는 중…</p>}
-              {pageQuery.data && (
+              {pageQuery.data && showRaw && (
                 <p className="whitespace-pre-wrap leading-relaxed">
-                  {showRaw ? pageQuery.data.rawText : pageQuery.data.normalizedText ||
-                    "이 페이지에서 읽을 수 있는 글자가 없어요."}
+                  {pageQuery.data.rawText || "이 페이지에서 읽을 수 있는 글자가 없어요."}
                 </p>
+              )}
+              {pageQuery.data && !showRaw && pageQuery.data.normalizedText && (
+                <p className="whitespace-pre-wrap leading-relaxed">
+                  {pageQuery.data.normalizedText}
+                </p>
+              )}
+              {pageQuery.data && !showRaw && !pageQuery.data.normalizedText && (
+                <div className="rounded bg-amber-50 px-3 py-3 text-amber-800">
+                  <p>이 페이지에서 읽을 수 있는 글자를 찾지 못했어요.</p>
+                  <button
+                    type="button"
+                    onClick={() => pageOcrMutation.mutate(page)}
+                    disabled={pageOcrMutation.isPending || ocrRunning}
+                    className="mt-2 rounded bg-amber-600 px-4 py-2 font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+                  >
+                    현재 페이지 이미지로 읽기
+                  </button>
+                </div>
               )}
             </div>
           )}

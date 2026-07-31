@@ -41,6 +41,22 @@ export function OcrPanel({ documentId, ocrPageCount }: { documentId: string; ocr
   const cancelMutation = useMutation({ mutationFn: () => cancelOcr(documentId), onSettled: invalidateAll });
 
   const s = statusQuery.data;
+
+  if (statusQuery.isError) {
+    return (
+      <div role="alert" className="rounded bg-red-50 px-3 py-2 text-red-800">
+        <p>이미지 페이지 읽기 상태를 확인하지 못했습니다.</p>
+        <button
+          type="button"
+          onClick={() => statusQuery.refetch()}
+          className="mt-1.5 rounded border border-red-300 px-3 py-1.5 hover:bg-red-100"
+        >
+          다시 시도
+        </button>
+      </div>
+    );
+  }
+
   if (!s) return null;
 
   if (!s.available) {

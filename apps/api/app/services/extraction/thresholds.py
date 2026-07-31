@@ -6,10 +6,12 @@
 
 # --- 스캔 판정 (docs/pdf/scanned-page-detection.md) ---
 SCAN_MIN_CHARS = 20  # 이 미만이면 텍스트 없는 페이지로 간주
+SCAN_MIN_WORDS = 3  # 이 미만이면 텍스트 없는 페이지로 간주 (OCR_EMPTY_MIN_WORDS와 동일 기준)
 SCAN_DIGITAL_MIN_CHARS = 120  # 이 이상이면 텍스트 페이지로 확신
 SCAN_IMAGE_RATIO_SCANNED = 0.55  # 텍스트 없음 + 이미지 비율 ≥ → scanned
 SCAN_IMAGE_RATIO_MIXED = 0.45  # 텍스트 있음 + 이미지 비율 ≥ → mixed
 SCAN_FULL_PAGE_IMAGE_RATIO = 0.85  # 단일 이미지가 페이지의 이 비율 이상이면 전면 스캔 신호
+SCAN_MIN_TEXT_AREA_RATIO = 0.03  # 텍스트 블록 면적이 이 미만이면 "실질적 텍스트 없음" 보조 신호
 SCAN_VALID_CHAR_RATIO = 0.60  # 유효(출력 가능) 문자 비율이 이 미만이면 추출 신뢰 불가
 OCR_REQUIRED_MIXED_MAX_CHARS = 60  # mixed인데 문자 수가 이 이하면 OCR 권장
 

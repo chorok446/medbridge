@@ -68,37 +68,84 @@ class TestScanClassify:
     def test_digital(self):
         r = classify_page(
             char_count=500, word_count=100, image_area_ratio=0.05,
-            full_page_image=False, has_text_blocks=True, raw_text="정상 본문" * 100,
+            full_page_image=False, has_text_blocks=True, has_images=False,
+            text_area_ratio=0.4, raw_text="정상 본문" * 100,
         )
         assert r.verdict == ScanVerdict.DIGITAL and not r.requires_ocr
 
     def test_scanned_full_image_no_text(self):
         r = classify_page(
             char_count=0, word_count=0, image_area_ratio=0.98,
-            full_page_image=True, has_text_blocks=False, raw_text="",
+            full_page_image=True, has_text_blocks=False, has_images=True,
+            text_area_ratio=0.0, raw_text="",
         )
         assert r.verdict == ScanVerdict.SCANNED and r.requires_ocr
 
     def test_mixed_text_over_image(self):
         r = classify_page(
             char_count=300, word_count=60, image_area_ratio=0.6,
-            full_page_image=False, has_text_blocks=True, raw_text="본문" * 200,
+            full_page_image=False, has_text_blocks=True, has_images=True,
+            text_area_ratio=0.3, raw_text="본문" * 200,
         )
         assert r.verdict == ScanVerdict.MIXED and not r.requires_ocr
 
     def test_blank_page_is_unknown_without_ocr(self):
         r = classify_page(
             char_count=0, word_count=0, image_area_ratio=0.0,
-            full_page_image=False, has_text_blocks=False, raw_text="",
+            full_page_image=False, has_text_blocks=False, has_images=False,
+            text_area_ratio=0.0, raw_text="",
         )
         assert r.verdict == ScanVerdict.UNKNOWN and not r.requires_ocr
 
     def test_broken_font_mapping_needs_ocr(self):
         r = classify_page(
             char_count=300, word_count=50, image_area_ratio=0.0,
-            full_page_image=False, has_text_blocks=True, raw_text="�" * 300,
+            full_page_image=False, has_text_blocks=True, has_images=False,
+            text_area_ratio=0.3, raw_text="�" * 300,
         )
         assert r.requires_ocr
+
+    def test_image_only_page_needs_ocr_even_if_area_ratio_undetected(self):
+        """Windows 실기기 회귀: 스캐너 인코딩(CCITT 등)으로 image_area_ratio가
+        신뢰할 수 없게 0에 가깝게 나와도, 텍스트가 없고 이미지가 있으면(has_images)
+        OCR 대상으로 판정해야 한다."""
+        r = classify_page(
+            char_count=0, word_count=0, image_area_ratio=0.0,
+            full_page_image=False, has_text_blocks=False, has_images=True,
+            text_area_ratio=0.0, raw_text="",
+        )
+        assert r.verdict == ScanVerdict.SCANNED
+        assert r.requires_ocr
+        assert r.confidence == pytest.approx(0.6)  # 면적 신호가 약해 확신도는 낮게
+
+    def test_sparse_leaked_text_word_count_still_triggers_ocr(self):
+        """글자 수는 SCAN_MIN_CHARS를 넘어도(예: 페이지 번호 반복) 단어 수가
+        극히 적으면 텍스트 없는 페이지로 취급한다."""
+        r = classify_page(
+            char_count=25, word_count=1, image_area_ratio=0.0,
+            full_page_image=False, has_text_blocks=True, has_images=True,
+            text_area_ratio=0.01, raw_text="1 1 1 1 1 1 1 1 1 1 1 1 1",
+        )
+        assert r.requires_ocr
+
+    def test_low_text_area_ratio_catches_image_when_area_detection_fails(self):
+        """본문 텍스트 면적 비율이 극히 낮으면(대부분이 이미지라는 신호),
+        image_area_ratio/full_page_image가 실패해도 OCR 대상으로 잡는다."""
+        r = classify_page(
+            char_count=40, word_count=6, image_area_ratio=0.0,
+            full_page_image=False, has_text_blocks=True, has_images=True,
+            text_area_ratio=0.01, raw_text="캡션 텍스트만 조금 있음",
+        )
+        assert r.verdict == ScanVerdict.SCANNED and r.requires_ocr
+
+    def test_digital_page_without_images_never_flagged(self):
+        """디지털 문서는 has_images=False인 한 절대 SCANNED로 잘못 승격되지 않는다."""
+        r = classify_page(
+            char_count=200, word_count=40, image_area_ratio=0.0,
+            full_page_image=False, has_text_blocks=True, has_images=False,
+            text_area_ratio=0.25, raw_text="정상 디지털 본문" * 20,
+        )
+        assert r.verdict == ScanVerdict.DIGITAL and not r.requires_ocr
 
 
 class TestEngineOnFixtures:

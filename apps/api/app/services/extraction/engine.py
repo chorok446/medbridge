@@ -64,6 +64,8 @@ class PageData:
     image_bboxes: list[BBox]
     image_area_ratio: float
     full_page_image: bool
+    has_images: bool
+    text_area_ratio: float
 
 
 def open_document(path: str) -> pymupdf.Document:
@@ -144,6 +146,13 @@ def extract_page(doc: pymupdf.Document, index: int) -> PageData:
     except Exception:
         pass  # 이미지 정보 실패는 페이지 실패로 이어지지 않는다
     image_area_ratio = min(1.0, covered / page_area)
+    has_images = len(image_bboxes) > 0
+
+    # 텍스트 블록이 실제로 덮는 면적 비율 — image_area_ratio/full_page_image가
+    # 스캐너 인코딩(CCITT/JBIG2 등)으로 신뢰할 수 없을 때, 텍스트가 페이지의
+    # 극히 일부만 차지한다는 사실 자체가 "나머지는 이미지"라는 보조 신호가 된다.
+    text_covered = sum(bbox_area(b.bbox) for b in blocks if b.block_type == "text")
+    text_area_ratio = min(1.0, text_covered / page_area)
 
     # 표 (실패해도 페이지 추출은 계속)
     tables: list[TableRec] = []
@@ -194,4 +203,6 @@ def extract_page(doc: pymupdf.Document, index: int) -> PageData:
         image_bboxes=image_bboxes,
         image_area_ratio=image_area_ratio,
         full_page_image=full_page_image,
+        has_images=has_images,
+        text_area_ratio=text_area_ratio,
     )

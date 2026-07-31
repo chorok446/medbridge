@@ -103,6 +103,33 @@ class TestExtractionFlow:
         doc = await upload_extracted(client, fx.scanned_page_doc(text_pages=0, scanned_pages=2))
         assert doc["processingStatus"] == "ocr_required"
 
+    async def test_image_only_six_page_document_all_pages_need_ocr(self, client):
+        """실기기 회귀: 글자 선택이 안 되는 이미지 전용 PDF의 모든 페이지가
+        requires_ocr=True로 판정되고, ocr-status가 전 페이지를 대상으로 잡아야 한다."""
+        doc = await upload_extracted(
+            client, fx.scanned_page_doc(text_pages=0, scanned_pages=6)
+        )
+        assert doc["processingStatus"] == "ocr_required"
+        pages = (await client.get(f"/api/documents/{doc['id']}/pages")).json()["data"]
+        assert len(pages) == 6
+        assert all(p["requiresOcr"] for p in pages)
+        assert all(p["scanVerdict"] == "scanned" for p in pages)
+
+        status = (await client.get(f"/api/documents/{doc['id']}/ocr-status")).json()["data"]
+        assert sorted(status["remainingOcrPages"]) == [1, 2, 3, 4, 5, 6]
+
+    async def test_mixed_document_only_scanned_pages_are_ocr_targets(self, client):
+        doc = await upload_extracted(
+            client, fx.scanned_page_doc(text_pages=1, scanned_pages=2)
+        )
+        pages = (await client.get(f"/api/documents/{doc['id']}/pages")).json()["data"]
+        by_number = {p["pageNumber"]: p for p in pages}
+        assert not by_number[1]["requiresOcr"]
+        assert by_number[2]["requiresOcr"] and by_number[3]["requiresOcr"]
+
+        status = (await client.get(f"/api/documents/{doc['id']}/ocr-status")).json()["data"]
+        assert sorted(status["remainingOcrPages"]) == [2, 3]
+
     async def test_reprocess_replaces_rows_without_duplicates(self, client):
         doc = await upload_extracted(client, fx.single_column_korean(pages=2))
         assert doc["processingStatus"] == "extracted"
