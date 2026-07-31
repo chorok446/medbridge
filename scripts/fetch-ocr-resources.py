@@ -17,6 +17,8 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
+sys.stdout.reconfigure(encoding="utf-8")  # Windows 콘솔(cp1252)에서 한글 출력 보장
+
 ROOT = Path(__file__).resolve().parents[1]
 DEST = ROOT / "apps/desktop/src-tauri/resources/ocr"
 
@@ -112,7 +114,7 @@ def main() -> None:
         print(f"::error::OCR 리소스 누락: {missing}")
         sys.exit(1)
 
-    (DEST / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    (DEST / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     total = sum(p.stat().st_size for p in DEST.rglob("*") if p.is_file())
     print(f"OK: OCR 리소스 준비 완료 — 총 {total / 1e6:.1f} MB")
 

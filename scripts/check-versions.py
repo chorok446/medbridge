@@ -9,17 +9,21 @@ import re
 import sys
 from pathlib import Path
 
+sys.stdout.reconfigure(encoding="utf-8")  # Windows 콘솔(cp1252)에서 한글 출력 보장
+
 ROOT = Path(__file__).resolve().parents[1]
 
-web = json.loads((ROOT / "apps/web/package.json").read_text())["version"]
-tauri = json.loads((ROOT / "apps/desktop/src-tauri/tauri.conf.json").read_text())["version"]
-desktop = json.loads((ROOT / "apps/desktop/package.json").read_text())["version"]
+web = json.loads((ROOT / "apps/web/package.json").read_text(encoding="utf-8"))["version"]
+tauri = json.loads(
+    (ROOT / "apps/desktop/src-tauri/tauri.conf.json").read_text(encoding="utf-8")
+)["version"]
+desktop = json.loads((ROOT / "apps/desktop/package.json").read_text(encoding="utf-8"))["version"]
 
-init_text = (ROOT / "apps/api/app/__init__.py").read_text()
+init_text = (ROOT / "apps/api/app/__init__.py").read_text(encoding="utf-8")
 match = re.search(r'__version__\s*=\s*"([^"]+)"', init_text)
 sidecar = match.group(1) if match else "(missing)"
 
-pyproject = (ROOT / "apps/api/pyproject.toml").read_text()
+pyproject = (ROOT / "apps/api/pyproject.toml").read_text(encoding="utf-8")
 match = re.search(r'^version\s*=\s*"([^"]+)"', pyproject, re.M)
 api_pkg = match.group(1) if match else "(missing)"
 
