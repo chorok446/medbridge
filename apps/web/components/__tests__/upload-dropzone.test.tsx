@@ -43,7 +43,7 @@ describe("UploadDropzone", () => {
 
   it("최대 크기를 초과한 파일을 거부한다", async () => {
     render(<UploadDropzone onUploaded={vi.fn()} />);
-    await userEvent.upload(getInput(), pdfFile("big.pdf", 51 * 1024 * 1024));
+    await userEvent.upload(getInput(), pdfFile("big.pdf", 801 * 1024 * 1024));
     expect(await screen.findByRole("alert")).toHaveTextContent("최대 크기");
   });
 

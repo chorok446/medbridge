@@ -5,7 +5,7 @@ import { uploadDocument, type UploadHandle } from "@/lib/api/documents";
 import { formatBytes } from "@/lib/format";
 import type { DocumentCreated } from "@/types/api";
 
-const MAX_MB = Number(process.env.NEXT_PUBLIC_MAX_UPLOAD_MB ?? "50");
+const MAX_MB = Number(process.env.NEXT_PUBLIC_MAX_UPLOAD_MB ?? "800");
 
 interface Props {
   onUploaded: (doc: DocumentCreated) => void;

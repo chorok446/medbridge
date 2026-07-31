@@ -21,7 +21,7 @@ class Settings(BaseSettings):
 
     database_url_override: str | None = Field(default=None, alias="DATABASE_URL")
 
-    max_pdf_size_mb: int = 50
+    max_pdf_size_mb: int = 800
     max_concurrent_jobs: int = 2
 
     # 실제 상용 임베딩 공급자는 아직 없다 — "disabled"가 유일한 기본값이며,
