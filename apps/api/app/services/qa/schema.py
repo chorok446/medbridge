@@ -134,11 +134,13 @@ def _polarity_consistent(claim_text: str, haystack: str) -> bool:
 
     어휘 중복만으로는 "A는 X한다"의 반대인 "A는 X하지 않는다"가 통과한다(핵심 토큰이
     거의 겹치므로). claim에 나타난 부정 표지가 근거 원문에도 있어야 supported로 인정한다.
-    ponytail: 명시적 부정소만 잡는다. 증가↔감소 같은 반의어 뒤집힘은 함의 검증(NLI)
-    모델이 있어야 하며 이번 스프린트 범위 밖 — 알려진 상한.
+    명시적 부정소만 잡는다. 증가↔감소 같은 반의어 뒤집힘은 함의 검증(NLI) 모델이
+    있어야 하며 이번 스프린트 범위 밖 — 알려진 상한.
     """
-    hay = f" {haystack} "
-    claim = f" {claim_text.lower()} "
+    # 공백류(개행·탭 포함)를 단일 스페이스로 정규화 — " 안 " 같은 공백 포함 표지가
+    # 줄바꿈 경계에서도 매치되게 한다.
+    hay = " " + re.sub(r"\s+", " ", haystack) + " "
+    claim = " " + re.sub(r"\s+", " ", claim_text.lower()) + " "
     for marker in _NEGATION_MARKERS:
         if marker in claim and marker not in hay:
             return False

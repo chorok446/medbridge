@@ -114,7 +114,10 @@ class OpenAICompatibleStreamingQaProvider:
         self.is_local = is_local
         # 테스트에서 line_source(콜러블)를 주입하면 실제 네트워크 없이 SSE 줄을 공급한다
         self._line_source = line_source
-        self.available = bool(self._endpoint and self.model_name and self._api_key)
+        # 로컬(Ollama 등) 공급자는 API 키가 필요 없다 — 외부 공급자만 키를 요구한다.
+        self.available = bool(
+            self._endpoint and self.model_name and (self.is_local or self._api_key)
+        )
 
     def stream_answer(self, request: QaRequest, cancel_token: CancelToken) -> Iterator[dict]:
         payload = {
@@ -183,9 +186,11 @@ class OpenAICompatibleStreamingQaProvider:
                 yield event
                 if event["type"] == "final":
                     return
-        # 마지막 미완결 줄에 완성된 이벤트가 있으면 낸다
+        # 마지막 미완결 줄에 완성된 이벤트가 있으면 낸다(claim 상한은 여기에도 적용)
         tail = _parse_semantic(content_buf)
         if tail is not None:
+            if tail["type"] == "claim" and claim_count + 1 > MAX_CLAIMS:
+                return
             yield tail
 
 

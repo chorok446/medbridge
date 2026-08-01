@@ -145,3 +145,18 @@ class TestOpenAIStreaming:
     def test_available_flag(self):
         p = self._provider([])
         assert p.available is True
+
+    def test_local_provider_available_without_api_key(self):
+        # 로컬(Ollama 등)은 API 키 없이도 사용 가능해야 한다
+        p = OpenAICompatibleStreamingQaProvider(
+            endpoint="http://127.0.0.1:11434/v1", model_name="llama", api_key="",
+            is_local=True,
+        )
+        assert p.available is True
+
+    def test_external_provider_needs_api_key(self):
+        p = OpenAICompatibleStreamingQaProvider(
+            endpoint="https://api.example.com/v1", model_name="gpt-x", api_key="",
+            is_local=False,
+        )
+        assert p.available is False

@@ -1,4 +1,4 @@
-"""문서 Q&A API — 스레드 CRUD + 질문/재시도(동기 JSON, 스트리밍 없음).
+"""문서 Q&A API — 스레드 CRUD + 질문/재시도(동기 JSON) + 스트리밍(NDJSON)·취소·상태 조회.
 
 기술 정보(chunk id·모델명·bbox 숫자·raw score)는 응답에 노출하지 않는다. 출처는
 사용자 네비게이션용 source_refs(page/bbox)만 내려준다.
@@ -245,11 +245,20 @@ async def stream_message(
     start_chunk_rev = doc.chunk_revision
 
     async def _gen():
+        total = 0
         async for event in qa_stream.run_stream(
             document_id, thread_id, aid, user_content, request_id,
             start_content_rev, start_chunk_rev, request,
         ):
-            yield sp.encode_event(event)
+            chunk = sp.encode_event(event)
+            if len(chunk) > sp.MAX_EVENT_BYTES:
+                continue  # 개별 이벤트가 상한 초과 → 건너뛴다(폭주 방지)
+            total += len(chunk)
+            if total > sp.MAX_STREAM_BYTES:
+                # 총 스트림 상한 초과 → 에러로 마무리(run_stream finally가 메시지를 terminal 확정)
+                yield sp.encode_event(sp.error_event("QA_STREAM_TOO_LARGE", "답변이 너무 깁니다."))
+                return
+            yield chunk
 
     return StreamingResponse(
         _gen(),

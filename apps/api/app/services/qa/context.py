@@ -67,9 +67,14 @@ async def retrieve(db: AsyncSession, document_id: uuid.UUID, question: str) -> R
         return RetrievalResult(chunks=[], lookup={}, retrieval_mode=mode, searched_ids=[])
 
     # 검색 순위대로 DocumentChunk 전체 텍스트·출처를 재조회한다.
+    # document_id도 함께 건다 — 다른 문서 청크가 섞이지 않게 하는 방어선(id는 이미
+    # document_id 범위 검색 결과지만 재조회에서도 소속을 강제한다).
     rows = (
         await db.execute(
-            select(DocumentChunk).where(DocumentChunk.id.in_(ordered_ids))
+            select(DocumentChunk).where(
+                DocumentChunk.id.in_(ordered_ids),
+                DocumentChunk.document_id == document_id,
+            )
         )
     ).scalars().all()
     by_id = {row.id: row for row in rows}
