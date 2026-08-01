@@ -15,13 +15,14 @@
 
 import asyncio
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from sqlalchemy import select
 
 from app.core.logging import get_logger
 from app.models.document import Document
 from app.models.summary import SummaryNode, SummaryRun
+from app.services.summary.endpoint import SummaryNetworkError
 from app.services.summary.grouping import build_groups
 from app.services.summary.hierarchy import (
     build_context_key,
@@ -44,6 +45,7 @@ from app.services.summary.provider import (
 )
 from app.services.summary.schema import ArtifactDraft
 from app.services.summary.settings import (
+    GROUP_SUMMARY_MAX_CHARS,
     PROMPT_VERSION,
     REDUCE_FAN_IN,
     SCHEMA_VERSION,
@@ -54,6 +56,14 @@ logger = get_logger(__name__)
 # 전체 청크 해시 재계산은 비싸다(청크 수만큼 행 조회). 노드마다 하지 않고 이 간격마다
 # 확인하며, 저장 직전에는 summary_job이 반드시 한 번 더 확인한다.
 FULL_HASH_CHECK_INTERVAL = 25
+
+# 그룹이 모델 컨텍스트를 넘으면 절반으로 나눠 다시 시도하는 최대 깊이.
+#
+# Ollama는 가용 메모리에 맞춰 컨텍스트를 **기기마다 다르게** 잡고(같은 0.32.5에서도
+# 8192로 뜨는 기기와 더 작게 뜨는 기기가 있다), OpenAI 호환 endpoint로는 요청별 num_ctx를
+# 지정할 수도, 실제 값을 조회할 수도 없다. 그래서 상한을 상수로 추측하는 대신 실패했을 때
+# 입력을 줄여 적응한다. 깊이 3이면 그룹을 1/8까지 쪼갠다.
+MAX_SPLIT_DEPTH = 3
 
 
 class SummaryCancelled(Exception):
@@ -355,7 +365,7 @@ async def _process_node(
 
     # 모델 호출은 트랜잭션 밖에서 한다 — writer 락을 붙잡은 채 네트워크를 기다리지 않는다.
     try:
-        summary = await asyncio.to_thread(provider.summarize_group, request)
+        text = await _summarize_adaptively(provider, request, document_id=document_id)
     except Exception as exc:
         # 어느 노드에서 죽었는지 남긴다. 이게 없으면 "요약 실패"만 보이고 첫 호출에서
         # 실패했는지 수백 번째에서 실패했는지 구분할 수 없다(원인 범위가 완전히 다르다).
@@ -372,7 +382,6 @@ async def _process_node(
             failure_reason=getattr(exc, "reason", None) or "none",
         )
         raise
-    text = summary.summary_text
 
     async with factory() as session:
         node = SummaryNode(
@@ -400,6 +409,94 @@ async def _process_node(
         source_chunk_ids=list(source_ids),
         section_title=section_title,
     )
+
+
+def _is_input_too_large(exc: Exception) -> bool:
+    """입력을 줄이면 풀릴 수 있는 실패인지.
+
+    context_overflow는 확정 신호다. finish_length는 출력이 잘린 것이지만, 입력이 클수록
+    모델이 장황해지는 경향이 있어 나눠 보면 통과하는 경우가 많다.
+    """
+    if not isinstance(exc, SummaryNetworkError):
+        return False
+    return exc.category == "context_overflow" or exc.reason == "finish_length"
+
+
+async def _summarize_adaptively(
+    provider,
+    request: GroupRequest,
+    *,
+    document_id: uuid.UUID,
+    depth: int = 0,
+) -> str:
+    """그룹 요약. 입력이 모델 컨텍스트를 넘으면 절반으로 나눠 다시 시도한다.
+
+    Ollama가 기기마다 다른 컨텍스트로 모델을 올리고 서버는 그 값을 알 수 없으므로,
+    상한을 추측하는 대신 실패했을 때 적응한다. 나눈 요약들은 다시 한 번 합쳐 노드
+    하나당 요약 하나라는 계약을 유지한다(출처는 호출자가 서버 소유로 계산한다).
+    """
+    try:
+        summary = await asyncio.to_thread(provider.summarize_group, request)
+        return summary.summary_text
+    except Exception as exc:
+        if (
+            not _is_input_too_large(exc)
+            or depth >= MAX_SPLIT_DEPTH
+            or len(request.chunks) < 2
+        ):
+            raise
+        logger.info(
+            "summary_group_split_retry",
+            document_id=str(document_id),
+            group_id=request.group_id,
+            depth=depth,
+            input_chunks=len(request.chunks),
+            input_chars=sum(len(c.text) for c in request.chunks),
+            failure_reason=getattr(exc, "reason", None) or "none",
+        )
+
+    mid = len(request.chunks) // 2
+    parts: list[str] = []
+    for index, half in enumerate((request.chunks[:mid], request.chunks[mid:])):
+        parts.append(
+            await _summarize_adaptively(
+                provider,
+                replace(request, group_id=f"{request.group_id}s{index}", chunks=half),
+                document_id=document_id,
+                depth=depth + 1,
+            )
+        )
+
+    # 나눈 요약을 다시 하나로 — 입력이 훨씬 짧아 같은 계약으로 통과한다.
+    merged = replace(
+        request,
+        chunks=[
+            ChunkInput(
+                chunk_id=f"{request.group_id}p{i}",
+                section_title=request.section_title,
+                text=text,
+                page_start=0,
+                page_end=0,
+            )
+            for i, text in enumerate(parts)
+        ],
+    )
+    try:
+        summary = await asyncio.to_thread(provider.summarize_group, merged)
+        return summary.summary_text
+    except Exception as exc:
+        if not _is_input_too_large(exc):
+            raise
+        # 병합마저 거부되면 더 부를수록 손해다. 이미 만든 부분 요약을 이어 붙여
+        # 계약 길이로 자른다 — 문서 전체 요약을 잃는 것보다 낫고, 출처는 그대로다.
+        logger.info(
+            "summary_group_merge_fallback",
+            document_id=str(document_id),
+            group_id=request.group_id,
+            parts=len(parts),
+            failure_reason=getattr(exc, "reason", None) or "none",
+        )
+        return " ".join(p.strip() for p in parts if p.strip())[:GROUP_SUMMARY_MAX_CHARS]
 
 
 async def _bump_completed(session, run_id: uuid.UUID) -> None:

@@ -13,6 +13,7 @@ from app.services.search.chunking import rebuild_chunks
 from app.services.summary import executor as executor_mod
 from app.services.summary import grouping as grouping_mod
 from app.services.summary import service as summary_service
+from app.services.summary.endpoint import SummaryNetworkError
 from app.services.summary.executor import (
     SummaryCancelled,
     SummaryNoContent,
@@ -331,6 +332,86 @@ class TestMultiLevelReduce:
                     if cid not in expected:
                         expected.append(cid)
             assert parent.source_chunk_ids_json == expected
+
+
+class TestAdaptiveSplitOnContextOverflow:
+    """Ollama는 기기마다 다른 컨텍스트로 모델을 올리고 서버는 그 값을 알 수 없다.
+
+    상한을 상수로 추측하는 대신, 컨텍스트 초과로 실패하면 입력을 절반으로 나눠
+    적응해야 한다. 실기기 대형 문서가 이 지점에서 통째로 실패했다.
+    """
+
+    async def test_oversized_group_is_split_and_succeeds(self, client, monkeypatch):
+        monkeypatch.setattr(grouping_mod, "GROUP_MAX_CHARS", 4000)
+        monkeypatch.setattr(grouping_mod, "GROUP_MIN_CHARS", 4000)
+        doc_id = await _upload_chunked(client, fx.single_column_korean(pages=4))
+
+        class ContextLimited(CountingProvider):
+            """청크가 1개를 넘으면 컨텍스트 초과로 거부하는 모의 모델."""
+
+            def __init__(self, limit: int = 1) -> None:
+                super().__init__()
+                self.limit = limit
+                self.rejections = 0
+
+            def summarize_group(self, request):
+                if len(request.chunks) > self.limit:
+                    self.rejections += 1
+                    raise SummaryNetworkError("context_overflow", "map_context_overflow")
+                return super().summarize_group(request)
+
+        provider = ContextLimited()
+        run_id, job_id, rev, chash = await _make_run(doc_id, provider)
+
+        drafts = await _run_executor(doc_id, run_id, job_id, rev, chash, provider)
+
+        assert provider.rejections > 0, "분할 경로가 실행되지 않았다"
+        assert drafts, "분할 후에도 artifact를 만들지 못했다"
+        # 분할해도 노드 하나당 요약 하나 계약은 유지된다
+        async with get_session_factory()() as s:
+            nodes = (
+                await s.execute(
+                    select(SummaryNode).where(SummaryNode.summary_run_id == run_id)
+                )
+            ).scalars().all()
+        for node in nodes:
+            assert node.summary_text.strip()
+            assert node.source_chunk_ids_json
+
+    async def test_split_gives_up_instead_of_looping_forever(self, client, monkeypatch):
+        """단일 청크마저 넘으면 더 쪼갤 수 없다 — 무한 분할 대신 실패해야 한다."""
+        monkeypatch.setattr(grouping_mod, "GROUP_MAX_CHARS", 4000)
+        monkeypatch.setattr(grouping_mod, "GROUP_MIN_CHARS", 4000)
+        doc_id = await _upload_chunked(client, fx.single_column_korean(pages=3))
+
+        class AlwaysOverflows(CountingProvider):
+            def summarize_group(self, request):
+                raise SummaryNetworkError("context_overflow", "map_context_overflow")
+
+        provider = AlwaysOverflows()
+        run_id, job_id, rev, chash = await _make_run(doc_id, provider)
+
+        with pytest.raises(SummaryNetworkError) as caught:
+            await _run_executor(doc_id, run_id, job_id, rev, chash, provider)
+        assert caught.value.category == "context_overflow"
+        # 깊이 제한이 있으므로 호출 횟수가 폭발하지 않는다
+        assert provider.group_calls < 40, f"분할 호출 {provider.group_calls}회 — 제한이 없다"
+
+    async def test_unrelated_failure_is_not_retried_by_splitting(self, client):
+        """입력 크기와 무관한 실패까지 나눠 재시도하면 호출만 낭비한다."""
+        doc_id = await _upload_chunked(client, fx.single_column_korean(pages=3))
+
+        class AuthBroken(CountingProvider):
+            def summarize_group(self, request):
+                self.group_calls += 1  # 실패해도 호출 횟수는 센다
+                raise SummaryNetworkError("auth_failed", "http_401")
+
+        provider = AuthBroken()
+        run_id, job_id, rev, chash = await _make_run(doc_id, provider)
+
+        with pytest.raises(SummaryNetworkError):
+            await _run_executor(doc_id, run_id, job_id, rev, chash, provider)
+        assert provider.group_calls == 1, "분할 재시도가 일어나면 안 된다"
 
 
 class TestSourceOwnership:
