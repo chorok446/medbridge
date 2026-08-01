@@ -197,4 +197,4 @@ class TestProviders:
             )
         )
         assert doc["overview"]["sourceChunkIds"] == ["c1"]
-        assert doc["studyCautions"]
+        assert doc["studyCautions"] == []

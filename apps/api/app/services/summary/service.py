@@ -17,7 +17,7 @@ from app.core.errors import AppError, ErrorCode
 from app.models.document import Document, DocumentJob
 from app.models.enums import JobStatus, JobType, SummaryRunStatus
 from app.models.search import DocumentChunk
-from app.models.summary import SummaryArtifact, SummaryRun
+from app.models.summary import SummaryArtifact, SummaryNode, SummaryRun
 from app.models.user import User
 from app.services.summary.factory import get_summary_provider
 from app.services.summary.pipeline import ChunkSnapshot
@@ -242,6 +242,29 @@ class SummaryStatus:
     current_revision: int
     progress: int
     can_retry: bool
+    failure_category: str | None
+
+
+def _run_progress(run: SummaryRun | None) -> int:
+    """실제 노드 완료 수 기준 진행률. 계층 계획 전에는 상태 기반 근사치를 쓴다.
+
+    대형 문서는 모델 호출이 수백 회라 상태만으로는 진행을 알 수 없다. 계획된 노드 수가
+    있으면 완료/계획 비율을 쓰되, 구조화 reduce와 저장이 남아 있으므로 실행 중에는
+    99%를 넘기지 않는다.
+    """
+    if run is None:
+        return 0
+    if run.status == SummaryRunStatus.SUCCEEDED:
+        return 100
+    if run.status in (SummaryRunStatus.FAILED, SummaryRunStatus.CANCELLED):
+        return 0
+    if run.status == SummaryRunStatus.QUEUED:
+        return 5
+    planned = run.planned_nodes or 0
+    if planned <= 0:
+        return 10  # RUNNING이지만 아직 그룹 계획 전
+    done = min(run.completed_nodes or 0, planned)
+    return max(10, min(99, 10 + int(done * 89 / planned)))
 
 
 async def get_summary_status(db: AsyncSession, doc: Document) -> SummaryStatus:
@@ -250,16 +273,13 @@ async def get_summary_status(db: AsyncSession, doc: Document) -> SummaryStatus:
     succeeded = await _latest_succeeded_run(db, doc.id)
     stale = bool(succeeded and succeeded.source_revision != doc.content_revision)
     status_val = run.status.value if run else None
-    # 진행률: 러너가 세분 진행을 추적하지 않으므로 상태 기반 근사치
-    progress = 0
-    if run:
-        progress = {
-            SummaryRunStatus.QUEUED: 5,
-            SummaryRunStatus.RUNNING: 50,
-            SummaryRunStatus.SUCCEEDED: 100,
-            SummaryRunStatus.FAILED: 0,
-            SummaryRunStatus.CANCELLED: 0,
-        }.get(run.status, 0)
+    progress = _run_progress(run)
+    failure_category: str | None = None
+    if run is not None and run.error_code is not None:
+        failure_category = {
+            "SUMMARY_TIMEOUT": "timeout",
+            "SUMMARY_INVALID_RESPONSE": "invalid_response",
+        }.get(run.error_code)
     can_retry = bool(
         provider.available
         and (run is None or run.status in (SummaryRunStatus.FAILED, SummaryRunStatus.CANCELLED))
@@ -272,6 +292,7 @@ async def get_summary_status(db: AsyncSession, doc: Document) -> SummaryStatus:
         current_revision=doc.content_revision,
         progress=progress,
         can_retry=can_retry,
+        failure_category=failure_category,
     )
 
 
@@ -328,5 +349,7 @@ async def delete_summaries(db: AsyncSession, doc: Document) -> None:
     await db.execute(
         delete(SummaryArtifact).where(SummaryArtifact.document_id == doc.id)
     )
+    # 체크포인트 노드도 함께 지운다 — 남겨두면 삭제 후 재요약이 옛 중간 결과를 재사용한다.
+    await db.execute(delete(SummaryNode).where(SummaryNode.document_id == doc.id))
     await db.execute(delete(SummaryRun).where(SummaryRun.document_id == doc.id))
     await db.commit()

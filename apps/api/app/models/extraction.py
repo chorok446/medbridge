@@ -135,10 +135,10 @@ class DocumentWord(Base):
         ForeignKey("document_pages.id", ondelete="CASCADE"), index=True
     )
     block_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("document_blocks.id", ondelete="CASCADE"), nullable=True
+        ForeignKey("document_blocks.id", ondelete="CASCADE"), nullable=True, index=True
     )
     line_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("document_lines.id", ondelete="SET NULL"), nullable=True
+        ForeignKey("document_lines.id", ondelete="SET NULL"), nullable=True, index=True
     )
     word_index: Mapped[int] = mapped_column(Integer)
     x0: Mapped[float] = mapped_column(Float)

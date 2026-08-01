@@ -6,7 +6,11 @@ import { PdfViewer } from "@/components/pdf-viewer";
 import { createSummary, getSummaries, getSummaryStatus, retrySummary } from "@/lib/api/summary";
 import type { DocumentSummary } from "@/types/api";
 import type { Rect } from "@/types/extraction";
-import type { SummaryArtifact, SummaryArtifactType } from "@/types/summary";
+import type {
+  SummaryArtifact,
+  SummaryArtifactType,
+  SummaryFailureCategory,
+} from "@/types/summary";
 
 interface Props {
   doc: DocumentSummary;
@@ -33,6 +37,16 @@ function artifactBody(a: SummaryArtifact): string {
   return String(
     c.text ?? c.summary ?? c.explanation ?? c.whyNeeded ?? c.context ?? c.value ?? "",
   );
+}
+
+function summaryFailureGuide(category: SummaryFailureCategory | null): string {
+  if (category === "timeout") {
+    return "요약 모델의 응답이 늦어 완료하지 못했어요. 잠시 후 다시 시도해 주세요.";
+  }
+  if (category === "invalid_response") {
+    return "요약 모델의 응답 형식이 올바르지 않아 완료하지 못했어요. 모델 상태를 확인한 뒤 다시 시도해 주세요.";
+  }
+  return "요약을 만들지 못했어요. 다시 시도해 주세요.";
 }
 
 /**
@@ -142,7 +156,7 @@ export function SummaryView({ doc, fileUrl }: Props) {
               <div className="rounded bg-slate-50 px-3 py-3 text-sm text-slate-700">
                 <p>
                   {status.status === "failed"
-                    ? "요약을 만들지 못했어요. 다시 시도해 주세요."
+                    ? summaryFailureGuide(status.failureCategory)
                     : status.status === "cancelled"
                       ? "요약이 취소되었어요."
                       : "아직 요약을 만들지 않았어요."}
@@ -171,16 +185,25 @@ export function SummaryView({ doc, fileUrl }: Props) {
             {/* 최신 시도가 실패했지만 이전 성공 요약이 남아 있는 경우 */}
             {artifacts.length > 0 && (status.status === "failed" || status.status === "cancelled") && (
               <div className="mb-3 rounded bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                최근 다시 요약이 {status.status === "failed" ? "실패" : "취소"}되어 이전 요약을
-                보여드려요.
-                <button
-                  type="button"
-                  onClick={() => retryMutation.mutate()}
-                  disabled={retryMutation.isPending}
-                  className="ml-1 text-blue-700 hover:underline disabled:opacity-50"
-                >
-                  다시 시도
-                </button>
+                <p>
+                  최근 다시 요약이 {status.status === "failed" ? "실패" : "취소"}되어 이전
+                  요약을 보여드려요.
+                </p>
+                {status.status === "failed" && (
+                  <p className="mt-1">
+                    {summaryFailureGuide(status.failureCategory)}
+                  </p>
+                )}
+                {status.canRetry && (
+                  <button
+                    type="button"
+                    onClick={() => retryMutation.mutate()}
+                    disabled={retryMutation.isPending}
+                    className="mt-1 text-blue-700 hover:underline disabled:opacity-50"
+                  >
+                    다시 시도
+                  </button>
+                )}
               </div>
             )}
 

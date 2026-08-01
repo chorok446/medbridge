@@ -16,6 +16,11 @@ from app.services.extraction.pipeline import run_extraction
 
 logger = get_logger(__name__)
 
+_ATTEMPTS_EXHAUSTED_CODE = "EXTRACTION_MAX_ATTEMPTS"
+_ATTEMPTS_EXHAUSTED_MESSAGE = (
+    "문서 내용을 읽는 작업이 반복해서 중단되었습니다. 다시 시도해 주세요."
+)
+
 
 async def _latest_job(session: AsyncSession, document_id: uuid.UUID) -> DocumentJob | None:
     stmt = (
@@ -28,6 +33,17 @@ async def _latest_job(session: AsyncSession, document_id: uuid.UUID) -> Document
         .limit(1)
     )
     return (await session.execute(stmt)).scalars().first()
+
+
+def mark_extraction_attempts_exhausted(doc: Document, job: DocumentJob) -> None:
+    """재시작으로 허용 횟수를 넘기기 전에 문서와 잡을 실패로 확정한다."""
+    transition(doc, ProcessingStatus.EXTRACTION_FAILED)
+    doc.failure_code = _ATTEMPTS_EXHAUSTED_CODE
+    doc.failure_message = _ATTEMPTS_EXHAUSTED_MESSAGE
+    job.status = JobStatus.FAILED
+    job.failure_code = _ATTEMPTS_EXHAUSTED_CODE
+    job.failure_message = _ATTEMPTS_EXHAUSTED_MESSAGE
+    job.completed_at = datetime.now(UTC)
 
 
 async def extract_document(document_id: uuid.UUID, correlation_id: str) -> None:
@@ -44,6 +60,16 @@ async def extract_document(document_id: uuid.UUID, correlation_id: str) -> None:
             logger.info("extract_skip", document_id=str(document_id))
             return
         job = await _latest_job(session, document_id)
+        if job is not None and job.attempt_count >= job.max_attempts:
+            mark_extraction_attempts_exhausted(doc, job)
+            await session.commit()
+            logger.warning(
+                "extract_attempts_exhausted",
+                document_id=str(document_id),
+                attempt_count=job.attempt_count,
+                max_attempts=job.max_attempts,
+            )
+            return
         job_id = job.id if job is not None else None
         if job is not None:
             job.status = JobStatus.RUNNING

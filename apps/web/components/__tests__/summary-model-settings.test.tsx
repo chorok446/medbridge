@@ -26,11 +26,12 @@ function settings(overrides: Record<string, unknown> = {}) {
 
 function renderSection() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const view = render(
     <QueryClientProvider client={client}>
       <SummaryModelSection />
     </QueryClientProvider>,
   );
+  return { ...view, client };
 }
 
 describe("SummaryModelSection", () => {
@@ -78,5 +79,34 @@ describe("SummaryModelSection", () => {
     await waitFor(() =>
       expect(screen.getByText("연결에 성공했습니다.")).toBeInTheDocument(),
     );
+  });
+
+  it("summary-settings 무효화 후 서버의 로컬 모델 값으로 폼을 다시 맞춘다", async () => {
+    apiMock.getSummarySettings
+      .mockResolvedValueOnce(settings())
+      .mockResolvedValue(
+        settings({
+          enabled: true,
+          providerType: "openai_compatible",
+          endpoint: "http://127.0.0.1:11434/v1",
+          modelName: "qwen3:8b",
+          isLocal: true,
+        }),
+      );
+
+    const { client } = renderSection();
+    const enabled = await screen.findByRole("checkbox", { name: "요약 모델 사용" });
+    expect(enabled).not.toBeChecked();
+
+    await client.invalidateQueries({ queryKey: ["summary-settings"] });
+
+    await waitFor(() =>
+      expect(screen.getByRole("checkbox", { name: "요약 모델 사용" })).toBeChecked(),
+    );
+    expect(screen.getByRole("checkbox", { name: /내 컴퓨터/ })).toBeChecked();
+    expect(screen.getByRole("textbox", { name: /서비스 주소/ })).toHaveValue(
+      "http://127.0.0.1:11434/v1",
+    );
+    expect(screen.getByRole("textbox", { name: /모델 이름/ })).toHaveValue("qwen3:8b");
   });
 });

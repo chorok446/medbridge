@@ -2,6 +2,10 @@
 
 그룹 생성 → map 요약 → reduce 구조화 → 출처 검증 → 수치·대상 결정론적 추출.
 저장과 revision 게이트는 서비스 계층이 담당한다. 이 모듈은 chunk 스냅샷만 받는다.
+
+대형 문서는 체크포인트가 필요해 `app.services.tasks.summary_job`의 실행기가 map/reduce를
+단계별로 저장하며 돌린다. 그 경로도 여기의 `build_chunk_lookup`·`build_chunk_inputs`·
+`finalize_artifacts`를 그대로 써서 출처 검증·수치 추출 규칙이 갈라지지 않게 한다.
 """
 
 from dataclasses import dataclass
@@ -32,22 +36,16 @@ class ChunkSnapshot:
     source_refs: list[dict]
 
 
-def run_summary(
-    provider: SummaryProvider,
-    chunks: list[ChunkSnapshot],
-    *,
-    learner_level: str,
-    language: str,
-    include_sections: bool = True,
-    include_prerequisites: bool = True,
-) -> list[ArtifactDraft]:
-    """청크 스냅샷 → 검증된 artifact 초안 목록. 출처 없는 항목은 포함하지 않는다."""
-    lookup: dict[str, ChunkRef] = {
+def build_chunk_lookup(chunks: list[ChunkSnapshot]) -> dict[str, ChunkRef]:
+    """chunk_id → 서버 소유 출처. 모델 출력은 이 표에 있는 id만 통과한다."""
+    return {
         c.chunk_id: ChunkRef(chunk_id=c.chunk_id, source_refs=c.source_refs, text=c.text)
         for c in chunks
     }
 
-    inputs = [
+
+def build_chunk_inputs(chunks: list[ChunkSnapshot]) -> list[ChunkInput]:
+    return [
         ChunkInput(
             chunk_id=c.chunk_id,
             section_title=c.section_title,
@@ -57,7 +55,43 @@ def run_summary(
         )
         for c in chunks
     ]
-    groups = build_groups(inputs)
+
+
+def finalize_artifacts(
+    structured: dict, lookup: dict[str, ChunkRef], *, learner_level: str
+) -> list[ArtifactDraft]:
+    """구조화 요약 → 검증된 artifact 초안. 출처 없는 항목은 절대 남기지 않는다."""
+    drafts = build_artifacts(structured, lookup, learner_level=learner_level)
+
+    # 수치·대상 집단은 결정론적 추출(원문 검증 포함) — 모델 출력을 쓰지 않는다.
+    next_pos = len(drafts)
+    number_drafts = extract_number_artifacts(lookup, start_position=next_pos)
+    pop_drafts = extract_population_artifacts(
+        lookup, start_position=next_pos + len(number_drafts)
+    )
+    drafts.extend(number_drafts)
+    drafts.extend(pop_drafts)
+
+    # 최종 안전장치: 출처 없는 artifact는 절대 남기지 않는다
+    return [d for d in drafts if d.source_chunk_ids and d.source_refs]
+
+
+def run_summary(
+    provider: SummaryProvider,
+    chunks: list[ChunkSnapshot],
+    *,
+    learner_level: str,
+    language: str,
+    include_sections: bool = True,
+    include_prerequisites: bool = True,
+) -> list[ArtifactDraft]:
+    """단발 실행 경로 — 체크포인트 없이 map 전체 + reduce 1회.
+
+    그룹 수가 REDUCE_FAN_IN 이하인 작은 문서와 결정론적 공급자 테스트에서 쓴다. 대형
+    문서는 summary_job의 체크포인트 실행기가 처리한다.
+    """
+    lookup = build_chunk_lookup(chunks)
+    groups = build_groups(build_chunk_inputs(chunks))
 
     # map: 그룹별 요약. 원본 chunk id를 유지한다.
     group_summaries = [
@@ -83,17 +117,4 @@ def run_summary(
             include_prerequisites=include_prerequisites,
         )
     )
-
-    drafts = build_artifacts(structured, lookup, learner_level=learner_level)
-
-    # 수치·대상 집단은 결정론적 추출(원문 검증 포함) — 모델 출력을 쓰지 않는다.
-    next_pos = len(drafts)
-    number_drafts = extract_number_artifacts(lookup, start_position=next_pos)
-    pop_drafts = extract_population_artifacts(
-        lookup, start_position=next_pos + len(number_drafts)
-    )
-    drafts.extend(number_drafts)
-    drafts.extend(pop_drafts)
-
-    # 최종 안전장치: 출처 없는 artifact는 절대 남기지 않는다
-    return [d for d in drafts if d.source_chunk_ids and d.source_refs]
+    return finalize_artifacts(structured, lookup, learner_level=learner_level)

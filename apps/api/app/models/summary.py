@@ -16,6 +16,7 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    Text,
     Uuid,
     func,
 )
@@ -52,6 +53,9 @@ class SummaryRun(Base):
     source_chunk_hash: Mapped[str] = mapped_column(String(64))
     learner_level: Mapped[str] = mapped_column(String(30))
     language: Mapped[str] = mapped_column(String(10), default="ko")
+    # 계층 요약 진행률 — 계획된 노드 수와 완료(재사용 포함) 노드 수. 0이면 아직 계획 전.
+    planned_nodes: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    completed_nodes: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -74,6 +78,45 @@ class SummarySettings(Base):
     endpoint: Mapped[str | None] = mapped_column(String(500), nullable=True)
     model_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     is_local: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow, server_default=func.now(), onupdate=_utcnow
+    )
+
+
+class SummaryNode(Base):
+    """계층 요약 체크포인트 — 한 번 성공한 중간 요약을 재사용·재개 단위로 보존한다.
+
+    출처(source_chunk_ids_json)는 모델 출력이 아니라 서버가 계산한 값이다. 레벨 0은
+    그룹에 포함된 chunk id, 레벨 1+는 자식 노드 출처의 합집합이다.
+    """
+
+    __tablename__ = "summary_nodes"
+    __table_args__ = (
+        # 한 run 안에서 (레벨, 위치)는 유일하다 — 중복 실행·중복 저장 방지
+        Index("uq_summary_nodes_run_level_pos", "summary_run_id", "level", "position", unique=True),
+        # 재사용 조회: 같은 문서에서 같은 input_hash를 가진 성공 노드를 찾는다
+        Index("ix_summary_nodes_doc_hash", "document_id", "input_hash"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    document_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), index=True
+    )
+    summary_run_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("summary_runs.id", ondelete="CASCADE"), index=True
+    )
+    level: Mapped[int] = mapped_column(Integer, default=0)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    input_hash: Mapped[str] = mapped_column(String(64))
+    output_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    summary_text: Mapped[str] = mapped_column(Text, default="")
+    source_chunk_ids_json: Mapped[list] = mapped_column(JSON, default=list)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    reused: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now()
     )

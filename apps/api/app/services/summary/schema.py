@@ -38,10 +38,13 @@ class ArtifactDraft:
 
 def _valid_ids(raw_ids, lookup: dict[str, ChunkRef]) -> list[str]:
     """문서에 실제 존재하는 chunk id만, 순서를 유지하며 중복 없이 남긴다."""
+    if not isinstance(raw_ids, list):
+        return []
     seen: set[str] = set()
     out: list[str] = []
-    for rid in raw_ids or []:
-        sid = str(rid)
+    for sid in raw_ids:
+        if not isinstance(sid, str):
+            continue
         if sid in lookup and sid not in seen:
             seen.add(sid)
             out.append(sid)
@@ -66,7 +69,13 @@ def _refs_for(ids: list[str], lookup: dict[str, ChunkRef]) -> list[dict]:
 
 
 def _clean_text(value, limit: int) -> str:
-    return str(value or "").strip()[:limit]
+    # 모델의 arbitrary value를 문자열로 강제 변환하거나 조용히 자르지 않는다.
+    if not isinstance(value, str):
+        return ""
+    cleaned = value.strip()
+    if not cleaned or len(cleaned) > limit:
+        return ""
+    return cleaned
 
 
 def build_artifacts(
@@ -148,7 +157,7 @@ def build_artifacts(
             continue
         concept = _clean_text(pr.get("concept"), 200)
         why = _clean_text(pr.get("whyNeeded"), GENERIC_TEXT_MAX_CHARS)
-        source_type = str(pr.get("sourceType") or "document")
+        source_type = pr.get("sourceType") or "document"
         if not concept or source_type != "document":
             continue
         add(
@@ -168,7 +177,9 @@ def build_artifacts(
         text = _clean_text(le.get("text"), GENERIC_TEXT_MAX_CHARS)
         if not text:
             continue
-        level = str(le.get("level") or learner_level)
+        level = le.get("level") or learner_level
+        if not isinstance(level, str):
+            continue
         add(
             SummaryArtifactType.LEARNER_EXPLANATION,
             level,
@@ -176,13 +187,7 @@ def build_artifacts(
             le.get("sourceChunkIds"),
         )
 
-    # study cautions
-    for sc in structured.get("studyCautions") or []:
-        if not isinstance(sc, dict):
-            continue
-        text = _clean_text(sc.get("text"), GENERIC_TEXT_MAX_CHARS)
-        if not text:
-            continue
-        add(SummaryArtifactType.STUDY_CAUTION, None, {"text": text}, sc.get("sourceChunkIds"))
+    # 모델의 studyCautions는 저장하지 않는다. 안전 고지는 문서 근거처럼 꾸며진 artifact가
+    # 아니라 SummaryView의 시스템 소유 고정 배너로 항상 표시한다.
 
     return drafts

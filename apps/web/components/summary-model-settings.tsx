@@ -9,12 +9,24 @@ import {
 } from "@/lib/api/settings";
 import type { SummaryModelSettings } from "@/lib/api/settings";
 
+function settingsSnapshotKey(settings: SummaryModelSettings): string {
+  return JSON.stringify([
+    settings.enabled,
+    settings.providerType,
+    settings.endpoint,
+    settings.modelName,
+    settings.isLocal,
+    settings.hasApiKey,
+  ]);
+}
+
 /**
  * 요약 모델 설정 — 사용 여부/공급자/endpoint/모델/API 키/연결 확인/외부 전송 경고.
  * API 키는 저장 후 되돌려 표시하지 않는다(설정됨/미설정만). 포트·env·JSON 설정법은
  * 노출하지 않는다.
  */
 export function SummaryModelSection() {
+  const [saved, setSaved] = useState(false);
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["summary-settings"],
     queryFn: getSummarySettings,
@@ -27,17 +39,38 @@ export function SummaryModelSection() {
     return <ErrorBoxInline onRetry={() => refetch()} />;
   }
   // 폼 상태를 서버 값으로 시드하기 위해 로드 완료 후에만 폼을 마운트한다(useEffect 불필요).
-  return <SummaryModelForm initial={data} />;
+  return (
+    <>
+      <SummaryModelForm
+        key={settingsSnapshotKey(data)}
+        initial={data}
+        onSaved={() => {
+          setSaved(true);
+          setTimeout(() => setSaved(false), 3000);
+        }}
+      />
+      {saved && (
+        <p role="status" className="mt-3 rounded bg-green-50 px-3 py-2 text-sm text-green-800">
+          저장되었습니다.
+        </p>
+      )}
+    </>
+  );
 }
 
-function SummaryModelForm({ initial }: { initial: SummaryModelSettings }) {
+function SummaryModelForm({
+  initial,
+  onSaved,
+}: {
+  initial: SummaryModelSettings;
+  onSaved: () => void;
+}) {
   const queryClient = useQueryClient();
   const [enabled, setEnabled] = useState(initial.enabled);
   const [endpoint, setEndpoint] = useState(initial.endpoint ?? "");
   const [modelName, setModelName] = useState(initial.modelName ?? "");
   const [isLocal, setIsLocal] = useState(initial.isLocal);
   const [apiKey, setApiKey] = useState("");
-  const [saved, setSaved] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
 
   const saveMutation = useMutation({
@@ -52,10 +85,9 @@ function SummaryModelForm({ initial }: { initial: SummaryModelSettings }) {
         ...(apiKey ? { apiKey } : {}),
       }),
     onSuccess: () => {
-      setSaved(true);
+      onSaved();
       setApiKey("");
-      queryClient.invalidateQueries({ queryKey: ["summary-settings"] });
-      setTimeout(() => setSaved(false), 3000);
+      void queryClient.invalidateQueries({ queryKey: ["summary-settings"] });
     },
   });
 
@@ -154,11 +186,6 @@ function SummaryModelForm({ initial }: { initial: SummaryModelSettings }) {
         </button>
       </div>
 
-      {saved && (
-        <p role="status" className="rounded bg-green-50 px-3 py-2 text-green-800">
-          저장되었습니다.
-        </p>
-      )}
       {saveMutation.isError && (
         <p role="alert" className="rounded bg-red-50 px-3 py-2 text-red-700">
           저장하지 못했습니다. 입력값을 확인해 주세요.

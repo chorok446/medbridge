@@ -43,6 +43,7 @@ class SummaryStatusOut(CamelModel):
     current_revision: int
     progress: int
     can_retry: bool
+    failure_category: str | None
 
 
 class SummaryArtifactOut(CamelModel):
@@ -96,6 +97,7 @@ async def summary_status(
             current_revision=s.current_revision,
             progress=s.progress,
             can_retry=s.can_retry,
+            failure_category=s.failure_category,
         )
     )
 

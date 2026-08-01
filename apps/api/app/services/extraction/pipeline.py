@@ -74,6 +74,16 @@ class ExtractionSummary:
         return ProcessingStatus.PARTIALLY_EXTRACTED
 
 
+@dataclass
+class _PreparedPage:
+    page_number: int
+    page_row: DocumentPage
+    block_rows: list[DocumentBlock]
+    line_rows: list[DocumentLine]
+    tail_rows: list[DocumentWord | DocumentTable]
+    requires_ocr: bool
+
+
 async def run_is_active(
     session: AsyncSession, document_id: uuid.UUID, job_id: uuid.UUID | None
 ) -> bool:
@@ -155,15 +165,8 @@ async def _write_failed_page(
     )
 
 
-async def _persist_page(
-    session: AsyncSession, document_id: uuid.UUID, page: PageData
-) -> bool:
-    """페이지 결과 저장 (교체 방식). 반환: requires_ocr.
-
-    관계 UUID를 미리 생성해 페이지 전체를 한 번에 add_all 한다 (flush 왕복 최소화).
-    """
-    await _delete_page_rows(session, document_id, page.page_number)
-
+def _prepare_page_rows(document_id: uuid.UUID, page: PageData) -> _PreparedPage:
+    """DB 트랜잭션 밖에서 페이지 분류·정규화와 ORM 행 생성을 끝낸다."""
     order = compute_reading_order(page.blocks, page.width, page.height)
     order_pos = {block_index: pos for pos, block_index in enumerate(order.order)}
     captions = _mark_caption_blocks(page)
@@ -301,15 +304,32 @@ async def _persist_page(
         for i, t in enumerate(page.tables)
     )
 
+    return _PreparedPage(
+        page_number=page.page_number,
+        page_row=page_row,
+        block_rows=block_rows,
+        line_rows=line_rows,
+        tail_rows=tail_rows,
+        requires_ocr=scan.requires_ocr,
+    )
+
+
+async def _persist_page(
+    session: AsyncSession, document_id: uuid.UUID, prepared: _PreparedPage
+) -> bool:
+    """준비된 페이지 행을 짧은 교체 트랜잭션으로 저장한다."""
+    await _delete_page_rows(session, document_id, prepared.page_number)
+
     # relationship 미정의 모델이므로 FK 의존 순서를 단계별 flush로 보장한다 (페이지당 4회)
-    session.add(page_row)
+    session.add(prepared.page_row)
     await session.flush()
-    session.add_all(block_rows)
+    session.add_all(prepared.block_rows)
     await session.flush()
-    session.add_all(line_rows)
+    session.add_all(prepared.line_rows)
     await session.flush()
-    session.add_all(tail_rows)
-    return scan.requires_ocr
+    session.add_all(prepared.tail_rows)
+    await session.flush()
+    return prepared.requires_ocr
 
 
 async def _apply_band_marks(session: AsyncSession, document_id: uuid.UUID) -> None:
@@ -419,6 +439,7 @@ async def run_extraction(
 
         for i in range(total):
             page: PageData | None = None
+            prepared: _PreparedPage | None = None
             error_name = ""
             try:
                 page = await asyncio.to_thread(engine_mod.extract_page, fitz_doc, i)
@@ -428,15 +449,28 @@ async def run_extraction(
                 )
                 error_name = type(exc).__name__
 
+            if page is not None:
+                try:
+                    prepared = await asyncio.to_thread(
+                        _prepare_page_rows, document_id, page
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "page_prepare_failed", document_id=str(document_id), page=i + 1
+                    )
+                    error_name = type(exc).__name__
+
             async with session_factory() as session:
                 if not await run_is_active(session, document_id, job_id):
                     return None  # 취소·삭제·새 실행으로 교체됨
-                if page is None:
+                if prepared is None:
                     await _write_failed_page(session, document_id, i + 1, error_name)
                     summary.failed += 1
                 else:
                     try:
-                        requires_ocr = await _persist_page(session, document_id, page)
+                        requires_ocr = await _persist_page(
+                            session, document_id, prepared
+                        )
                         if requires_ocr:
                             summary.ocr_required += 1
                         else:

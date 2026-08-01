@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocalAiSection } from "@/components/local-ai-settings";
@@ -36,15 +36,19 @@ const THREE = [
 
 function renderSection() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const view = render(
     <QueryClientProvider client={client}>
       <LocalAiSection />
     </QueryClientProvider>,
   );
+  return { ...view, client };
 }
 
 describe("LocalAiSection", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.clearAllMocks();
+  });
 
   it("Ollama 미실행이면 설치 안내를 열고 다시 확인할 수 있다", async () => {
     apiMock.getLocalAiStatus.mockResolvedValue({ status: "not_running" });
@@ -106,7 +110,12 @@ describe("LocalAiSection", () => {
     });
     // 첫 activate는 409(외부 존재) → 확인 후 성공
     apiMock.activateLocalModel
-      .mockRejectedValueOnce(new ApiError(409, "INVALID_STATE", "외부", false))
+      .mockRejectedValueOnce(
+        new ApiError(409, "EXTERNAL_AI_OVERWRITE_REQUIRED", "외부", false, {
+          details: { failureCategory: "external_settings_conflict" },
+          correlationId: "cid-overwrite",
+        }),
+      )
       .mockResolvedValue({ enabled: true, providerType: "openai_compatible",
         modelName: "qwen3:8b", isLocal: true });
     renderSection();
@@ -115,6 +124,171 @@ describe("LocalAiSection", () => {
     await userEvent.click(await screen.findByRole("button", { name: "로컬 AI로 변경" }));
     expect(await screen.findByText(/기본 AI로 설정했어요/)).toBeInTheDocument();
     expect(apiMock.activateLocalModel).toHaveBeenLastCalledWith("qwen3:8b", true);
+  });
+
+  it("외부 설정 충돌이 아닌 409는 덮어쓰기 확인창을 열지 않는다", async () => {
+    apiMock.getLocalAiStatus.mockResolvedValue({ status: "ready" });
+    apiMock.getLocalModels.mockResolvedValue({
+      models: THREE.map((m) => (m.model === "qwen3:8b" ? { ...m, installed: true } : m)),
+      defaultModel: "qwen3:8b", totalRamBytes: 32 * 1024 ** 3,
+      freeDiskBytes: 200 * 1024 ** 3,
+    });
+    apiMock.activateLocalModel.mockRejectedValue(
+      new ApiError(409, "INVALID_STATE", "기술 원문", false, {
+        details: { failureCategory: "model_not_installed" },
+      }),
+    );
+
+    renderSection();
+    await userEvent.click(await screen.findByRole("button", { name: "기본 모델로 사용" }));
+
+    expect(await screen.findByText("설정을 저장하지 못했어요. 다시 시도해 주세요.")).toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(screen.queryByText("기술 원문")).not.toBeInTheDocument();
+  });
+
+  it("retryable DB lock은 기술 정보를 숨기고 재시도 안내만 보여준다", async () => {
+    apiMock.getLocalAiStatus.mockResolvedValue({ status: "ready" });
+    apiMock.getLocalModels.mockResolvedValue({
+      models: THREE.map((m) => (m.model === "qwen3:8b" ? { ...m, installed: true } : m)),
+      defaultModel: "qwen3:8b", totalRamBytes: 32 * 1024 ** 3,
+      freeDiskBytes: 200 * 1024 ** 3,
+    });
+    apiMock.activateLocalModel.mockRejectedValue(
+      new ApiError(503, "DB_LOCKED", "C:/private/medbridge.db token=secret", true, {
+        details: { failureCategory: "db_locked", stage: "commit", sqliteErrorCode: 5 },
+        correlationId: "cid-secret",
+      }),
+    );
+
+    const { container } = renderSection();
+    await userEvent.click(await screen.findByRole("button", { name: "기본 모델로 사용" }));
+
+    expect(
+      await screen.findByText(/다른 작업이 저장 중이라 지금은 설정을 바꿀 수 없어요/),
+    ).toBeInTheDocument();
+    const visible = container.textContent ?? "";
+    for (const hidden of [
+      "medbridge.db",
+      "token=secret",
+      "db_locked",
+      "commit",
+      "sqliteErrorCode",
+      "cid-secret",
+    ]) {
+      expect(visible).not.toContain(hidden);
+    }
+  });
+
+  it("영구 저장 실패는 서버 원문 없이 일반 안전 오류만 보여준다", async () => {
+    apiMock.getLocalAiStatus.mockResolvedValue({ status: "ready" });
+    apiMock.getLocalModels.mockResolvedValue({
+      models: THREE.map((m) => (m.model === "qwen3:8b" ? { ...m, installed: true } : m)),
+      defaultModel: "qwen3:8b", totalRamBytes: 32 * 1024 ** 3,
+      freeDiskBytes: 200 * 1024 ** 3,
+    });
+    apiMock.activateLocalModel.mockRejectedValue(
+      new ApiError(500, "INTERNAL_ERROR", "raw SQL and private path", false, {
+        details: { failureCategory: "db_io", stage: "flush" },
+      }),
+    );
+
+    const { container } = renderSection();
+    await userEvent.click(await screen.findByRole("button", { name: "기본 모델로 사용" }));
+
+    expect(await screen.findByText("설정을 저장하지 못했어요. 다시 시도해 주세요.")).toBeInTheDocument();
+    expect(container.textContent).not.toContain("raw SQL and private path");
+  });
+
+  it("commit 후 조회 실패는 저장 실패로 안내하지 않고 캐시를 무효화한다", async () => {
+    // 서버가 details.committed=true로 "저장은 됐다"고 알린 경우 — 실제로 행이 저장된
+    // 상태라 "저장하지 못했어요"라고 말하면 사용자에게 거짓을 알리게 된다.
+    apiMock.getLocalAiStatus.mockResolvedValue({ status: "ready" });
+    apiMock.getLocalModels.mockResolvedValue({
+      models: THREE.map((m) => (m.model === "qwen3:8b" ? { ...m, installed: true } : m)),
+      defaultModel: "qwen3:8b", totalRamBytes: 32 * 1024 ** 3,
+      freeDiskBytes: 200 * 1024 ** 3,
+    });
+    apiMock.activateLocalModel.mockRejectedValue(
+      new ApiError(500, "POST_COMMIT_VIEW_FAILED", "설정은 저장했지만", false, {
+        details: {
+          failureCategory: "post_commit_view_failed",
+          stage: "reload_settings_view",
+          committed: true,
+        },
+      }),
+    );
+
+    const { client } = renderSection();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    await userEvent.click(await screen.findByRole("button", { name: "기본 모델로 사용" }));
+
+    expect(await screen.findByText(/설정은 저장했지만/)).toBeInTheDocument();
+    expect(screen.queryByText("설정을 저장하지 못했어요. 다시 시도해 주세요.")).toBeNull();
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["summary-settings"] });
+  });
+
+  it("활성화 성공 후 summary settings를 무효화한다", async () => {
+    apiMock.getLocalAiStatus.mockResolvedValue({ status: "ready" });
+    apiMock.getLocalModels.mockResolvedValue({
+      models: THREE.map((m) => (m.model === "qwen3:8b" ? { ...m, installed: true } : m)),
+      defaultModel: "qwen3:8b", totalRamBytes: 32 * 1024 ** 3,
+      freeDiskBytes: 200 * 1024 ** 3,
+    });
+    apiMock.activateLocalModel.mockResolvedValue({
+      enabled: true, providerType: "openai_compatible", modelName: "qwen3:8b", isLocal: true,
+    });
+
+    const { client } = renderSection();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    await userEvent.click(await screen.findByRole("button", { name: "기본 모델로 사용" }));
+
+    expect(await screen.findByText(/기본 AI로 설정했어요/)).toBeInTheDocument();
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["summary-settings"] });
+  });
+
+  it("확인 버튼을 연속 클릭해도 overwrite 요청은 한 번만 보낸다", async () => {
+    apiMock.getLocalAiStatus.mockResolvedValue({ status: "ready" });
+    apiMock.getLocalModels.mockResolvedValue({
+      models: THREE.map((m) => (m.model === "qwen3:8b" ? { ...m, installed: true } : m)),
+      defaultModel: "qwen3:8b", totalRamBytes: 32 * 1024 ** 3,
+      freeDiskBytes: 200 * 1024 ** 3,
+    });
+    let resolveOverwrite!: (value: {
+      enabled: boolean;
+      providerType: string;
+      modelName: string;
+      isLocal: boolean;
+    }) => void;
+    apiMock.activateLocalModel
+      .mockRejectedValueOnce(
+        new ApiError(409, "EXTERNAL_AI_OVERWRITE_REQUIRED", "safe", false, {
+          details: { failureCategory: "external_settings_conflict" },
+        }),
+      )
+      .mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveOverwrite = resolve;
+        }),
+      );
+
+    renderSection();
+    await userEvent.click(await screen.findByRole("button", { name: "기본 모델로 사용" }));
+    const confirm = await screen.findByRole("button", { name: "로컬 AI로 변경" });
+    await waitFor(() => expect(confirm).toBeEnabled());
+    fireEvent.click(confirm);
+    fireEvent.click(confirm);
+
+    await waitFor(() => expect(apiMock.activateLocalModel).toHaveBeenCalledTimes(2));
+    expect(apiMock.activateLocalModel).toHaveBeenLastCalledWith("qwen3:8b", true);
+    await waitFor(() => expect(confirm).toBeDisabled());
+    resolveOverwrite({
+      enabled: true,
+      providerType: "openai_compatible",
+      modelName: "qwen3:8b",
+      isLocal: true,
+    });
+    expect(await screen.findByText(/기본 AI로 설정했어요/)).toBeInTheDocument();
   });
 
   it("기술 정보(포트·endpoint·NDJSON·quantization)를 노출하지 않는다", async () => {

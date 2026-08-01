@@ -4,7 +4,6 @@
 크래시·중단은 실패로 확정해 사용자가 재실행할 수 있게 한다(OCR/청크와 동일 원칙).
 """
 
-import asyncio
 import uuid
 from datetime import UTC, datetime
 
@@ -17,8 +16,14 @@ from app.models.enums import JobStatus, JobType, SummaryRunStatus
 from app.models.summary import SummaryArtifact, SummaryRun
 from app.models.user import User
 from app.services.summary import service as summary_service
+from app.services.summary.endpoint import SummaryNetworkError
+from app.services.summary.executor import (
+    SummaryCancelled,
+    SummaryNoContent,
+    SummaryRevisionChanged,
+    execute_hierarchical_summary,
+)
 from app.services.summary.factory import get_summary_provider
-from app.services.summary.pipeline import run_summary
 
 logger = get_logger(__name__)
 
@@ -54,6 +59,17 @@ async def _fail_run(session, run_id: uuid.UUID, job_id: uuid.UUID, code: str) ->
         job.failure_code = code
         job.completed_at = datetime.now(UTC)
     await session.commit()
+
+
+def _classify_pipeline_failure(exc: Exception) -> tuple[str, str | None]:
+    """내부 예외 원문 없이 DB/API에 저장할 안전한 실패 범주로 축약한다."""
+    if isinstance(exc, SummaryNetworkError):
+        if exc.category == "timeout":
+            return "SUMMARY_TIMEOUT", "timeout"
+        if exc.category in ("bad_response", "response_too_large"):
+            return "SUMMARY_INVALID_RESPONSE", "invalid_response"
+        return "SUMMARY_PROVIDER_ERROR", "provider_error"
+    return "SUMMARY_FAILED", None
 
 
 async def run_summary_job(
@@ -107,24 +123,48 @@ async def run_summary_job(
                     return
             chunks = await summary_service.load_chunk_snapshots(session, document_id)
 
-        drafts = await asyncio.to_thread(
-            run_summary,
-            provider,
-            chunks,
+        # 체크포인트 계층 실행 — 노드마다 저장하므로 중단 후 재시도가 성공 노드를 재사용한다.
+        drafts = await execute_hierarchical_summary(
+            factory,
+            document_id=document_id,
+            run_id=run_id,
+            job_id=job_id,
+            provider=provider,
+            chunks=chunks,
             learner_level=learner_level,
             language=language,
             include_sections=include_sections,
             include_prerequisites=include_prerequisites,
+            start_revision=start_revision,
+            start_hash=start_hash,
+            job_is_current=_job_is_current,
+            current_chunk_hash=summary_service.current_chunk_hash,
         )
+    except SummaryCancelled:
+        logger.info("summary_job_superseded_or_cancelled", document_id=str(document_id))
+        return
+    except SummaryRevisionChanged:
+        logger.info("summary_revision_changed", document_id=str(document_id))
+        async with factory() as session:
+            if await _job_is_current(session, document_id, job_id):
+                await _fail_run(session, run_id, job_id, "REVISION_CHANGED")
+        return
+    except SummaryNoContent:
+        async with factory() as session:
+            if await _job_is_current(session, document_id, job_id):
+                await _fail_run(session, run_id, job_id, "SUMMARY_NO_CONTENT")
+        return
     except Exception as exc:
+        failure_code, failure_category = _classify_pipeline_failure(exc)
         logger.warning(
             "summary_pipeline_failed",
             document_id=str(document_id),
-            error=type(exc).__name__,
+            error_type=type(exc).__name__,
+            failure_category=failure_category or "unexpected",
         )
         async with factory() as session:
             if await _job_is_current(session, document_id, job_id):
-                await _fail_run(session, run_id, job_id, "SUMMARY_FAILED")
+                await _fail_run(session, run_id, job_id, failure_code)
         return
 
     # 3) revision-guarded 원자적 저장

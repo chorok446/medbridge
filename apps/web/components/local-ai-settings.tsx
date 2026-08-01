@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useModelDownload } from "@/hooks/use-model-download";
 import { ApiError } from "@/lib/api/client";
 import {
@@ -15,6 +15,27 @@ import { openExternalUrl } from "@/lib/tauri";
 
 const OLLAMA_INSTALL_URL = "https://ollama.com/download/windows";
 const GIB = 1024 ** 3;
+
+function errorDetails(error: ApiError): Record<string, unknown> | null {
+  if (
+    typeof error.details !== "object" ||
+    error.details === null ||
+    Array.isArray(error.details)
+  ) {
+    return null;
+  }
+  return error.details as Record<string, unknown>;
+}
+
+function failureCategory(error: ApiError): string | null {
+  const value = errorDetails(error)?.failureCategory;
+  return typeof value === "string" ? value : null;
+}
+
+/** 서버가 commit까지는 성공했다고 알린 실패인지 — "저장 실패"로 안내하면 안 된다. */
+function isCommitted(error: ApiError): boolean {
+  return errorDetails(error)?.committed === true;
+}
 
 function formatSize(bytes: number): string {
   return `약 ${(bytes / GIB).toFixed(1)}GB`;
@@ -149,6 +170,7 @@ function ReadyPanel({ onRecheck }: { onRecheck: () => void }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [testMessage, setTestMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const [confirmOverwrite, setConfirmOverwrite] = useState<string | null>(null);
+  const activationInFlight = useRef(false);
 
   const testMutation = useMutation({
     mutationFn: (model: string) => testLocalModel(model),
@@ -166,14 +188,57 @@ function ReadyPanel({ onRecheck }: { onRecheck: () => void }) {
       void queryClient.invalidateQueries({ queryKey: ["summary-settings"] });
     },
     onError: (err, variables) => {
-      if (err instanceof ApiError && err.status === 409) {
+      // 확인 대화상자는 onError에서 바로 렌더될 수 있으므로, onSettled를 기다리지
+      // 않고 먼저 잠금을 풀어 사용자의 확인 클릭이 누락되지 않게 한다.
+      activationInFlight.current = false;
+      const category = err instanceof ApiError ? failureCategory(err) : null;
+      if (
+        err instanceof ApiError &&
+        err.status === 409 &&
+        err.code === "EXTERNAL_AI_OVERWRITE_REQUIRED" &&
+        category === "external_settings_conflict"
+      ) {
         // 외부 AI가 이미 설정됨 → 확인 후 덮어쓰기
         setConfirmOverwrite(variables.model);
+      } else if (
+        err instanceof ApiError &&
+        err.code === "DB_LOCKED" &&
+        err.retryable &&
+        category === "db_locked"
+      ) {
+        setTestMessage({
+          ok: false,
+          text: "다른 작업이 저장 중이라 지금은 설정을 바꿀 수 없어요. 잠시 후 다시 시도해 주세요.",
+        });
+      } else if (err instanceof ApiError && isCommitted(err)) {
+        // 서버가 commit까지는 끝냈다고 알린 경우 — 저장은 됐으므로 "저장 실패"로
+        // 안내하지 않는다. 캐시도 무효화해 설정 화면이 실제 저장된 값을 보이게 한다.
+        setConfirmOverwrite(null);
+        setTestMessage({
+          ok: false,
+          text: "설정은 저장했지만 상태를 다시 확인하지 못했어요. 설정 화면을 다시 열어 주세요.",
+        });
+        void queryClient.invalidateQueries({ queryKey: ["summary-settings"] });
+      } else if (err instanceof ApiError && err.retryable) {
+        setTestMessage({
+          ok: false,
+          text: "일시적으로 설정을 저장하지 못했어요. 잠시 후 다시 시도해 주세요.",
+        });
       } else {
         setTestMessage({ ok: false, text: "설정을 저장하지 못했어요. 다시 시도해 주세요." });
       }
     },
+    onSettled: () => {
+      activationInFlight.current = false;
+    },
   });
+
+  function requestActivation(model: string, overwrite: boolean) {
+    if (activationInFlight.current) return;
+    activationInFlight.current = true;
+    setTestMessage(null);
+    activateMutation.mutate({ model, overwrite });
+  }
 
   if (modelsQuery.isLoading) {
     return (
@@ -219,7 +284,7 @@ function ReadyPanel({ onRecheck }: { onRecheck: () => void }) {
               activeModel={activeModel}
               onSelect={setSelected}
               onTest={(m) => testMutation.mutate(m)}
-              onActivate={(m) => activateMutation.mutate({ model: m, overwrite: false })}
+              onActivate={(m) => requestActivation(m, false)}
               testing={testMutation.isPending}
               activating={activateMutation.isPending}
             />
@@ -271,17 +336,17 @@ function ReadyPanel({ onRecheck }: { onRecheck: () => void }) {
           <div className="flex gap-2">
             <button
               type="button"
-              onClick={() =>
-                activateMutation.mutate({ model: confirmOverwrite, overwrite: true })
-              }
-              className="rounded bg-blue-600 px-3 py-1.5 font-medium text-white hover:bg-blue-700"
+              onClick={() => requestActivation(confirmOverwrite, true)}
+              disabled={activateMutation.isPending}
+              className="rounded bg-blue-600 px-3 py-1.5 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
             >
               로컬 AI로 변경
             </button>
             <button
               type="button"
               onClick={() => setConfirmOverwrite(null)}
-              className="rounded border border-slate-300 px-3 py-1.5 hover:bg-white"
+              disabled={activateMutation.isPending}
+              className="rounded border border-slate-300 px-3 py-1.5 hover:bg-white disabled:opacity-50"
             >
               취소
             </button>

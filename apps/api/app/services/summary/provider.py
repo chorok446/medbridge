@@ -11,7 +11,7 @@ from typing import Protocol
 
 from app.services.summary.settings import (
     GROUP_SUMMARY_MAX_CHARS,
-    STUDY_CAUTION_NOTICE,
+    SUMMARY_MAP_MAX_TOKENS,
 )
 
 
@@ -122,9 +122,7 @@ class DeterministicSummaryProvider:
             "importantNumbers": [],
             "targetPopulations": [],
             "learnerExplanations": [],
-            "studyCautions": [
-                {"text": STUDY_CAUTION_NOTICE, "sourceChunkIds": all_chunk_ids[:1]}
-            ],
+            "studyCautions": [],
         }
         if request.include_sections:
             for i, g in enumerate(groups):
@@ -185,7 +183,7 @@ class OpenAICompatibleSummaryProvider:
             self._endpoint and self.model_name and (self.is_local or self._api_key)
         )
 
-    def _chat(self, system: str, user: str) -> str:
+    def _chat(self, system: str, user: str, *, max_tokens: int | None = None) -> str:
         from app.services.model_output import strip_thinking
         from app.services.summary.endpoint import SummaryNetworkError, post_json
         from app.services.summary.settings import (
@@ -204,73 +202,143 @@ class OpenAICompatibleSummaryProvider:
             "temperature": 0.2,
             "response_format": {"type": "json_object"},
         }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
         if self.is_local:
             # 로컬 Qwen3: 비사고·결정론적 + 출력 상한. 외부 provider 계약은 건드리지 않는다.
             payload["temperature"] = 0
             payload["reasoning_effort"] = LOCAL_REASONING_EFFORT
-            payload["max_tokens"] = LOCAL_MAX_TOKENS
+            if max_tokens is None:
+                payload["max_tokens"] = LOCAL_MAX_TOKENS
         url = f"{self._endpoint}/chat/completions"
         # 테스트에서 http_client(콜러블)를 주입하면 그것을 쓴다 — 실제 네트워크 없이 검증.
-        if self._http is not None:
-            raw = self._http(url, payload, self._api_key)
-            data = json.loads(raw) if isinstance(raw, str) else raw
-        else:
-            # 런타임은 검증·redirect 차단·크기 제한이 적용된 안전 HTTP 경로만 쓴다.
-            data = post_json(
-                url,
-                payload,
-                self._api_key,
-                is_local=self.is_local,
-                timeout=self._timeout or SUMMARY_REQUEST_TIMEOUT_SEC,
-                max_response_bytes=SUMMARY_MAX_RESPONSE_BYTES,
-            )
         try:
-            content = data["choices"][0]["message"]["content"]
+            if self._http is not None:
+                raw = self._http(url, payload, self._api_key)
+                data = json.loads(raw) if isinstance(raw, str) else raw
+            else:
+                # 런타임은 검증·redirect 차단·크기 제한이 적용된 안전 HTTP 경로만 쓴다.
+                data = post_json(
+                    url,
+                    payload,
+                    self._api_key,
+                    is_local=self.is_local,
+                    timeout=self._timeout or SUMMARY_REQUEST_TIMEOUT_SEC,
+                    max_response_bytes=SUMMARY_MAX_RESPONSE_BYTES,
+                )
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise SummaryNetworkError("bad_response") from exc
+        try:
+            choice = data["choices"][0]
+            content = choice["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
             raise SummaryNetworkError("bad_response") from exc
+        # length/content_filter 등은 완결된 JSON 계약이 아니므로 파싱 전에 명시적으로 거부한다.
+        finish_reason = choice.get("finish_reason")
+        if finish_reason not in (None, "stop"):
+            raise SummaryNetworkError("bad_response")
+        if not isinstance(content, str):
+            raise SummaryNetworkError("bad_response")
         # thinking 흔적은 UI·저장·로그에 남기지 않는다(JSON 파싱 전에 제거).
-        return strip_thinking(content) if isinstance(content, str) else content
+        return strip_thinking(content)
+
+    @staticmethod
+    def _parse_json_object(raw: str) -> dict:
+        from app.services.summary.endpoint import SummaryNetworkError
+
+        try:
+            parsed = json.loads(raw)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise SummaryNetworkError("bad_response") from exc
+        if not isinstance(parsed, dict):
+            raise SummaryNetworkError("bad_response")
+        return parsed
 
     def summarize_group(self, request: GroupRequest) -> GroupSummary:
         chunk_block = "\n\n".join(
-            f"[{c.chunk_id}] {c.text}" for c in request.chunks
+            f"[입력 {index}] {c.text}" for index, c in enumerate(request.chunks, start=1)
         )
         system = (
-            "너는 의료 학습자료를 요약하는 보조 도구다. 주어진 청크 내용만 사용하고 "
-            "새로운 임상 판단·진단·처방을 만들지 마라. JSON으로만 답하라."
+            "너는 의료 학습자료를 짧게 압축하는 보조 도구다. 입력 내용만 사용하고 "
+            "새로운 임상 판단·진단·처방을 만들지 마라. 사고 과정이나 마크다운 없이 "
+            "JSON 객체만 답하라."
         )
         user = (
-            f"학습자 수준: {request.learner_level}. 다음 청크들을 한국어로 요약하라. "
-            f'형식: {{"summary": "...", "sourceChunkIds": ["청크id"]}}\n\n{chunk_block}'
+            f"학습자 수준: {request.learner_level}. 다음 입력 전체를 한국어 3문장 이내, "
+            f"400자 이하로 요약하라. 정확히 {{\"summary\":\"...\"}} 한 필드만 출력하고 "
+            f"출처 ID·페이지·좌표는 출력하지 마라.\n\n{chunk_block}"
         )
-        raw = self._chat(system, user)
-        parsed = json.loads(raw)
-        ids = [str(i) for i in parsed.get("sourceChunkIds", [])]
+        raw = self._chat(system, user, max_tokens=SUMMARY_MAP_MAX_TOKENS)
+        parsed = self._parse_json_object(raw)
+        summary = parsed.get("summary")
+        if (
+            not isinstance(summary, str)
+            or not summary.strip()
+            or len(summary.strip()) > GROUP_SUMMARY_MAX_CHARS
+        ):
+            from app.services.summary.endpoint import SummaryNetworkError
+
+            raise SummaryNetworkError("bad_response")
+        source_ids = list(dict.fromkeys(c.chunk_id for c in request.chunks))
         return GroupSummary(
             group_id=request.group_id,
             section_title=request.section_title,
-            summary_text=str(parsed.get("summary", ""))[:GROUP_SUMMARY_MAX_CHARS],
-            source_chunk_ids=ids or [c.chunk_id for c in request.chunks],
+            summary_text=summary.strip(),
+            source_chunk_ids=source_ids,
         )
 
     def summarize_document(self, request: DocumentRequest) -> dict:
         group_block = "\n\n".join(
-            f"[group {g.group_id} · chunks {','.join(g.source_chunk_ids)}] {g.summary_text}"
+            f"[group {g.group_id}] {g.summary_text}"
             for g in request.group_summaries
         )
         system = (
             "너는 의료 학습자료를 구조화 요약하는 보조 도구다. 주어진 그룹 요약과 그 "
-            "sourceChunkIds만 사용하라. 존재하지 않는 청크 id나 새로운 임상 판단을 "
-            "만들지 마라. page/bbox는 출력하지 마라. JSON으로만 답하라."
+            "group id만 사용하라. 존재하지 않는 group id나 새로운 임상 판단을 만들지 "
+            "마라. page/bbox/chunk id는 출력하지 마라. JSON으로만 답하라."
         )
         user = (
             f"학습자 수준: {request.learner_level}, 언어: {request.language}. "
             "다음 그룹 요약으로 구조화 요약(overview, sections, keyConcepts, "
             "prerequisites, learnerExplanations, studyCautions)을 만들어라. 각 항목에 "
-            f"sourceChunkIds를 포함하라.\n\n{group_block}"
+            f"sourceGroupIds를 포함하라.\n\n{group_block}"
         )
         raw = self._chat(system, user)
-        return json.loads(raw)
+        parsed = self._parse_json_object(raw)
+        return self._resolve_group_sources(parsed, request)
+
+    @staticmethod
+    def _resolve_group_sources(structured: dict, request: DocumentRequest) -> dict:
+        """모델 group token을 서버 소유 원본 chunk id로 바꾸고 모델 chunk id는 버린다."""
+        from app.services.summary.endpoint import SummaryNetworkError
+
+        group_sources = {
+            group.group_id: list(dict.fromkeys(group.source_chunk_ids))
+            for group in request.group_summaries
+        }
+
+        def resolve(value):
+            if isinstance(value, list):
+                return [resolve(item) for item in value]
+            if not isinstance(value, dict):
+                return value
+            out = {key: resolve(item) for key, item in value.items() if key != "sourceChunkIds"}
+            if "sourceGroupIds" in value:
+                tokens = value["sourceGroupIds"]
+                if not isinstance(tokens, list) or not tokens or not all(
+                    isinstance(token, str) and token in group_sources for token in tokens
+                ):
+                    raise SummaryNetworkError("bad_response")
+                resolved: list[str] = []
+                for token in dict.fromkeys(tokens):
+                    for chunk_id in group_sources[token]:
+                        if chunk_id not in resolved:
+                            resolved.append(chunk_id)
+                out.pop("sourceGroupIds", None)
+                out["sourceChunkIds"] = resolved
+            return out
+
+        return resolve(structured)
 
 
 def build_summary_provider(config, *, timeout: float | None = None) -> SummaryProvider:

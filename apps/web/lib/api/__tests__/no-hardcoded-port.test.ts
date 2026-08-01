@@ -27,7 +27,7 @@ describe("실행 코드에 특정 실기기에서 관측된 포트가 하드코�
 
   it("sidecar 주소를 만드는 곳은 base.ts 하나뿐이고, 개발용 기본값(8765)만 문서화된 예외로 허용한다", () => {
     const hits = collectSourceFiles(ROOT).filter((f) => {
-      if (f.endsWith("lib/api/base.ts")) return false; // 유일하게 허용된 정의 위치
+      if (f.replaceAll("\\", "/").endsWith("lib/api/base.ts")) return false;
       const text = readFileSync(f, "utf-8");
       return /127\.0\.0\.1:\d+/.test(text);
     });
