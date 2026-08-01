@@ -386,6 +386,7 @@ class TestAdaptiveSplitOnContextOverflow:
 
         class AlwaysOverflows(CountingProvider):
             def summarize_group(self, request):
+                self.group_calls += 1  # 실패해도 호출 횟수는 센다 — 안 세면 단언이 공허하다
                 raise SummaryNetworkError("context_overflow", "map_context_overflow")
 
         provider = AlwaysOverflows()
@@ -396,6 +397,56 @@ class TestAdaptiveSplitOnContextOverflow:
         assert caught.value.category == "context_overflow"
         # 깊이 제한이 있으므로 호출 횟수가 폭발하지 않는다
         assert provider.group_calls < 40, f"분할 호출 {provider.group_calls}회 — 제한이 없다"
+
+    async def test_degraded_fallback_is_not_reused_on_retry(self, client, monkeypatch):
+        """열화 폴백을 succeeded로 저장하면 재시도해도 영원히 같은 축약본이 나온다."""
+        monkeypatch.setattr(grouping_mod, "GROUP_MAX_CHARS", 4000)
+        monkeypatch.setattr(grouping_mod, "GROUP_MIN_CHARS", 4000)
+        doc_id = await _upload_chunked(client, fx.single_column_korean(pages=4))
+
+        class MergeAlwaysFails(CountingProvider):
+            """조각 하나는 요약하지만 둘 이상 합치는 건 거부한다."""
+
+            def summarize_group(self, request):
+                if len(request.chunks) > 1:
+                    self.group_calls += 1
+                    raise SummaryNetworkError("context_overflow", "map_context_overflow")
+                return super().summarize_group(request)
+
+        provider = MergeAlwaysFails()
+        run_id, job_id, rev, chash = await _make_run(doc_id, provider)
+        await _run_executor(doc_id, run_id, job_id, rev, chash, provider)
+
+        async with get_session_factory()() as s:
+            nodes = (
+                await s.execute(
+                    select(SummaryNode).where(SummaryNode.summary_run_id == run_id)
+                )
+            ).scalars().all()
+        degraded = [n for n in nodes if n.status == "degraded"]
+        assert degraded, "폴백 결과가 degraded로 표시되지 않았다"
+
+        # 두 번째 실행은 degraded 노드를 재사용하지 않고 다시 모델을 부른다
+        second = MergeAlwaysFails()
+        run2_id, job2_id, rev2, chash2 = await _make_run(doc_id, second)
+        await _run_executor(doc_id, run2_id, job2_id, rev2, chash2, second)
+        assert second.group_calls > 0, "degraded 노드를 재사용해 모델을 부르지 않았다"
+
+    async def test_output_truncation_does_not_trigger_splitting(self, client):
+        """finish_length는 출력 문제라 입력을 나눠도 해결되지 않는다 — 호출만 증폭된다."""
+        doc_id = await _upload_chunked(client, fx.single_column_korean(pages=3))
+
+        class AlwaysTruncates(CountingProvider):
+            def summarize_group(self, request):
+                self.group_calls += 1
+                raise SummaryNetworkError("bad_response", "finish_length")
+
+        provider = AlwaysTruncates()
+        run_id, job_id, rev, chash = await _make_run(doc_id, provider)
+
+        with pytest.raises(SummaryNetworkError):
+            await _run_executor(doc_id, run_id, job_id, rev, chash, provider)
+        assert provider.group_calls == 1, f"분할 재시도 발생 ({provider.group_calls}회)"
 
     async def test_unrelated_failure_is_not_retried_by_splitting(self, client):
         """입력 크기와 무관한 실패까지 나눠 재시도하면 호출만 낭비한다."""

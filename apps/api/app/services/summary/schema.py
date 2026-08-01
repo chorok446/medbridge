@@ -8,6 +8,7 @@
 
 from dataclasses import dataclass, field
 
+from app.core.logging import get_logger
 from app.models.enums import SummaryArtifactType
 from app.services.summary.settings import (
     CONCEPT_EXPLANATION_MAX_CHARS,
@@ -15,6 +16,8 @@ from app.services.summary.settings import (
     OVERVIEW_MAX_CHARS,
     SECTION_SUMMARY_MAX_CHARS,
 )
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -68,12 +71,25 @@ def _refs_for(ids: list[str], lookup: dict[str, ChunkRef]) -> list[dict]:
     return out
 
 
-def _clean_text(value, limit: int) -> str:
-    # 모델의 arbitrary value를 문자열로 강제 변환하거나 조용히 자르지 않는다.
+def _clean_text(value, limit: int, *, field_name: str = "?") -> str:
+    """모델의 arbitrary value를 문자열로 강제 변환하거나 조용히 자르지 않는다.
+
+    상한 초과는 항목 전체를 버린다(중간 절단으로 의미가 뒤집히는 것보다 안전하다).
+    다만 **조용히** 버리면 사용자는 개요가 통째로 빠진 요약을 오류 없이 받게 되므로
+    반드시 흔적을 남긴다. 원문은 남기지 않고 길이만 기록한다.
+    """
     if not isinstance(value, str):
         return ""
     cleaned = value.strip()
-    if not cleaned or len(cleaned) > limit:
+    if not cleaned:
+        return ""
+    if len(cleaned) > limit:
+        logger.info(
+            "summary_artifact_dropped_too_long",
+            field=field_name,
+            length=len(cleaned),
+            limit=limit,
+        )
         return ""
     return cleaned
 
@@ -105,7 +121,9 @@ def build_artifacts(
     # overview (단일)
     overview = structured.get("overview")
     if isinstance(overview, dict):
-        text = _clean_text(overview.get("text"), OVERVIEW_MAX_CHARS)
+        text = _clean_text(
+            overview.get("text"), OVERVIEW_MAX_CHARS, field_name="overview.text"
+        )
         if text:
             add(
                 SummaryArtifactType.OVERVIEW,
@@ -120,7 +138,9 @@ def build_artifacts(
         if not isinstance(sec, dict):
             continue
         title = _clean_text(sec.get("title"), 300) or None
-        summary = _clean_text(sec.get("summary"), SECTION_SUMMARY_MAX_CHARS)
+        summary = _clean_text(
+            sec.get("summary"), SECTION_SUMMARY_MAX_CHARS, field_name="section.summary"
+        )
         if not summary:
             continue
         dedup_key = (title or "", summary)
@@ -140,7 +160,11 @@ def build_artifacts(
         if not isinstance(kc, dict):
             continue
         term = _clean_text(kc.get("term"), 200)
-        explanation = _clean_text(kc.get("explanation"), CONCEPT_EXPLANATION_MAX_CHARS)
+        explanation = _clean_text(
+            kc.get("explanation"),
+            CONCEPT_EXPLANATION_MAX_CHARS,
+            field_name="keyConcept.explanation",
+        )
         if not term or not explanation or term in seen_terms:
             continue
         seen_terms.add(term)

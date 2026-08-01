@@ -12,7 +12,10 @@ from app.services.summary.provider import (
     GroupSummary,
     OpenAICompatibleSummaryProvider,
 )
-from app.services.summary.settings import SUMMARY_MAP_MAX_TOKENS
+from app.services.summary.settings import (
+    GROUP_SUMMARY_MAX_CHARS,
+    SUMMARY_MAP_MAX_TOKENS,
+)
 from app.services.tasks.summary_job import _classify_pipeline_failure
 
 
@@ -213,7 +216,25 @@ class TestContextOverflow:
         """모델이 낸 영문 원문을 사용자 메시지로 그대로 쓰지 않는다."""
         err = SummaryNetworkError("context_overflow", "map_context_overflow")
         assert self.REAL_OVERFLOW not in err.user_message
-        assert "컨텍스트" in err.user_message
+        assert "크기를 넘었습니다" in err.user_message
+
+    def test_overflow_message_does_not_tell_user_to_change_context(self):
+        """앱이 num_ctx를 직접 지정하므로 '컨텍스트를 늘리라'는 안내는 효과가 없다."""
+        err = SummaryNetworkError("context_overflow", "map_context_overflow")
+        assert "컨텍스트 크기를 늘" not in err.user_message
+
+    def test_error_alternative_is_allowed_by_map_schema(self):
+        """스키마가 error 형태를 막으면 잘린 프롬프트가 정상 요약으로 통과한다.
+
+        실측: strict 스키마 + 부족한 num_ctx → 키=['summary'](오탐지 없음),
+        anyOf 허용 → 키=['error'](초과 감지됨).
+        """
+        from app.services.summary.provider import _map_schema
+
+        shapes = _map_schema()["anyOf"]
+        required = [set(s["required"]) for s in shapes]
+        assert {"summary"} in required
+        assert {"error"} in required
 
 
 class TestLocalNativePath:
@@ -264,8 +285,11 @@ class TestLocalNativePath:
         provider.summarize_group(_group_request())
 
         schema = capture.calls[0][1]["format"]
-        assert schema["required"] == ["summary"]
-        assert schema["properties"]["summary"]["type"] == "string"
+        success = next(s for s in schema["anyOf"] if "summary" in s["properties"])
+        assert success["required"] == ["summary"]
+        assert success["properties"]["summary"]["type"] == "string"
+        # 서버가 400자 초과를 계약 위반으로 보므로 스키마도 같은 상한을 걸어야 한다
+        assert success["properties"]["summary"]["maxLength"] == GROUP_SUMMARY_MAX_CHARS
 
     def test_document_schema_requires_object_overview_with_sources(self):
         """overview를 문자열로 돌려주던 실측 문제를 스키마로 막는다."""
@@ -283,10 +307,30 @@ class TestLocalNativePath:
         )
 
         schema = capture.calls[0][1]["format"]
-        overview = schema["properties"]["overview"]
+        doc = next(s for s in schema["anyOf"] if "overview" in s.get("properties", {}))
+        overview = doc["properties"]["overview"]
         assert overview["type"] == "object"
         assert set(overview["required"]) == {"text", "sourceGroupIds"}
-        assert "overview" in schema["required"]
+        assert "overview" in doc["required"]
+        # 빈 배열을 허용하면 서버가 문서 전체를 실패시킨다 — 스키마가 먼저 막아야 한다
+        assert overview["properties"]["sourceGroupIds"]["minItems"] == 1
+
+    def test_large_length_limits_stay_out_of_the_grammar(self):
+        """Ollama의 GBNF 변환은 큰 maxLength를 처리하지 못한다(실측: 2000 → HTTP 400).
+
+        문법으로 강제할 수 있는 상한만 넣고, 큰 필드는 서버가 검증한다.
+        """
+        from app.services.summary.provider import _document_schema, _map_schema
+
+        doc = next(
+            s
+            for s in _document_schema(include_sections=True, include_prerequisites=True)["anyOf"]
+            if "overview" in s.get("properties", {})
+        )
+        assert "maxLength" not in doc["properties"]["overview"]["properties"]["text"]
+        # 작은 상한(map summary 400자)은 문법으로 강제 가능하므로 유지한다
+        success = next(s for s in _map_schema()["anyOf"] if "summary" in s["properties"])
+        assert success["properties"]["summary"]["maxLength"] == GROUP_SUMMARY_MAX_CHARS
 
     def test_schema_omits_sections_when_not_requested(self):
         provider, capture = self._local(
@@ -307,8 +351,9 @@ class TestLocalNativePath:
         )
 
         schema = capture.calls[0][1]["format"]
-        assert "sections" not in schema["properties"]
-        assert "prerequisites" not in schema["properties"]
+        doc = next(s for s in schema["anyOf"] if "overview" in s.get("properties", {}))
+        assert "sections" not in doc["properties"]
+        assert "prerequisites" not in doc["properties"]
 
     def test_native_done_reason_is_checked_like_finish_reason(self):
         provider, _ = self._local(
@@ -319,6 +364,43 @@ class TestLocalNativePath:
             provider.summarize_group(_group_request())
 
         assert caught.value.reason == "finish_length"
+
+    def test_non_ollama_local_server_keeps_openai_path(self):
+        """is_local은 'loopback이다'이지 'Ollama다'가 아니다.
+
+        LM Studio·llama.cpp server·vLLM은 /api/chat을 제공하지 않으므로 native로 보내면
+        404 → '모델을 찾을 수 없습니다'라는 엉뚱한 안내로 깨진다.
+        """
+        capture = _Capture(_chat_response(json.dumps({"summary": "요약"})))
+        provider = OpenAICompatibleSummaryProvider(
+            endpoint="http://localhost:1234/v1",  # LM Studio
+            model_name="local-model",
+            api_key="",
+            is_local=True,
+            http_client=capture,
+        )
+
+        assert provider.uses_ollama_native is False
+        provider.summarize_group(_group_request())
+        assert capture.calls[0][0].endswith("/chat/completions")
+
+    def test_reduce_does_not_send_max_tokens_to_external_provider(self):
+        """외부 reduce는 원래 max_tokens를 보내지 않았다.
+
+        4096을 보내면 completion 상한이 더 낮은 모델에서 400을 받아 모든 문서가 실패한다.
+        """
+        provider, capture = _provider(
+            _chat_response(json.dumps({"overview": {"text": "개요", "sourceGroupIds": ["g0"]}}))
+        )
+        groups = [GroupSummary("g0", "구역", "요약", ["c0"])]
+
+        provider.summarize_document(
+            DocumentRequest(
+                group_summaries=groups, learner_level="nursing_student", language="ko"
+            )
+        )
+
+        assert "max_tokens" not in capture.calls[0][1]
 
     def test_external_provider_still_uses_openai_endpoint(self):
         """외부 공급자 계약은 건드리지 않는다 — native는 Ollama 전용이다."""
@@ -335,13 +417,13 @@ class TestLocalNativePath:
         assert payload["max_tokens"] == SUMMARY_MAP_MAX_TOKENS
 
 
-def test_group_size_fits_common_local_context_window():
-    """그룹 상한이 흔한 기본 컨텍스트(4096)에 출력 여유까지 포함해 들어가야 한다.
+def test_group_size_fits_the_context_we_request():
+    """그룹 상한이 우리가 지정하는 num_ctx에 출력 여유까지 포함해 들어가야 한다.
 
-    실측(qwen3:8b, 한국어): 프롬프트 토큰 ≈ 문자수 x 0.79. 이 여유가 무너지면 대형
-    문서에서 프롬프트가 잘려 요약이 통째로 실패한다.
+    실측(qwen3:8b, 한국어): 프롬프트 토큰 ≈ 문자수 x 0.79. 이 여유가 무너지면 native
+    경로에서도 프롬프트가 잘린다.
     """
-    from app.services.summary.settings import GROUP_MAX_CHARS
+    from app.services.summary.settings import GROUP_MAX_CHARS, LOCAL_NUM_CTX
 
     korean_tokens_per_char = 0.79
     instruction_overhead_tokens = 150
@@ -350,7 +432,65 @@ def test_group_size_fits_common_local_context_window():
         + instruction_overhead_tokens
         + SUMMARY_MAP_MAX_TOKENS
     )
-    assert estimated < 4096, f"추정 {estimated:.0f}토큰 — 기본 컨텍스트 4096을 넘는다"
+    assert estimated < LOCAL_NUM_CTX, f"추정 {estimated:.0f}토큰 > num_ctx {LOCAL_NUM_CTX}"
+
+
+def test_reduce_output_budget_fits_the_context_we_request():
+    """구조화 reduce도 프롬프트 + 출력이 num_ctx 안에 들어가야 한다."""
+    from app.services.summary.settings import (
+        GROUP_SUMMARY_MAX_CHARS,
+        LOCAL_NUM_CTX,
+        REDUCE_FAN_IN,
+        SUMMARY_REDUCE_MAX_TOKENS,
+    )
+
+    prompt_chars = GROUP_SUMMARY_MAX_CHARS * REDUCE_FAN_IN
+    estimated = prompt_chars * 0.79 + 300 + SUMMARY_REDUCE_MAX_TOKENS
+    assert estimated < LOCAL_NUM_CTX, f"추정 {estimated:.0f}토큰 > num_ctx {LOCAL_NUM_CTX}"
+
+
+class TestReduceContract:
+    """reduce가 계약을 벗어난 응답을 조용히 통과시키면 '빈 요약'이 SUCCEEDED로 저장된다."""
+
+    def test_truncated_reduce_is_reported_as_context_overflow(self):
+        overflow = {"error": "Input is too long or contains excessive repetition."}
+        provider, _ = _provider(_chat_response(json.dumps(overflow)))
+        groups = [GroupSummary("g0", "구역", "요약", ["c0"])]
+
+        with pytest.raises(SummaryNetworkError) as caught:
+            provider.summarize_document(
+                DocumentRequest(
+                    group_summaries=groups, learner_level="nursing_student", language="ko"
+                )
+            )
+
+        assert caught.value.category == "context_overflow"
+        assert caught.value.reason == "reduce_context_overflow"
+
+    def test_reduce_without_overview_is_rejected_not_silently_empty(self):
+        provider, _ = _provider(_chat_response(json.dumps({"sections": []})))
+        groups = [GroupSummary("g0", "구역", "요약", ["c0"])]
+
+        with pytest.raises(SummaryNetworkError) as caught:
+            provider.summarize_document(
+                DocumentRequest(
+                    group_summaries=groups, learner_level="nursing_student", language="ko"
+                )
+            )
+
+        assert caught.value.reason == "reduce_overview_missing"
+
+
+def test_common_refusal_is_not_misread_as_context_overflow():
+    """외부 모델의 평범한 거절을 컨텍스트 초과로 몰면 유료 API를 분할로 낭비한다."""
+    from app.services.summary.provider import _looks_like_context_overflow
+
+    assert not _looks_like_context_overflow(
+        {"error": "I cannot summarize this without more context"}
+    )
+    assert _looks_like_context_overflow(
+        {"error": "Input is too long or contains excessive repetition."}
+    )
 
 
 def test_reduce_prompt_pins_object_shape_so_overview_is_not_dropped():

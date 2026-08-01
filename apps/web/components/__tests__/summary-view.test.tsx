@@ -94,8 +94,10 @@ describe("SummaryView", () => {
     );
     renderView();
 
-    expect(await screen.findByText(/컨텍스트 크기를 늘린 뒤/)).toBeInTheDocument();
+    expect(await screen.findByText(/한 번에 볼 수 있는 크기를 넘었어요/)).toBeInTheDocument();
     expect(screen.queryByText(/응답 형식이 올바르지 않아/)).toBeNull();
+    // 앱이 num_ctx를 직접 지정하므로 "설정을 늘리라"는 안내는 효과가 없다
+    expect(screen.queryByText(/컨텍스트 크기를 늘린/)).toBeNull();
   });
 
   it("시간 초과 실패는 안전한 안내와 재시도 가능한 생성 버튼을 보여준다", async () => {
