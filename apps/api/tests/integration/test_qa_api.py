@@ -115,8 +115,11 @@ class TestAskFlow:
         assert a["retrievalMode"] == "keyword"
         assert a["claims"]
         ref = a["claims"][0]["sourceRefs"][0]
-        for key in ("pageNumber", "blockId", "bbox", "readingOrder", "sourceMethod"):
+        # 공개 출처는 이동에 필요한 필드만 — 내부 layout 순서(readingOrder)는 노출하지 않는다.
+        for key in ("pageNumber", "blockId", "bbox", "sourceMethod"):
             assert key in ref
+        assert "readingOrder" not in ref
+        assert "chunkId" not in ref
 
     async def test_no_match_returns_not_found_without_model(self, client, monkeypatch):
         await enable_deterministic()

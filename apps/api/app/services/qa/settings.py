@@ -29,3 +29,20 @@ VALID_ANSWER_STATUSES = (
     "insufficient_evidence",
     "conflicting_evidence",
 )
+
+# 스트리밍(4B) 네트워크 제한
+STREAM_CONNECT_TIMEOUT_SEC = 15.0
+STREAM_IDLE_TIMEOUT_SEC = 30.0  # 청크 사이 무응답 상한
+STREAM_TOTAL_DEADLINE_SEC = 180.0  # 전체 스트림 deadline
+STREAM_MAX_LINE_BYTES = 64 * 1024
+STREAM_MAX_TOTAL_BYTES = 8 * 1024 * 1024
+
+# draft 체크포인트 — 이벤트마다 commit하지 않고 묶어 저장
+DRAFT_CHECKPOINT_MS = 500
+DRAFT_CHECKPOINT_CHARS = 1024
+
+# 스트림 중 revision·동의 재확인 주기(검증한 claim 개수 기준)
+REVISION_RECHECK_EVERY_CLAIMS = 3
+
+# 공급자 이벤트 대기 폴링 간격 — 취소·연결 끊김을 이 주기로 감지한다(heartbeat와 별개).
+STREAM_POLL_INTERVAL_SEC = 0.5

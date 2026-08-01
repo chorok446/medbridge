@@ -85,6 +85,23 @@ class QaMessage(Base):
     model_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     retrieval_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # 스트리밍(Sprint 4B) — 전부 nullable, 기존 행 무해
+    draft_content: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 부분 유니크 인덱스(uq_qa_stream_request_id)로 유일성 보장 — 컬럼 unique는 두지 않는다
+    stream_request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    stream_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    stream_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    interrupted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_stream_seq: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # 재시도 원본 메시지 참조 — SQLite ALTER는 FK 추가를 못하므로 앱 레벨 참조(plain Uuid)
+    retry_of_message_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now()
     )

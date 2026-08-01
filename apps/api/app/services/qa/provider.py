@@ -136,7 +136,10 @@ class OpenAICompatibleQaProvider:
         self.is_local = is_local
         self._http = http_client
         self._timeout = timeout
-        self.available = bool(self._endpoint and self.model_name and self._api_key)
+        # 로컬(Ollama 등) 공급자는 API 키가 필요 없다 — 외부 공급자만 키를 요구한다.
+        self.available = bool(
+            self._endpoint and self.model_name and (self.is_local or self._api_key)
+        )
 
     def answer(self, request: QaRequest) -> dict:
         from app.services.summary.endpoint import SummaryNetworkError, post_json

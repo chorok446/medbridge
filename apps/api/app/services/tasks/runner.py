@@ -309,9 +309,19 @@ class LocalTaskRunner:
                 run.error_code = "INTERRUPTED"
                 run.completed_at = _dt.now(_UTC)
             await session.commit()
-        if docs:
+
+        # 이전 프로세스의 활성 Q&A 스트림(pending/streaming/finalizing)을 interrupted로
+        # 확정한다 — 사용자 질문은 보존, 초안은 최종으로 승격하지 않는다(재시도 가능).
+        from app.services.qa.stream_service import recover_interrupted_streams
+
+        recovered_streams = await recover_interrupted_streams()
+
+        if docs or recovered_streams:
             logger.info(
-                "recovered_interrupted_jobs", requeued=len(to_enqueue), total=len(docs)
+                "recovered_interrupted_jobs",
+                requeued=len(to_enqueue),
+                total=len(docs),
+                streams=recovered_streams,
             )
         return len(to_enqueue)
 

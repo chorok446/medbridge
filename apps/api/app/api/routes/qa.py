@@ -1,4 +1,4 @@
-"""문서 Q&A API — 스레드 CRUD + 질문/재시도(동기 JSON, 스트리밍 없음).
+"""문서 Q&A API — 스레드 CRUD + 질문/재시도(동기 JSON) + 스트리밍(NDJSON)·취소·상태 조회.
 
 기술 정보(chunk id·모델명·bbox 숫자·raw score)는 응답에 노출하지 않는다. 출처는
 사용자 네비게이션용 source_refs(page/bbox)만 내려준다.
@@ -6,7 +6,8 @@
 
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import StreamingResponse
 from pydantic import Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +18,8 @@ from app.models.user import User
 from app.schemas.common import CamelModel, Envelope
 from app.services.documents.service import get_owned_document
 from app.services.qa import service as qa_service
+from app.services.qa import stream_protocol as sp
+from app.services.qa import stream_service as qa_stream
 from app.utils.responses import wrap
 
 router = APIRouter(prefix="/api/documents", tags=["qa"])
@@ -78,7 +81,8 @@ def _claim_out(c: QaClaim) -> ClaimOut:
     return ClaimOut(
         text=c.claim_text,
         verification_status=c.verification_status.value,
-        source_refs=c.source_refs_json,
+        # 스트림 경로와 동일한 공개 변환 — 내부 chunkId·readingOrder 등을 응답에서 제거한다.
+        source_refs=[sp.public_source_ref(r) for r in c.source_refs_json],
     )
 
 
@@ -209,3 +213,93 @@ async def retry_message(
     thread = await qa_service.get_owned_thread(db, doc, thread_id)
     await qa_service.retry_last(db, doc, user, thread)
     return wrap(await _answer_detail(db, thread))
+
+
+# --- Sprint 4B: 스트리밍 ---
+
+
+class MessageStatusOut(CamelModel):
+    id: uuid.UUID
+    status: str
+    error_code: str | None
+
+
+@router.post("/{document_id}/qa/threads/{thread_id}/messages/stream")
+async def stream_message(
+    document_id: uuid.UUID,
+    thread_id: uuid.UUID,
+    body: QuestionIn,
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> StreamingResponse:
+    # 스트림 시작 전 검증 오류는 여기서 AppError(JSON)로 반환된다.
+    doc = await get_owned_document(db, user, document_id)
+    thread = await qa_service.get_owned_thread(db, doc, thread_id)
+    user_msg, assistant_msg, request_id = await qa_stream.prepare_stream(
+        db, doc, user, thread, body.question
+    )
+    aid = assistant_msg.id
+    user_content = user_msg.content
+    start_content_rev = doc.content_revision
+    start_chunk_rev = doc.chunk_revision
+
+    async def _gen():
+        total = 0
+        async for event in qa_stream.run_stream(
+            document_id, thread_id, aid, user_content, request_id,
+            start_content_rev, start_chunk_rev, request,
+        ):
+            chunk = sp.encode_event(event)
+            if len(chunk) > sp.MAX_EVENT_BYTES:
+                continue  # 개별 이벤트가 상한 초과 → 건너뛴다(폭주 방지)
+            total += len(chunk)
+            if total > sp.MAX_STREAM_BYTES:
+                # 총 스트림 상한 초과 → 에러로 마무리(run_stream finally가 메시지를 terminal 확정)
+                yield sp.encode_event(sp.error_event("QA_STREAM_TOO_LARGE", "답변이 너무 깁니다."))
+                return
+            yield chunk
+
+    return StreamingResponse(
+        _gen(),
+        media_type=sp.CONTENT_TYPE,
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post(
+    "/{document_id}/qa/threads/{thread_id}/messages/{message_id}/cancel",
+    response_model=Envelope[MessageStatusOut],
+)
+async def cancel_message(
+    document_id: uuid.UUID,
+    thread_id: uuid.UUID,
+    message_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    doc = await get_owned_document(db, user, document_id)
+    thread = await qa_service.get_owned_thread(db, doc, thread_id)
+    msg = await qa_stream.request_cancel(db, thread, message_id)
+    return wrap(
+        MessageStatusOut(id=msg.id, status=msg.status.value, error_code=msg.error_code)
+    )
+
+
+@router.get(
+    "/{document_id}/qa/threads/{thread_id}/messages/{message_id}/status",
+    response_model=Envelope[MessageStatusOut],
+)
+async def message_status(
+    document_id: uuid.UUID,
+    thread_id: uuid.UUID,
+    message_id: uuid.UUID,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    doc = await get_owned_document(db, user, document_id)
+    thread = await qa_service.get_owned_thread(db, doc, thread_id)
+    msg = await qa_stream.get_message_status(db, thread, message_id)
+    return wrap(
+        MessageStatusOut(id=msg.id, status=msg.status.value, error_code=msg.error_code)
+    )

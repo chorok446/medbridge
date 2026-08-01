@@ -13,12 +13,14 @@
 docs/security/summary-provider-network-security.md 참조.
 """
 
+import codecs
 import ipaddress
 import json as _json
 import socket
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable, Iterator
 from urllib.parse import urlsplit
 
 # 안전 로컬 호스트명 (정확히 일치해야 함 — localhost.evil.example 등은 제외)
@@ -251,6 +253,99 @@ def post_json(
         return _json.loads(raw.decode("utf-8"))
     except (ValueError, UnicodeDecodeError) as exc:
         raise SummaryNetworkError("bad_response") from exc
+
+
+def stream_lines(
+    url: str,
+    payload: dict,
+    api_key: str,
+    *,
+    is_local: bool,
+    connect_timeout: float,
+    idle_timeout: float,
+    total_deadline: float,
+    max_line_bytes: int,
+    max_total_bytes: int,
+    should_cancel: Callable[[], bool] | None = None,
+) -> Iterator[str]:
+    """검증된 endpoint로 JSON POST 후 응답 본문을 UTF-8 줄 단위로 스트리밍한다.
+
+    post_json과 동일한 안전 정책(HTTPS/loopback·DNS 재검증·redirect 차단·API 키 헤더·
+    크기 상한)을 적용하되, 취소 가능하고 idle/total deadline을 강제한다. should_cancel()이
+    True면 즉시 응답을 닫고 종료한다. UTF-8 멀티바이트가 청크 경계에서 나뉘어도 안전하다.
+    """
+    parts = urlsplit(url)
+    hostname = parts.hostname or ""
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    assert_host_allowed(hostname, port, is_local=is_local)
+
+    body = _json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+            "Accept-Encoding": "identity",
+        },
+        method="POST",
+    )
+    opener = urllib.request.build_opener(_NoRedirect())
+    resp = None
+    decoder = codecs.getincrementaldecoder("utf-8")()
+    buffer = ""
+    total = 0
+    deadline = time.monotonic() + total_deadline
+    try:
+        try:
+            resp = opener.open(req, timeout=connect_timeout)  # noqa: S310 (검증된 endpoint)
+        except SummaryNetworkError:
+            raise
+        except urllib.error.HTTPError as exc:
+            raise _classify_http_status(exc.code) from None
+        except TimeoutError as exc:
+            raise SummaryNetworkError("timeout") from exc
+        except OSError as exc:
+            raise SummaryNetworkError("connect_failed") from exc
+
+        # 개별 읽기는 idle_timeout, 전체는 total_deadline으로 제한
+        try:
+            resp.fp.raw._sock.settimeout(idle_timeout)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+        while True:
+            if should_cancel is not None and should_cancel():
+                return
+            if time.monotonic() > deadline:
+                raise SummaryNetworkError("timeout")
+            try:
+                chunk = resp.read(8192)
+            except TimeoutError as exc:
+                raise SummaryNetworkError("timeout") from exc
+            except OSError as exc:
+                raise SummaryNetworkError("connect_failed") from exc
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > max_total_bytes:
+                raise SummaryNetworkError("response_too_large")
+            buffer += decoder.decode(chunk)
+            while "\n" in buffer:
+                line, buffer = buffer.split("\n", 1)
+                if len(line.encode("utf-8")) > max_line_bytes:
+                    raise SummaryNetworkError("response_too_large")
+                yield line
+                if should_cancel is not None and should_cancel():
+                    return
+        # 남은 미완결 버퍼는 폐기(불완전 줄)
+    finally:
+        if resp is not None:
+            try:
+                resp.close()
+            except Exception:
+                pass
 
 
 def _classify_http_status(code: int) -> SummaryNetworkError:

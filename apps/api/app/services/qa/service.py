@@ -144,18 +144,25 @@ async def _next_sequence(db: AsyncSession, thread_id: uuid.UUID) -> int:
     return (current or 0) + 1
 
 
-async def _recent_history(db: AsyncSession, thread_id: uuid.UUID) -> list[QaHistoryTurn]:
+async def _recent_history(
+    db: AsyncSession, thread_id: uuid.UUID, before_seq: int | None = None
+) -> list[QaHistoryTurn]:
+    # before_seq를 주면 그 이전 턴만 반환 — 지금 답변 중인 질문이 문맥에 중복으로
+    # 들어가지 않게 한다(현재 user 질문은 QaRequest.question으로 이미 전달됨).
+    conds = [
+        QaMessage.thread_id == thread_id,
+        QaMessage.status.in_(
+            [QaMessageStatus.COMPLETED, QaMessageStatus.CONFLICTING_EVIDENCE]
+        )
+        | (QaMessage.role == QaMessageRole.USER),
+    ]
+    if before_seq is not None:
+        conds.append(QaMessage.sequence_number < before_seq)
     rows = list(
         (
             await db.execute(
                 select(QaMessage)
-                .where(
-                    QaMessage.thread_id == thread_id,
-                    QaMessage.status.in_(
-                        [QaMessageStatus.COMPLETED, QaMessageStatus.CONFLICTING_EVIDENCE]
-                    )
-                    | (QaMessage.role == QaMessageRole.USER),
-                )
+                .where(*conds)
                 .order_by(QaMessage.sequence_number.desc())
                 .limit(HISTORY_MAX_TURNS * 2)
             )
@@ -242,7 +249,7 @@ async def ask(
     await db.refresh(user_msg)
     await db.refresh(assistant_msg)
 
-    history = await _recent_history(db, thread.id)
+    history = await _recent_history(db, thread.id, before_seq=user_msg.sequence_number)
     return await _generate(
         db, doc, user, thread, user_msg, assistant_msg, q, history,
         start_content_rev, start_chunk_rev, provider,
@@ -309,7 +316,7 @@ async def retry_last(
             status_code=409,
         ) from exc
 
-    history = await _recent_history(db, thread.id)
+    history = await _recent_history(db, thread.id, before_seq=last_user.sequence_number)
     return await _generate(
         db, doc, user, thread, last_user, last_assistant, last_user.content, history,
         start_content_rev, start_chunk_rev, provider,
