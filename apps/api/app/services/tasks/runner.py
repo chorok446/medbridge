@@ -172,6 +172,11 @@ class LocalTaskRunner:
         - queued/validating/uploaded: 다시 검증 큐로 (uploaded는 큐 등록 전에 중단된 경우)
         - created/uploading: 파일 저장이 보장되지 않으므로 실패로 확정 (재업로드 안내)
         """
+        from app.services.tasks.extract import (
+            _latest_job,
+            mark_extraction_attempts_exhausted,
+        )
+
         to_enqueue: list[uuid.UUID] = []
         to_extract: list[uuid.UUID] = []
         async with get_session_factory()() as session:
@@ -201,8 +206,12 @@ class LocalTaskRunner:
                         "업로드가 중단되었습니다. 파일을 다시 업로드해 주세요."
                     )
                 elif doc.processing_status == ProcessingStatus.EXTRACTING:
-                    # 중단된 추출 재실행 (페이지 단위 교체 저장이라 안전)
-                    to_extract.append(doc.id)
+                    job = await _latest_job(session, doc.id)
+                    if job is not None and job.attempt_count >= job.max_attempts:
+                        mark_extraction_attempts_exhausted(doc, job)
+                    else:
+                        # 페이지 단위 교체 저장이라 허용 횟수 안에서는 재실행이 안전하다.
+                        to_extract.append(doc.id)
                 else:
                     if doc.processing_status != ProcessingStatus.QUEUED:
                         doc.processing_status = ProcessingStatus.QUEUED  # 내부 복구 경로

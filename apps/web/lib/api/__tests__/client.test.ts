@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { api } from "@/lib/api/client";
+import { api, ApiError } from "@/lib/api/client";
 import { resetApiConfigCache } from "@/lib/api/base";
 
 const invokeMock = vi.fn();
@@ -61,6 +61,58 @@ describe("api() — endpoint 준비 이후에만 요청한다", () => {
       "http://127.0.0.1:33000/api/documents",
       expect.anything(),
     );
+    fetchMock.mockRestore();
+  });
+
+  it("오류의 안전한 details와 correlationId를 보존한다", async () => {
+    invokeMock.mockResolvedValue({ base: "http://127.0.0.1:33000", token: "t" });
+    const details = {
+      failureCategory: "db_locked",
+      stage: "commit",
+      sqliteErrorCode: 5,
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: "DB_LOCKED",
+            message: "안전한 메시지",
+            retryable: true,
+            details,
+          },
+          meta: { correlationId: "activation-cid" },
+        }),
+        { status: 503 },
+      ),
+    );
+
+    await expect(api("/api/local-ai/activate")).rejects.toMatchObject({
+      name: "ApiError",
+      status: 503,
+      code: "DB_LOCKED",
+      retryable: true,
+      details,
+      correlationId: "activation-cid",
+    } satisfies Partial<ApiError>);
+    fetchMock.mockRestore();
+  });
+
+  it("잘리거나 다른 형식의 오류 응답도 안전한 기본값으로 처리한다", async () => {
+    invokeMock.mockResolvedValue({ base: "http://127.0.0.1:33000", token: "t" });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("not-json", {
+        status: 500,
+        headers: { "X-Correlation-ID": "header-cid" },
+      }),
+    );
+
+    await expect(api("/api/local-ai/activate")).rejects.toMatchObject({
+      status: 500,
+      code: "INTERNAL_ERROR",
+      retryable: false,
+      details: null,
+      correlationId: "header-cid",
+    } satisfies Partial<ApiError>);
     fetchMock.mockRestore();
   });
 });

@@ -29,8 +29,16 @@ class ResolvedProviderConfig:
     api_key: str | None
 
 
+class DuplicateSummarySettingsError(RuntimeError):
+    """단일 행이어야 하는 설정 테이블에 중복 행이 있을 때의 안전한 오류."""
+
+
 async def load_settings_row(session: AsyncSession) -> SummarySettings | None:
-    return (await session.execute(select(SummarySettings).limit(1))).scalars().first()
+    rows = (await session.execute(select(SummarySettings).limit(2))).scalars().all()
+    if len(rows) > 1:
+        # 어느 행도 임의로 고르거나 덮어쓰지 않는다. 행 값은 예외 메시지에 넣지 않는다.
+        raise DuplicateSummarySettingsError
+    return rows[0] if rows else None
 
 
 async def get_summary_provider(session: AsyncSession) -> SummaryProvider:

@@ -4,13 +4,22 @@
 """
 
 import json
+import sqlite3
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
-from sqlalchemy import select
+import pytest
+from sqlalchemy import select, text
 
+from app.core.config import get_settings
+from app.core.errors import AppError, ErrorCode
+from app.db import session as db_session
 from app.db.session import get_session_factory
 from app.models.summary import SummarySettings
+from app.models.user import User
 from app.services.local_ai import client as ollama_client
 from app.services.local_ai import pull_registry, system
+from app.services.local_ai import service as local_service
 from app.services.local_ai.client import InstalledModel, OllamaStatus
 
 
@@ -74,6 +83,29 @@ def _installed(*names):
     return lambda: [InstalledModel(n, 100, "8B", "Q4_K_M", "2026-01-01") for n in names]
 
 
+@pytest.fixture
+async def short_sqlite_busy_timeout(monkeypatch):
+    """실제 lock 테스트가 production의 5초를 기다리지 않게 새 pool 연결만 짧게 설정한다."""
+    monkeypatch.setattr(db_session, "SQLITE_BUSY_TIMEOUT_MS", 25)
+    await db_session.get_engine().dispose()
+    yield
+    # 25ms 연결을 pool에서 제거한다. monkeypatch 복원 뒤 다음 연결은 production 값을 쓴다.
+    await db_session.get_engine().dispose()
+
+
+async def _seed_profile() -> None:
+    async with get_session_factory()() as session:
+        session.add(User())
+        await session.commit()
+
+
+def _hold_write_lock() -> sqlite3.Connection:
+    db_path = get_settings().app_data_dir / "medbridge.db"
+    connection = sqlite3.connect(db_path, timeout=0, isolation_level=None)
+    connection.execute("BEGIN IMMEDIATE")
+    return connection
+
+
 class TestActivate:
     async def test_saves_local_settings_without_keyring(self, client, monkeypatch):
         monkeypatch.setattr(ollama_client, "list_models", _installed("qwen3:8b"))
@@ -89,6 +121,40 @@ class TestActivate:
         assert sd["isLocal"] is True
         assert sd["hasApiKey"] is False
         assert sd["endpoint"].endswith("/v1")
+
+    async def test_reactivating_existing_local_settings_is_idempotent(
+        self, client, monkeypatch
+    ):
+        monkeypatch.setattr(ollama_client, "list_models", _installed("qwen3:8b"))
+        async with get_session_factory()() as session:
+            session.add(
+                SummarySettings(
+                    enabled=True,
+                    provider_type="openai_compatible",
+                    endpoint="http://127.0.0.1:11434/v1",
+                    model_name="qwen3:8b",
+                    is_local=True,
+                )
+            )
+            await session.commit()
+
+        first = await client.post(
+            "/api/local-ai/activate", json={"model": "qwen3:8b"}
+        )
+        second = await client.post(
+            "/api/local-ai/activate", json={"model": "qwen3:8b"}
+        )
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        async with get_session_factory()() as session:
+            rows = (await session.execute(select(SummarySettings))).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].enabled is True
+        assert rows[0].provider_type == "openai_compatible"
+        assert rows[0].endpoint == "http://127.0.0.1:11434/v1"
+        assert rows[0].model_name == "qwen3:8b"
+        assert rows[0].is_local is True
 
     async def test_rejects_non_allowlist(self, client):
         res = await client.post("/api/local-ai/activate", json={"model": "evil:latest"})
@@ -130,6 +196,347 @@ class TestActivate:
         )
         assert res2.status_code == 200
         assert res2.json()["data"]["isLocal"] is True
+
+    async def test_external_conflict_has_distinct_error_code(self, client, monkeypatch):
+        monkeypatch.setattr(ollama_client, "list_models", _installed("qwen3:8b"))
+        async with get_session_factory()() as session:
+            session.add(
+                SummarySettings(
+                    enabled=False,
+                    provider_type="openai_compatible",
+                    endpoint="https://api.example.com/v1",
+                    model_name="gpt-x",
+                    is_local=False,
+                )
+            )
+            await session.commit()
+
+        res = await client.post("/api/local-ai/activate", json={"model": "qwen3:8b"})
+
+        assert res.status_code == 409
+        assert res.json()["error"]["code"] == ErrorCode.EXTERNAL_AI_OVERWRITE_REQUIRED
+        assert res.json()["error"]["details"]["failureCategory"] == (
+            "external_settings_conflict"
+        )
+        assert res.json()["error"]["details"]["conflictType"] == (
+            "external_ai_overwrite_required"
+        )
+
+    async def test_lock_released_before_retry_succeeds(
+        self, client, monkeypatch, short_sqlite_busy_timeout
+    ):
+        monkeypatch.setattr(ollama_client, "list_models", _installed("qwen3:8b"))
+        await _seed_profile()
+        lock = _hold_write_lock()
+        retries = 0
+
+        async def release_lock(_delay: float) -> None:
+            nonlocal retries
+            retries += 1
+            lock.commit()
+
+        monkeypatch.setattr(local_service, "_sleep_before_retry", release_lock)
+        try:
+            res = await client.post("/api/local-ai/activate", json={"model": "qwen3:8b"})
+        finally:
+            if lock.in_transaction:
+                lock.rollback()
+            lock.close()
+
+        assert res.status_code == 200
+        assert retries == 1
+        async with get_session_factory()() as session:
+            rows = (await session.execute(select(SummarySettings))).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].enabled is True
+        assert rows[0].is_local is True
+        assert rows[0].model_name == "qwen3:8b"
+
+    async def test_persistent_lock_is_retryable_and_rolls_back_partial_state(
+        self, client, monkeypatch, short_sqlite_busy_timeout
+    ):
+        monkeypatch.setattr(ollama_client, "list_models", _installed("qwen3:8b"))
+        await _seed_profile()
+        async with get_session_factory()() as session:
+            session.add(
+                SummarySettings(
+                    enabled=False,
+                    provider_type="openai_compatible",
+                    endpoint="https://api.example.com/v1",
+                    model_name="gpt-before",
+                    is_local=False,
+                )
+            )
+            await session.commit()
+
+        lock = _hold_write_lock()
+        retry_wait = AsyncMock()
+        monkeypatch.setattr(local_service, "_sleep_before_retry", retry_wait)
+        try:
+            res = await client.post(
+                "/api/local-ai/activate",
+                json={"model": "qwen3:8b", "overwriteExternal": True},
+            )
+        finally:
+            if lock.in_transaction:
+                lock.rollback()
+            lock.close()
+
+        assert res.status_code == 503
+        error = res.json()["error"]
+        assert error["code"] == ErrorCode.DB_LOCKED
+        assert error["retryable"] is True
+        assert error["details"] == {
+            "failureCategory": "db_locked",
+            "stage": "flush",
+            "sqliteErrorCode": sqlite3.SQLITE_BUSY,
+            "sqlitePrimaryCode": sqlite3.SQLITE_BUSY,
+        }
+        retry_wait.assert_awaited_once()
+
+        async with get_session_factory()() as session:
+            row = (await session.execute(select(SummarySettings))).scalars().one()
+        assert row.enabled is False
+        assert row.provider_type == "openai_compatible"
+        assert row.endpoint == "https://api.example.com/v1"
+        assert row.model_name == "gpt-before"
+        assert row.is_local is False
+
+    async def test_nonbusy_flush_failure_is_not_retried_and_rolls_back(
+        self, monkeypatch
+    ):
+        async with get_session_factory()() as session:
+            session.add(
+                SummarySettings(
+                    enabled=False,
+                    provider_type="disabled",
+                    endpoint=None,
+                    model_name="before",
+                    is_local=False,
+                )
+            )
+            await session.commit()
+
+        retry_wait = AsyncMock()
+        monkeypatch.setattr(local_service, "_sleep_before_retry", retry_wait)
+        async with get_session_factory()() as session:
+            monkeypatch.setattr(
+                session,
+                "flush",
+                AsyncMock(side_effect=RuntimeError("injected non-SQLite failure")),
+            )
+            with pytest.raises(AppError) as caught:
+                await local_service.activate(
+                    session, "qwen3:8b", overwrite_external=False
+                )
+
+        assert caught.value.code == ErrorCode.INTERNAL_ERROR
+        assert caught.value.retryable is False
+        assert caught.value.details == {
+            "failureCategory": "unknown_persistence_error",
+            "stage": "flush",
+        }
+        retry_wait.assert_not_awaited()
+        async with get_session_factory()() as session:
+            row = (await session.execute(select(SummarySettings))).scalars().one()
+        assert row.enabled is False
+        assert row.provider_type == "disabled"
+        assert row.model_name == "before"
+        assert row.is_local is False
+
+    async def test_readonly_connection_is_safely_classified_without_retry(
+        self, monkeypatch
+    ):
+        async with get_session_factory()() as session:
+            session.add(
+                SummarySettings(
+                    enabled=False,
+                    provider_type="disabled",
+                    model_name="before",
+                    is_local=False,
+                )
+            )
+            await session.commit()
+
+        retry_wait = AsyncMock()
+        monkeypatch.setattr(local_service, "_sleep_before_retry", retry_wait)
+        async with get_session_factory()() as session:
+            await session.execute(text("PRAGMA query_only=ON"))
+            try:
+                with pytest.raises(AppError) as caught:
+                    await local_service.activate(
+                        session, "qwen3:8b", overwrite_external=False
+                    )
+            finally:
+                await session.execute(text("PRAGMA query_only=OFF"))
+                await session.commit()
+
+        assert caught.value.code == ErrorCode.INTERNAL_ERROR
+        assert caught.value.retryable is False
+        assert caught.value.details == {
+            "failureCategory": "db_readonly",
+            "stage": "flush",
+            "sqliteErrorCode": sqlite3.SQLITE_READONLY,
+            "sqlitePrimaryCode": sqlite3.SQLITE_READONLY,
+        }
+        retry_wait.assert_not_awaited()
+        async with get_session_factory()() as session:
+            row = (await session.execute(select(SummarySettings))).scalars().one()
+        assert row.enabled is False
+        assert row.provider_type == "disabled"
+        assert row.model_name == "before"
+        assert row.is_local is False
+
+    async def test_commit_failure_rolls_back_and_logs_only_safe_report(
+        self, monkeypatch
+    ):
+        async with get_session_factory()() as session:
+            session.add(
+                SummarySettings(
+                    enabled=False,
+                    provider_type="disabled",
+                    model_name="before",
+                    is_local=False,
+                )
+            )
+            await session.commit()
+
+        sensitive = "C:/private/medbridge.db token=secret document=patient-notes"
+        retry_wait = AsyncMock()
+        error_log = Mock()
+        monkeypatch.setattr(local_service, "_sleep_before_retry", retry_wait)
+        monkeypatch.setattr(
+            local_service,
+            "logger",
+            SimpleNamespace(error=error_log, warning=Mock()),
+        )
+        async with get_session_factory()() as session:
+            real_rollback = session.rollback
+            rollback = AsyncMock(wraps=real_rollback)
+            monkeypatch.setattr(
+                session,
+                "commit",
+                AsyncMock(side_effect=RuntimeError(sensitive)),
+            )
+            monkeypatch.setattr(session, "rollback", rollback)
+            with pytest.raises(AppError) as caught:
+                await local_service.activate(
+                    session, "qwen3:8b", overwrite_external=False
+                )
+
+        assert caught.value.details == {
+            "failureCategory": "unknown_persistence_error",
+            "stage": "commit",
+        }
+        retry_wait.assert_not_awaited()
+        rollback.assert_awaited_once()
+        error_log.assert_called_once()
+        event, report = error_log.call_args.args[0], error_log.call_args.kwargs
+        assert event == "local_ai_activate_failed"
+        assert report["failureCategory"] == "unknown_persistence_error"
+        assert report["stage"] == "commit"
+        assert report["correlationId"]
+        encoded_report = json.dumps(report, default=str)
+        assert sensitive not in encoded_report
+        for fragment in ("medbridge.db", "token=secret", "patient-notes"):
+            assert fragment not in encoded_report
+            assert fragment not in str(caught.value.details)
+
+        async with get_session_factory()() as session:
+            row = (await session.execute(select(SummarySettings))).scalars().one()
+        assert row.enabled is False
+        assert row.provider_type == "disabled"
+        assert row.model_name == "before"
+        assert row.is_local is False
+
+    async def test_duplicate_settings_are_detected_without_overwriting(
+        self, monkeypatch
+    ):
+        async with get_session_factory()() as session:
+            session.add_all(
+                [
+                    SummarySettings(
+                        enabled=False,
+                        provider_type="disabled",
+                        model_name="first",
+                        is_local=False,
+                    ),
+                    SummarySettings(
+                        enabled=False,
+                        provider_type="openai_compatible",
+                        endpoint="https://api.example.com/v1",
+                        model_name="second",
+                        is_local=False,
+                    ),
+                ]
+            )
+            await session.commit()
+
+        retry_wait = AsyncMock()
+        monkeypatch.setattr(local_service, "_sleep_before_retry", retry_wait)
+        async with get_session_factory()() as session:
+            with pytest.raises(AppError) as caught:
+                await local_service.activate(
+                    session, "qwen3:8b", overwrite_external=True
+                )
+
+        assert caught.value.code == ErrorCode.INTERNAL_ERROR
+        assert caught.value.retryable is False
+        assert caught.value.details == {
+            "failureCategory": "duplicate_settings",
+            "stage": "load_settings",
+        }
+        retry_wait.assert_not_awaited()
+        async with get_session_factory()() as session:
+            rows = (
+                await session.execute(
+                    select(SummarySettings).order_by(SummarySettings.model_name)
+                )
+            ).scalars().all()
+        assert [(row.model_name, row.enabled, row.is_local) for row in rows] == [
+            ("first", False, False),
+            ("second", False, False),
+        ]
+
+    async def test_post_commit_view_failure_is_classified_and_not_retried(
+        self, monkeypatch
+    ):
+        load_calls = 0
+        real_load = local_service.load_settings_row
+
+        async def counted_load(session):
+            nonlocal load_calls
+            load_calls += 1
+            return await real_load(session)
+
+        async def fail_view(_session):
+            raise RuntimeError("injected view failure")
+
+        monkeypatch.setattr(local_service, "load_settings_row", counted_load)
+        monkeypatch.setattr(local_service, "get_settings_view", fail_view)
+        retry_wait = AsyncMock()
+        monkeypatch.setattr(local_service, "_sleep_before_retry", retry_wait)
+
+        async with get_session_factory()() as session:
+            with pytest.raises(AppError) as caught:
+                await local_service.activate(
+                    session, "qwen3:8b", overwrite_external=False
+                )
+
+        assert caught.value.code == ErrorCode.POST_COMMIT_VIEW_FAILED
+        assert caught.value.retryable is False
+        assert caught.value.details == {
+            "failureCategory": "post_commit_view_failed",
+            "stage": "reload_settings_view",
+            "committed": True,
+        }
+        assert load_calls == 1
+        retry_wait.assert_not_awaited()
+        async with get_session_factory()() as session:
+            row = (await session.execute(select(SummarySettings))).scalars().one()
+        assert row.enabled is True
+        assert row.is_local is True
+        assert row.model_name == "qwen3:8b"
 
 
 class TestPull:

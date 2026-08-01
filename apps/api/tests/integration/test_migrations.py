@@ -1,5 +1,10 @@
 """알파벳 순서상 마지막에 실행 — downgrade가 테이블을 비우므로 다른 테스트 뒤에 돈다."""
 
+import sqlite3
+from contextlib import closing
+from pathlib import Path
+
+import pytest
 from sqlalchemy import create_engine, inspect, text
 
 from alembic import command
@@ -38,13 +43,63 @@ def test_full_downgrade_upgrade_cycle():
             "qa_claims",
         } <= names
         revision = conn.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-        assert revision == "0008"
+        assert revision == "0009"
+    engine.dispose()
+
+
+def test_document_word_foreign_key_indexes_are_used():
+    engine = create_engine(get_settings().database_url_sync)
+    with engine.connect() as conn:
+        indexes = {row["name"] for row in inspect(conn).get_indexes("document_words")}
+        assert {
+            "ix_document_words_block_id",
+            "ix_document_words_line_id",
+        } <= indexes
+
+        for column, index_name in (
+            ("block_id", "ix_document_words_block_id"),
+            ("line_id", "ix_document_words_line_id"),
+        ):
+            plan = conn.execute(
+                text(
+                    f"EXPLAIN QUERY PLAN SELECT id FROM document_words WHERE {column} = :value"
+                ),
+                {"value": "0" * 32},
+            ).all()
+            assert any(index_name in str(row[-1]) for row in plan), plan
     engine.dispose()
 
 
 def test_upgrade_is_idempotent():
     """이미 head인 상태에서 재실행해도 오류·데이터 손상이 없다."""
     command.upgrade(alembic_config(), "head")
+
+
+def test_sqlite_online_backup_includes_committed_wal_rows(tmp_path):
+    from app.main import _backup_sqlite_database
+
+    source_path = tmp_path / "source.db"
+    backup_path = tmp_path / "backup.db"
+    with closing(sqlite3.connect(str(source_path))) as writer:
+        assert writer.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+        writer.execute("PRAGMA wal_autocheckpoint=0")
+        writer.execute("CREATE TABLE probe (value TEXT NOT NULL)")
+        writer.commit()
+        writer.execute("INSERT INTO probe VALUES ('committed-in-wal')")
+        writer.commit()
+
+        wal_path = Path(f"{source_path}-wal")
+        assert wal_path.is_file() and wal_path.stat().st_size > 0
+        _backup_sqlite_database(source_path, backup_path)
+
+    with closing(sqlite3.connect(str(backup_path))) as restored:
+        assert restored.execute("SELECT value FROM probe").fetchall() == [
+            ("committed-in-wal",)
+        ]
+        assert restored.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+    with pytest.raises(FileExistsError):
+        _backup_sqlite_database(source_path, backup_path)
 
 
 def test_startup_migration_runner():

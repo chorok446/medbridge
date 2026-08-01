@@ -1,6 +1,6 @@
-import shutil
+import sqlite3
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, closing
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -18,6 +18,23 @@ logger = get_logger(__name__)
 
 ALEMBIC_DIR = Path(__file__).resolve().parents[1] / "alembic"
 ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
+
+
+def _backup_sqlite_database(db_path: Path, backup_path: Path) -> None:
+    """온라인 백업으로 main DB와 커밋된 WAL 프레임을 일관된 파일에 담는다."""
+    backup_path.touch(exist_ok=False)
+    source_uri = f"{db_path.resolve().as_uri()}?mode=ro"
+    try:
+        with closing(sqlite3.connect(source_uri, uri=True)) as source, closing(
+            sqlite3.connect(str(backup_path))
+        ) as destination:
+            source.backup(destination)
+            check = destination.execute("PRAGMA quick_check").fetchone()
+            if check is None or check[0] != "ok":
+                raise RuntimeError("SQLite backup integrity check failed")
+    except Exception:
+        backup_path.unlink(missing_ok=True)
+        raise
 
 
 def _current_and_head_revision() -> tuple[str | None, str]:
@@ -62,7 +79,14 @@ def run_migrations() -> None:
 
         stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
         backup = provider.backups_dir / f"pre-migration-{__version__}-{stamp}.db"
-        shutil.copy2(db_path, backup)
+        suffix = 1
+        while backup.exists():
+            backup = (
+                provider.backups_dir
+                / f"pre-migration-{__version__}-{stamp}-{suffix}.db"
+            )
+            suffix += 1
+        _backup_sqlite_database(db_path, backup)
         logger.info("db_backup_created", backup=backup.name)
     elif db_path is None:
         logger.warning("db_backup_skipped_non_sqlite_url")

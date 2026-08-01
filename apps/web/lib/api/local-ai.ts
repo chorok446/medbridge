@@ -1,7 +1,6 @@
 import { getApiConfig } from "@/lib/api/base";
-import { api, ApiError } from "@/lib/api/client";
+import { api, apiErrorFromResponse } from "@/lib/api/client";
 import { consumeNdjson } from "@/lib/api/ndjson";
-import type { ApiErrorBody } from "@/types/api";
 
 export type LocalAiStatus = "ready" | "not_running" | "incompatible" | "error";
 
@@ -93,13 +92,8 @@ export async function streamModelPull(
     body: JSON.stringify({ model }),
   });
   if (!res.ok || !res.body) {
-    const body = (await res.json().catch(() => null)) as ApiErrorBody | null;
-    throw new ApiError(
-      res.status,
-      body?.error?.code ?? "INTERNAL_ERROR",
-      body?.error?.message ?? "문제가 발생했습니다. 잠시 후 다시 시도해 주세요.",
-      body?.error?.retryable ?? false,
-    );
+    const body: unknown = await res.json().catch(() => null);
+    throw apiErrorFromResponse(res, body);
   }
   await consumeNdjson<PullEvent>(res.body, opts.onEvent);
 }

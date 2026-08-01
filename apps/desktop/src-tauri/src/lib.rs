@@ -12,6 +12,164 @@ use std::time::Duration;
 
 use tauri::Manager;
 
+#[cfg(windows)]
+#[allow(non_snake_case)]
+mod process_tree {
+    use std::ffi::{c_void, OsStr};
+    use std::io;
+    use std::mem::{size_of, zeroed};
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::io::AsRawHandle;
+    use std::process::{Child, Command};
+    use std::ptr::null;
+
+    type Handle = *mut c_void;
+
+    const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS: i32 = 9;
+    const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: u32 = 0x0000_2000;
+
+    #[repr(C)]
+    struct IoCounters {
+        read_operation_count: u64,
+        write_operation_count: u64,
+        other_operation_count: u64,
+        read_transfer_count: u64,
+        write_transfer_count: u64,
+        other_transfer_count: u64,
+    }
+
+    #[repr(C)]
+    struct BasicLimitInformation {
+        per_process_user_time_limit: i64,
+        per_job_user_time_limit: i64,
+        limit_flags: u32,
+        minimum_working_set_size: usize,
+        maximum_working_set_size: usize,
+        active_process_limit: u32,
+        affinity: usize,
+        priority_class: u32,
+        scheduling_class: u32,
+    }
+
+    #[repr(C)]
+    struct ExtendedLimitInformation {
+        basic_limit_information: BasicLimitInformation,
+        io_info: IoCounters,
+        process_memory_limit: usize,
+        job_memory_limit: usize,
+        peak_process_memory_used: usize,
+        peak_job_memory_used: usize,
+    }
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn CreateJobObjectW(attributes: *const c_void, name: *const u16) -> Handle;
+        fn SetInformationJobObject(
+            job: Handle,
+            information_class: i32,
+            information: *const c_void,
+            information_length: u32,
+        ) -> i32;
+        fn AssignProcessToJobObject(job: Handle, process: Handle) -> i32;
+        fn CloseHandle(object: Handle) -> i32;
+    }
+
+    /// Windows Job Object whose last-handle close terminates every assigned descendant.
+    ///
+    /// The raw handle is stored as an integer so this guard can live in Tauri managed
+    /// state (`Send + Sync`). It is converted back only at the FFI boundary.
+    pub(super) struct ProcessTreeGuard {
+        handle: isize,
+        name: String,
+    }
+
+    impl ProcessTreeGuard {
+        pub(super) fn new() -> io::Result<Self> {
+            let name = format!("Local\\MedBridgeSidecar-{}", uuid::Uuid::new_v4());
+            let wide_name: Vec<u16> = OsStr::new(&name).encode_wide().chain(Some(0)).collect();
+            let handle = unsafe { CreateJobObjectW(null(), wide_name.as_ptr()) };
+            if handle.is_null() {
+                return Err(io::Error::last_os_error());
+            }
+
+            let mut limits: ExtendedLimitInformation = unsafe { zeroed() };
+            limits.basic_limit_information.limit_flags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let configured = unsafe {
+                SetInformationJobObject(
+                    handle,
+                    JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,
+                    &limits as *const ExtendedLimitInformation as *const c_void,
+                    size_of::<ExtendedLimitInformation>() as u32,
+                )
+            };
+            if configured == 0 {
+                let error = io::Error::last_os_error();
+                unsafe {
+                    CloseHandle(handle);
+                }
+                return Err(error);
+            }
+
+            Ok(Self {
+                handle: handle as isize,
+                name,
+            })
+        }
+
+        pub(super) fn configure_command(&self, command: &mut Command) {
+            // The frozen Python child opens this same named job and joins itself.
+            // This repairs the case where the bootloader creates its Python child
+            // before Rust assigns the bootloader below. There is still an extremely
+            // small startup interval between Command::spawn and assign during which
+            // an abrupt shell crash can leave the not-yet-assigned bootloader alive.
+            command.env("MEDBRIDGE_WINDOWS_JOB_NAME", &self.name);
+        }
+
+        pub(super) fn assign(&self, child: &Child) -> io::Result<()> {
+            let assigned = unsafe {
+                AssignProcessToJobObject(
+                    self.handle as Handle,
+                    child.as_raw_handle() as Handle,
+                )
+            };
+            if assigned == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        }
+    }
+
+    impl Drop for ProcessTreeGuard {
+        fn drop(&mut self) {
+            unsafe {
+                CloseHandle(self.handle as Handle);
+            }
+        }
+    }
+}
+
+#[cfg(not(windows))]
+mod process_tree {
+    use std::io;
+    use std::process::{Child, Command};
+
+    pub(super) struct ProcessTreeGuard;
+
+    impl ProcessTreeGuard {
+        pub(super) fn new() -> io::Result<Self> {
+            Ok(Self)
+        }
+
+        pub(super) fn configure_command(&self, _command: &mut Command) {}
+
+        pub(super) fn assign(&self, _child: &Child) -> io::Result<()> {
+            Ok(())
+        }
+    }
+}
+
+use process_tree::ProcessTreeGuard;
+
 #[derive(Clone, Copy, PartialEq)]
 enum Startup {
     Starting,
@@ -23,6 +181,7 @@ struct SidecarState {
     port: u16,
     token: String,
     child: Mutex<Option<Child>>,
+    process_tree: Mutex<Option<ProcessTreeGuard>>,
     startup: Mutex<Startup>,
 }
 
@@ -121,9 +280,14 @@ fn pick_free_port() -> u16 {
         .expect("no free port available")
 }
 
-fn spawn_sidecar(app: &tauri::AppHandle, port: u16, token: &str) -> std::io::Result<Child> {
+fn spawn_sidecar(
+    app: &tauri::AppHandle,
+    port: u16,
+    token: &str,
+) -> std::io::Result<(Child, ProcessTreeGuard)> {
     let app_data_dir = app.path().app_data_dir().expect("app data dir unavailable");
     std::fs::create_dir_all(&app_data_dir).ok();
+    let process_tree = ProcessTreeGuard::new()?;
 
     let mut cmd = if cfg!(debug_assertions) {
         // 개발 모드: apps/api를 uv로 직접 실행
@@ -176,8 +340,20 @@ fn spawn_sidecar(app: &tauri::AppHandle, port: u16, token: &str) -> std::io::Res
             if cfg!(debug_assertions) { "development" } else { "production" },
         )
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
+        .stderr(Stdio::null());
+    process_tree.configure_command(&mut cmd);
+
+    let mut child = cmd.spawn()?;
+    if let Err(error) = process_tree.assign(&child) {
+        // A spawned-but-unassigned process would escape KILL_ON_JOB_CLOSE.
+        // Stop the root, close the job to terminate any Python child that already
+        // joined it, then reap the root before returning the startup failure.
+        let _ = child.kill();
+        drop(process_tree);
+        let _ = child.wait();
+        return Err(error);
+    }
+    Ok((child, process_tree))
 }
 
 /// sidecar가 실제로 우리 포트에 떠서 /health에 정상 응답할 때까지 대기.
@@ -218,11 +394,25 @@ fn wait_for_sidecar(port: u16, child: &Mutex<Option<Child>>, timeout: Duration) 
 }
 
 fn kill_sidecar(state: &SidecarState) {
-    if let Ok(mut guard) = state.child.lock() {
-        if let Some(mut child) = guard.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
+    // Closing the last Job Object handle terminates the PyInstaller bootloader,
+    // its Python child, and any OCR subprocesses as one process tree.
+    // Recover poisoned mutexes so an unrelated panic cannot turn shutdown into a
+    // process leak. The job must close before killing the bootloader directly;
+    // otherwise PyInstaller's Python child could be orphaned.
+    let mut process_tree = match state.process_tree.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    process_tree.take();
+    drop(process_tree);
+
+    let mut child = match state.child.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    if let Some(mut child) = child.take() {
+        let _ = child.kill();
+        let _ = child.wait();
     }
 }
 
@@ -251,12 +441,13 @@ pub fn run() {
         .setup({
             let token = token.clone();
             move |app| {
-                let child = spawn_sidecar(&app.handle().clone(), port, &token)
+                let (child, process_tree) = spawn_sidecar(&app.handle().clone(), port, &token)
                     .map_err(|e| format!("failed to start sidecar: {e}"))?;
                 app.manage(SidecarState {
                     port,
                     token: token.clone(),
                     child: Mutex::new(Some(child)),
+                    process_tree: Mutex::new(Some(process_tree)),
                     startup: Mutex::new(Startup::Starting),
                 });
                 // 창은 즉시 뜨고(준비 화면), 준비 확인은 백그라운드에서 진행한다
@@ -265,18 +456,20 @@ pub fn run() {
                     let state = handle.state::<SidecarState>();
                     let result =
                         wait_for_sidecar(port, &state.child, Duration::from_secs(120));
-                    let mut startup = state.startup.lock().unwrap();
-                    *startup = match result {
+                    match result {
                         Ok(()) => {
                             // 포트만 기록한다 — 토큰은 절대 로그에 남기지 않는다.
                             println!("sidecar ready at {}", sidecar_base_url(port));
-                            Startup::Ready
+                            *state.startup.lock().unwrap() = Startup::Ready;
                         }
                         Err(e) => {
                             eprintln!("sidecar startup failed (port {port}): {e}");
-                            Startup::Failed
+                            *state.startup.lock().unwrap() = Startup::Failed;
+                            // A timed-out or unhealthy sidecar must not keep doing
+                            // CPU/DB work behind the failed startup screen.
+                            kill_sidecar(&state);
                         }
-                    };
+                    }
                 });
                 Ok(())
             }
@@ -291,7 +484,8 @@ pub fn run() {
 
     app.run(|app_handle, event| {
         // 창 파괴·앱 종료 어느 경로로 끝나도 sidecar를 정리한다
-        // (강제 종료·크래시 대비 Job Object 수준 봉쇄는 후속 Windows 작업)
+        // Windows에서는 시작 시 할당이 끝난 뒤 Job Object의
+        // KILL_ON_JOB_CLOSE가 비정상 종료도 함께 봉쇄한다.
         match event {
             tauri::RunEvent::WindowEvent {
                 event: tauri::WindowEvent::Destroyed,
@@ -310,6 +504,12 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::sidecar_base_url;
+    #[cfg(windows)]
+    use super::ProcessTreeGuard;
+    #[cfg(windows)]
+    use std::process::{Command, Stdio};
+    #[cfg(windows)]
+    use std::time::{Duration, Instant};
 
     // sidecar_info(GUI)와 fetch_error_report(오류 보고서)가 같은 함수를 거치므로,
     // 이 테스트가 통과하는 한 두 경로가 서로 다른 포트를 가리킬 수 없다.
@@ -324,5 +524,35 @@ mod tests {
     fn base_url_never_hardcodes_a_fixed_port() {
         // 회귀 방지: 함수가 인자를 무시하고 고정값을 반환하면 이 비교가 실패한다.
         assert_ne!(sidecar_base_url(1234), sidecar_base_url(5678));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_process_tree_guard_kills_an_assigned_process_when_closed() {
+        // This exercises the FFI layout, access rights, assignment, and the actual
+        // KILL_ON_JOB_CLOSE behavior without creating an untracked descendant.
+        let guard = ProcessTreeGuard::new().expect("Windows Job Object must be available");
+        let mut command = Command::new("ping.exe");
+        command
+            .args(["-n", "30", "127.0.0.1"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        guard.configure_command(&mut command);
+        let mut child = command.spawn().expect("long-running Windows process must start");
+        guard
+            .assign(&child)
+            .expect("process must be assignable to the Job Object");
+        assert!(
+            child.try_wait().expect("process state must be readable").is_none(),
+            "test process exited before KILL_ON_JOB_CLOSE could be exercised"
+        );
+
+        let started = Instant::now();
+        drop(guard);
+        child.wait().expect("terminated process must be reapable");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "closing the Job Object did not terminate its assigned process promptly"
+        );
     }
 }

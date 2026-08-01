@@ -1,12 +1,14 @@
 """추출 통합 테스트 — 업로드→추출→조회→재처리→취소→삭제 전 구간."""
 
+import asyncio
+import threading
 import uuid
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from app.db.session import get_session_factory
-from app.models.document import Document
-from app.models.enums import ProcessingStatus
+from app.models.document import Document, DocumentJob
+from app.models.enums import JobStatus, JobType, ProcessingStatus
 from app.models.extraction import DocumentBlock, DocumentPage, DocumentWord
 from tests import extraction_fixtures as fx
 from tests.integration.conftest import drain_jobs
@@ -146,6 +148,40 @@ class TestExtractionFlow:
             ).scalar_one()
         assert count == 2  # 페이지 중복 없음
 
+    async def test_page_preparation_does_not_hold_sqlite_writer_lock(
+        self, client, monkeypatch
+    ):
+        """CPU 전처리 중에는 별도 연결이 BEGIN IMMEDIATE를 획득할 수 있어야 한다."""
+        from app.services.extraction import pipeline as pipeline_mod
+
+        doc = await upload_extracted(client, fx.single_column_korean(pages=1))
+        original_prepare = pipeline_mod._prepare_page_rows
+        preparation_started = threading.Event()
+        release_preparation = threading.Event()
+
+        def paused_prepare(document_id, page):
+            preparation_started.set()
+            if not release_preparation.wait(timeout=10):
+                raise TimeoutError("test did not release page preparation")
+            return original_prepare(document_id, page)
+
+        monkeypatch.setattr(pipeline_mod, "_prepare_page_rows", paused_prepare)
+        retry = await client.post(f"/api/documents/{doc['id']}/extract/retry")
+        assert retry.status_code == 200
+
+        try:
+            assert await asyncio.to_thread(preparation_started.wait, 5)
+            async with get_session_factory()() as session:
+                await session.execute(text("PRAGMA busy_timeout=100"))
+                await session.execute(text("BEGIN IMMEDIATE"))
+                await session.rollback()
+        finally:
+            release_preparation.set()
+
+        await drain_jobs()
+        final = (await client.get(f"/api/documents/{doc['id']}")).json()["data"]
+        assert final["processingStatus"] == "extracted"
+
     async def test_extract_skips_when_result_is_current(self, client):
         doc = await upload_extracted(client, fx.sparse_text())
         res = await client.post(f"/api/documents/{doc['id']}/extract")
@@ -154,8 +190,6 @@ class TestExtractionFlow:
         assert res.json()["data"]["processingStatus"] != "extracting"
 
     async def test_cancel_returns_to_ready(self, client, monkeypatch):
-        import asyncio
-
         from app.services.extraction import pipeline as pipeline_mod
 
         # 페이지 처리 지연을 흉내내 취소 시점을 확보
@@ -230,19 +264,115 @@ class TestExtractionFlow:
         from app.services.tasks.runner import get_task_runner
 
         doc = await upload_extracted(client, fx.single_column_korean(pages=2))
+        doc_id = uuid.UUID(doc["id"])
         async with get_session_factory()() as session:
-            row = await session.get(Document, uuid.UUID(doc["id"]))
+            row = await session.get(Document, doc_id)
             assert row is not None
             row.processing_status = ProcessingStatus.EXTRACTING  # 중단 재현
+            job = (
+                await session.execute(
+                    select(DocumentJob)
+                    .where(
+                        DocumentJob.document_id == doc_id,
+                        DocumentJob.job_type == JobType.EXTRACT_DOCUMENT,
+                    )
+                    .order_by(DocumentJob.created_at.desc())
+                    .limit(1)
+                )
+            ).scalars().one()
+            job.status = JobStatus.RUNNING
+            job.attempt_count = job.max_attempts - 1
             await session.commit()
 
         await get_task_runner().recover_interrupted()
         await drain_jobs()
         final = (await client.get(f"/api/documents/{doc['id']}")).json()["data"]
         assert final["processingStatus"] == "extracted"
+        async with get_session_factory()() as session:
+            job = (
+                await session.execute(
+                    select(DocumentJob)
+                    .where(
+                        DocumentJob.document_id == doc_id,
+                        DocumentJob.job_type == JobType.EXTRACT_DOCUMENT,
+                    )
+                    .order_by(DocumentJob.created_at.desc())
+                    .limit(1)
+                )
+            ).scalars().one()
+            assert job.status == JobStatus.SUCCEEDED
+            assert job.attempt_count == job.max_attempts
+
+    async def test_restart_recovery_does_not_exceed_max_attempts(self, client):
+        from app.services.tasks.runner import get_task_runner
+
+        doc = await upload_extracted(client, fx.single_column_korean(pages=1))
+        doc_id = uuid.UUID(doc["id"])
+        async with get_session_factory()() as session:
+            row = await session.get(Document, doc_id)
+            assert row is not None
+            row.processing_status = ProcessingStatus.EXTRACTING
+            job = (
+                await session.execute(
+                    select(DocumentJob)
+                    .where(
+                        DocumentJob.document_id == doc_id,
+                        DocumentJob.job_type == JobType.EXTRACT_DOCUMENT,
+                    )
+                    .order_by(DocumentJob.created_at.desc())
+                    .limit(1)
+                )
+            ).scalars().one()
+            job.status = JobStatus.RUNNING
+            job.attempt_count = job.max_attempts
+            await session.commit()
+
+        recovered = await get_task_runner().recover_interrupted()
+        assert recovered == 0
+
+        async with get_session_factory()() as session:
+            row = await session.get(Document, doc_id)
+            job = (
+                await session.execute(
+                    select(DocumentJob)
+                    .where(
+                        DocumentJob.document_id == doc_id,
+                        DocumentJob.job_type == JobType.EXTRACT_DOCUMENT,
+                    )
+                    .order_by(DocumentJob.created_at.desc())
+                    .limit(1)
+                )
+            ).scalars().one()
+            assert row is not None
+            assert row.processing_status == ProcessingStatus.EXTRACTION_FAILED
+            assert row.failure_code == "EXTRACTION_MAX_ATTEMPTS"
+            assert job.status == JobStatus.FAILED
+            assert job.failure_code == "EXTRACTION_MAX_ATTEMPTS"
+            assert job.attempt_count == job.max_attempts
 
 
 class TestReprocessFailureIntegrity:
+    async def test_prepare_failure_replaces_old_rows_with_failed_page(
+        self, client, monkeypatch
+    ):
+        """재처리 준비 실패도 이전 결과를 FAILED 페이지로 원자적으로 교체한다."""
+        from app.services.extraction import pipeline as pipeline_mod
+
+        doc = await upload_extracted(client, fx.single_column_korean(pages=1))
+
+        def boom(document_id, page):
+            raise RuntimeError("prepare boom")
+
+        monkeypatch.setattr(pipeline_mod, "_prepare_page_rows", boom)
+        await client.post(f"/api/documents/{doc['id']}/extract/retry")
+        await drain_jobs()
+
+        detail = (await client.get(f"/api/documents/{doc['id']}")).json()["data"]
+        assert detail["processingStatus"] == "extraction_failed"
+        pages = (await client.get(f"/api/documents/{doc['id']}/pages")).json()["data"]
+        assert len(pages) == 1
+        assert pages[0]["extractionStatus"] == "failed"
+
     async def test_persist_failure_replaces_old_rows_with_failed_page(self, client, monkeypatch):
         """재처리 중 저장 실패 시 이전 결과가 남지 않고 FAILED 페이지로 교체된다."""
         from app.services.extraction import pipeline as pipeline_mod
