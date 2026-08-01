@@ -129,6 +129,16 @@ class OpenAICompatibleStreamingQaProvider:
                 {"role": "user", "content": _build_user_prompt(request)},
             ],
         }
+        if self.is_local:
+            # 로컬 Qwen3: 비사고·결정론적. 외부 provider 계약은 유지.
+            from app.services.summary.settings import (
+                LOCAL_MAX_TOKENS,
+                LOCAL_REASONING_EFFORT,
+            )
+
+            payload["temperature"] = 0
+            payload["reasoning_effort"] = LOCAL_REASONING_EFFORT
+            payload["max_tokens"] = LOCAL_MAX_TOKENS
         url = f"{self._endpoint}/chat/completions"
         if self._line_source is not None:
             sse_lines = self._line_source(url, payload, self._api_key)

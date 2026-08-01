@@ -180,11 +180,17 @@ class OpenAICompatibleSummaryProvider:
         self.is_local = is_local
         self._http = http_client  # 테스트에서 mock 주입; None이면 안전 HTTP 경로를 쓴다
         self._timeout = timeout  # None이면 요약 기본 timeout
-        self.available = bool(self._endpoint and self.model_name and self._api_key)
+        # 로컬(Ollama 등)은 API 키가 필요 없다 — 외부만 키를 요구한다.
+        self.available = bool(
+            self._endpoint and self.model_name and (self.is_local or self._api_key)
+        )
 
     def _chat(self, system: str, user: str) -> str:
+        from app.services.model_output import strip_thinking
         from app.services.summary.endpoint import SummaryNetworkError, post_json
         from app.services.summary.settings import (
+            LOCAL_MAX_TOKENS,
+            LOCAL_REASONING_EFFORT,
             SUMMARY_MAX_RESPONSE_BYTES,
             SUMMARY_REQUEST_TIMEOUT_SEC,
         )
@@ -198,6 +204,11 @@ class OpenAICompatibleSummaryProvider:
             "temperature": 0.2,
             "response_format": {"type": "json_object"},
         }
+        if self.is_local:
+            # 로컬 Qwen3: 비사고·결정론적 + 출력 상한. 외부 provider 계약은 건드리지 않는다.
+            payload["temperature"] = 0
+            payload["reasoning_effort"] = LOCAL_REASONING_EFFORT
+            payload["max_tokens"] = LOCAL_MAX_TOKENS
         url = f"{self._endpoint}/chat/completions"
         # 테스트에서 http_client(콜러블)를 주입하면 그것을 쓴다 — 실제 네트워크 없이 검증.
         if self._http is not None:
@@ -214,9 +225,11 @@ class OpenAICompatibleSummaryProvider:
                 max_response_bytes=SUMMARY_MAX_RESPONSE_BYTES,
             )
         try:
-            return data["choices"][0]["message"]["content"]
+            content = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
             raise SummaryNetworkError("bad_response") from exc
+        # thinking 흔적은 UI·저장·로그에 남기지 않는다(JSON 파싱 전에 제거).
+        return strip_thinking(content) if isinstance(content, str) else content
 
     def summarize_group(self, request: GroupRequest) -> GroupSummary:
         chunk_block = "\n\n".join(

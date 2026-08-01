@@ -28,3 +28,7 @@ SUMMARY_REQUEST_TIMEOUT_SEC = 60.0  # 요약 생성 요청 전체 timeout
 CONNECTION_TEST_TIMEOUT_SEC = 10.0  # 연결 확인은 더 짧게
 # 정상/오류 응답 모두 이 크기까지만 읽는다(압축 비활성화 후 적용). 요약 JSON은 작다.
 SUMMARY_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+
+# 로컬(Ollama) 모델 요청 튜닝 — 비사고 모드·결정론적 출력 + 출력 길이 상한.
+LOCAL_MAX_TOKENS = 2048
+LOCAL_REASONING_EFFORT = "none"

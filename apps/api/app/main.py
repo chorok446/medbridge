@@ -120,6 +120,7 @@ def create_app() -> FastAPI:
         documents,
         extraction,
         health,
+        local_ai,
         ocr,
         profile,
         qa,
@@ -218,6 +219,7 @@ def create_app() -> FastAPI:
     app.include_router(search.router)
     app.include_router(summary.router)
     app.include_router(qa.router)
+    app.include_router(local_ai.router)
     app.include_router(settings_routes.router)
     app.include_router(reports.router)
     app.include_router(system.router)

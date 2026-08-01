@@ -6,7 +6,7 @@ const enc = new TextEncoder();
 
 function collect(chunks: Uint8Array[]): QaStreamEvent[] {
   const events: QaStreamEvent[] = [];
-  const parser = createNdjsonParser((e) => events.push(e));
+  const parser = createNdjsonParser<QaStreamEvent>((e) => events.push(e));
   for (const c of chunks) parser.push(c);
   parser.end();
   return events;

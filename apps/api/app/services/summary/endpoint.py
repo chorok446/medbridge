@@ -179,6 +179,90 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         raise SummaryNetworkError("redirect_blocked")
 
 
+def _auth_headers(api_key: str, accept: str) -> dict[str, str]:
+    """공통 요청 헤더. api_key가 비어 있으면 Authorization을 넣지 않는다
+    (로컬 Ollama는 키가 없으므로 'Bearer None' 같은 가짜 값을 보내지 않는다)."""
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": accept,
+        # 압축 해제 후 크기 폭증을 피하려고 압축을 요청하지 않는다
+        "Accept-Encoding": "identity",
+    }
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    return headers
+
+
+def get_json(
+    url: str,
+    *,
+    is_local: bool,
+    timeout: float,
+    max_response_bytes: int,
+) -> dict:
+    """검증된 endpoint로 GET(JSON). post_json과 동일한 안전 정책(정책 재검증·redirect
+    차단·크기/데드라인 상한). 인증 헤더는 보내지 않는다(Ollama 로컬 조회용)."""
+    parts = urlsplit(url)
+    hostname = parts.hostname or ""
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    assert_host_allowed(hostname, port, is_local=is_local)
+
+    req = urllib.request.Request(
+        url,
+        headers={"Accept": "application/json", "Accept-Encoding": "identity"},
+        method="GET",
+    )
+    opener = urllib.request.build_opener(_NoRedirect())
+    raw = _read_capped(opener, req, timeout=timeout, max_response_bytes=max_response_bytes)
+    try:
+        return _json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise SummaryNetworkError("bad_response") from exc
+
+
+def _read_capped(
+    opener: urllib.request.OpenerDirector,
+    req: urllib.request.Request,
+    *,
+    timeout: float,
+    max_response_bytes: int,
+) -> bytearray:
+    """열기·크기/데드라인 상한 읽기·오류 범주화를 공유한다(post_json/get_json)."""
+    try:
+        with opener.open(req, timeout=timeout) as resp:  # noqa: S310 (검증된 endpoint)
+            length = resp.headers.get("Content-Length")
+            if length is not None:
+                try:
+                    if int(length) > max_response_bytes:
+                        raise SummaryNetworkError("response_too_large")
+                except ValueError:
+                    pass  # 거짓 Content-Length는 무시하고 streaming 상한으로 막는다
+            deadline = time.monotonic() + timeout
+            raw = bytearray()
+            while True:
+                if time.monotonic() > deadline:
+                    raise SummaryNetworkError("timeout")
+                piece = resp.read(65536)
+                if not piece:
+                    break
+                raw.extend(piece)
+                if len(raw) > max_response_bytes:
+                    raise SummaryNetworkError("response_too_large")
+    except SummaryNetworkError:
+        raise
+    except urllib.error.HTTPError as exc:
+        raise _classify_http_status(exc.code) from None
+    except TimeoutError as exc:
+        raise SummaryNetworkError("timeout") from exc
+    except OSError as exc:
+        if isinstance(exc, socket.timeout):
+            raise SummaryNetworkError("timeout") from exc
+        raise SummaryNetworkError("connect_failed") from exc
+    if len(raw) > max_response_bytes:
+        raise SummaryNetworkError("response_too_large")
+    return raw
+
+
 def post_json(
     url: str,
     payload: dict,
@@ -202,53 +286,11 @@ def post_json(
     req = urllib.request.Request(
         url,
         data=body,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            # 압축 해제 후 크기 폭증을 피하려고 압축을 요청하지 않는다
-            "Accept-Encoding": "identity",
-        },
+        headers=_auth_headers(api_key, "application/json"),
         method="POST",
     )
     opener = urllib.request.build_opener(_NoRedirect())
-    try:
-        with opener.open(req, timeout=timeout) as resp:  # noqa: S310 (검증된 endpoint)
-            length = resp.headers.get("Content-Length")
-            if length is not None:
-                try:
-                    if int(length) > max_response_bytes:
-                        raise SummaryNetworkError("response_too_large")
-                except ValueError:
-                    pass  # 거짓 Content-Length는 무시하고 streaming 상한으로 막는다
-            # 전체 요청 데드라인을 강제한다 — urllib timeout은 소켓 연산 단위라, 악성
-            # 서버가 timeout 간격마다 1바이트씩 흘려보내면 무한정 붙잡을 수 있다.
-            # 조금씩 읽되 매 반복 monotonic 데드라인을 확인해 slow-drip을 차단한다.
-            deadline = time.monotonic() + timeout
-            raw = bytearray()
-            while True:
-                if time.monotonic() > deadline:
-                    raise SummaryNetworkError("timeout")
-                piece = resp.read(65536)
-                if not piece:
-                    break
-                raw.extend(piece)
-                if len(raw) > max_response_bytes:
-                    raise SummaryNetworkError("response_too_large")
-    except SummaryNetworkError:
-        raise
-    except urllib.error.HTTPError as exc:
-        raise _classify_http_status(exc.code) from None
-    except TimeoutError as exc:
-        raise SummaryNetworkError("timeout") from exc
-    except OSError as exc:
-        # socket.timeout은 OSError의 하위지만 위에서 TimeoutError로 안 잡히는 경우 대비
-        if isinstance(exc, socket.timeout):
-            raise SummaryNetworkError("timeout") from exc
-        raise SummaryNetworkError("connect_failed") from exc
-
-    if len(raw) > max_response_bytes:
-        raise SummaryNetworkError("response_too_large")
+    raw = _read_capped(opener, req, timeout=timeout, max_response_bytes=max_response_bytes)
     try:
         return _json.loads(raw.decode("utf-8"))
     except (ValueError, UnicodeDecodeError) as exc:
@@ -283,12 +325,7 @@ def stream_lines(
     req = urllib.request.Request(
         url,
         data=body,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "Accept": "text/event-stream",
-            "Accept-Encoding": "identity",
-        },
+        headers=_auth_headers(api_key, "text/event-stream"),
         method="POST",
     )
     opener = urllib.request.build_opener(_NoRedirect())

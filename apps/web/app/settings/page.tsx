@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { ErrorBox } from "@/components/error-box";
+import { LocalAiSection } from "@/components/local-ai-settings";
 import { SummaryModelSection } from "@/components/summary-model-settings";
 import { UpdateManager } from "@/components/update-manager";
 import { getProfile, updateProfile } from "@/lib/api/profile";
@@ -134,6 +135,14 @@ export default function SettingsPage() {
             저장
           </button>
         </form>
+      </section>
+
+      <section className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
+        <h2 className="mb-1 font-semibold">로컬 AI</h2>
+        <p className="mb-3 text-sm text-slate-500">
+          내 PC에서 직접 실행하는 AI예요. 문서가 외부로 나가지 않습니다.
+        </p>
+        <LocalAiSection />
       </section>
 
       <section className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
