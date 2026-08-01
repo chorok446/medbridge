@@ -21,6 +21,12 @@ REDUCE_FAN_IN = 8
 GROUP_SUMMARY_MAX_CHARS = 400
 SUMMARY_MAP_MAX_TOKENS = 512
 
+# 구조화 reduce는 overview·sections·keyConcepts 등을 한 번에 만들어 map보다 훨씬 길다.
+# 로컬 qwen3:8b 실측(그룹 8개 x 400자)에서 completion_tokens가 1,500 안팎으로 기존 상한
+# 2048의 72~74%까지 차올랐다. 여유가 얇으면 finish_reason=length로 잘린 JSON이 되어
+# 요약 전체가 실패하므로 reduce에는 별도의 넉넉한 상한을 둔다.
+SUMMARY_REDUCE_MAX_TOKENS = 4096
+
 # artifact 내용 필드 최대 길이 (검증 단계에서 자른다)
 OVERVIEW_MAX_CHARS = 2000
 SECTION_SUMMARY_MAX_CHARS = 1500

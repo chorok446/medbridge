@@ -12,7 +12,11 @@ from typing import Protocol
 from app.services.summary.settings import (
     GROUP_SUMMARY_MAX_CHARS,
     SUMMARY_MAP_MAX_TOKENS,
+    SUMMARY_REDUCE_MAX_TOKENS,
 )
+
+# finish_reason 값을 로그에 남길 때 모델이 준 임의 문자열을 그대로 쓰지 않는다.
+_KNOWN_FINISH_REASONS = frozenset({"length", "content_filter", "tool_calls", "function_call"})
 
 
 @dataclass
@@ -227,31 +231,33 @@ class OpenAICompatibleSummaryProvider:
                     max_response_bytes=SUMMARY_MAX_RESPONSE_BYTES,
                 )
         except (json.JSONDecodeError, TypeError) as exc:
-            raise SummaryNetworkError("bad_response") from exc
+            raise SummaryNetworkError("bad_response", "envelope_not_json") from exc
         try:
             choice = data["choices"][0]
             content = choice["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
-            raise SummaryNetworkError("bad_response") from exc
+            raise SummaryNetworkError("bad_response", "envelope_shape") from exc
         # length/content_filter 등은 완결된 JSON 계약이 아니므로 파싱 전에 명시적으로 거부한다.
         finish_reason = choice.get("finish_reason")
         if finish_reason not in (None, "stop"):
-            raise SummaryNetworkError("bad_response")
+            # 토큰 상한 절단(length)인지 다른 중단인지 구분해 둔다 — 대응이 다르다.
+            safe = finish_reason if finish_reason in _KNOWN_FINISH_REASONS else "other"
+            raise SummaryNetworkError("bad_response", f"finish_{safe}")
         if not isinstance(content, str):
-            raise SummaryNetworkError("bad_response")
+            raise SummaryNetworkError("bad_response", "content_not_text")
         # thinking 흔적은 UI·저장·로그에 남기지 않는다(JSON 파싱 전에 제거).
         return strip_thinking(content)
 
     @staticmethod
-    def _parse_json_object(raw: str) -> dict:
+    def _parse_json_object(raw: str, *, stage: str) -> dict:
         from app.services.summary.endpoint import SummaryNetworkError
 
         try:
             parsed = json.loads(raw)
         except (json.JSONDecodeError, TypeError) as exc:
-            raise SummaryNetworkError("bad_response") from exc
+            raise SummaryNetworkError("bad_response", f"{stage}_content_not_json") from exc
         if not isinstance(parsed, dict):
-            raise SummaryNetworkError("bad_response")
+            raise SummaryNetworkError("bad_response", f"{stage}_content_not_object")
         return parsed
 
     def summarize_group(self, request: GroupRequest) -> GroupSummary:
@@ -268,17 +274,17 @@ class OpenAICompatibleSummaryProvider:
             f"400자 이하로 요약하라. 정확히 {{\"summary\":\"...\"}} 한 필드만 출력하고 "
             f"출처 ID·페이지·좌표는 출력하지 마라.\n\n{chunk_block}"
         )
-        raw = self._chat(system, user, max_tokens=SUMMARY_MAP_MAX_TOKENS)
-        parsed = self._parse_json_object(raw)
-        summary = parsed.get("summary")
-        if (
-            not isinstance(summary, str)
-            or not summary.strip()
-            or len(summary.strip()) > GROUP_SUMMARY_MAX_CHARS
-        ):
-            from app.services.summary.endpoint import SummaryNetworkError
+        from app.services.summary.endpoint import SummaryNetworkError
 
-            raise SummaryNetworkError("bad_response")
+        raw = self._chat(system, user, max_tokens=SUMMARY_MAP_MAX_TOKENS)
+        parsed = self._parse_json_object(raw, stage="map")
+        summary = parsed.get("summary")
+        if not isinstance(summary, str):
+            raise SummaryNetworkError("bad_response", "map_summary_missing")
+        if not summary.strip():
+            raise SummaryNetworkError("bad_response", "map_summary_empty")
+        if len(summary.strip()) > GROUP_SUMMARY_MAX_CHARS:
+            raise SummaryNetworkError("bad_response", "map_summary_too_long")
         source_ids = list(dict.fromkeys(c.chunk_id for c in request.chunks))
         return GroupSummary(
             group_id=request.group_id,
@@ -297,14 +303,26 @@ class OpenAICompatibleSummaryProvider:
             "group id만 사용하라. 존재하지 않는 group id나 새로운 임상 판단을 만들지 "
             "마라. page/bbox/chunk id는 출력하지 마라. JSON으로만 답하라."
         )
+        # 형태를 예시로 못박는다. "각 항목에 sourceGroupIds를 포함하라"만으로는 overview를
+        # 문자열로 돌려줘 서버가 조용히 버리는 일이 실측에서 반복됐다(출처 없는 항목은
+        # 저장하지 않는 계약이라 개요가 통째로 사라진다).
+        valid_ids = ", ".join(g.group_id for g in request.group_summaries)
         user = (
             f"학습자 수준: {request.learner_level}, 언어: {request.language}. "
-            "다음 그룹 요약으로 구조화 요약(overview, sections, keyConcepts, "
-            "prerequisites, learnerExplanations, studyCautions)을 만들어라. 각 항목에 "
-            f"sourceGroupIds를 포함하라.\n\n{group_block}"
+            "다음 그룹 요약으로 구조화 요약을 만들어라. 아래 형태를 정확히 지켜라. "
+            "모든 객체는 sourceGroupIds 배열을 가져야 하며 그 값은 "
+            f"[{valid_ids}] 중에서만 고른다.\n"
+            '{"overview":{"text":"...","sourceGroupIds":["g0"]},'
+            '"sections":[{"title":"...","summary":"...","sourceGroupIds":["g0"]}],'
+            '"keyConcepts":[{"term":"...","explanation":"...","sourceGroupIds":["g0"]}],'
+            '"prerequisites":[{"concept":"...","whyNeeded":"...","sourceType":"document",'
+            '"sourceGroupIds":["g0"]}],'
+            '"learnerExplanations":[{"level":"'
+            f'{request.learner_level}","text":"...","sourceGroupIds":["g0"]}}]}}'
+            f"\n\n{group_block}"
         )
-        raw = self._chat(system, user)
-        parsed = self._parse_json_object(raw)
+        raw = self._chat(system, user, max_tokens=SUMMARY_REDUCE_MAX_TOKENS)
+        parsed = self._parse_json_object(raw, stage="reduce")
         return self._resolve_group_sources(parsed, request)
 
     @staticmethod
@@ -325,10 +343,12 @@ class OpenAICompatibleSummaryProvider:
             out = {key: resolve(item) for key, item in value.items() if key != "sourceChunkIds"}
             if "sourceGroupIds" in value:
                 tokens = value["sourceGroupIds"]
-                if not isinstance(tokens, list) or not tokens or not all(
+                if not isinstance(tokens, list) or not tokens:
+                    raise SummaryNetworkError("bad_response", "reduce_group_ids_shape")
+                if not all(
                     isinstance(token, str) and token in group_sources for token in tokens
                 ):
-                    raise SummaryNetworkError("bad_response")
+                    raise SummaryNetworkError("bad_response", "reduce_group_ids_unknown")
                 resolved: list[str] = []
                 for token in dict.fromkeys(tokens):
                     for chunk_id in group_sources[token]:

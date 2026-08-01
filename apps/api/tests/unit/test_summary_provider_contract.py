@@ -109,6 +109,85 @@ def test_map_rejects_malformed_or_out_of_contract_content(content):
     assert caught.value.category == "bad_response"
 
 
+class TestFailureIsDiagnosable:
+    """bad_response 하나에 7가지 원인이 뭉쳐 있으면 실기기 로그로 원인을 좁힐 수 없다.
+
+    각 계약 위반이 서로 다른 reason을 남기는지 고정한다. reason에는 문서·모델 원문이
+    들어가면 안 된다(분류값만).
+    """
+
+    @pytest.mark.parametrize(
+        ("content", "finish_reason", "expected_reason"),
+        [
+            (json.dumps({"summary": "정상"}), "length", "finish_length"),
+            (json.dumps({"summary": "정상"}), "content_filter", "finish_content_filter"),
+            (json.dumps({"summary": "정상"}), "무작위값", "finish_other"),
+            ('{"summary":"끊김', "stop", "map_content_not_json"),
+            (json.dumps([1, 2]), "stop", "map_content_not_object"),
+            (json.dumps({"summary": 123}), "stop", "map_summary_missing"),
+            (json.dumps({"summary": "   "}), "stop", "map_summary_empty"),
+            (json.dumps({"summary": "가" * 401}), "stop", "map_summary_too_long"),
+        ],
+    )
+    def test_map_failures_carry_distinct_reasons(self, content, finish_reason, expected_reason):
+        provider, _ = _provider(_chat_response(content, finish_reason=finish_reason))
+
+        with pytest.raises(SummaryNetworkError) as caught:
+            provider.summarize_group(_group_request())
+
+        assert caught.value.category == "bad_response"
+        assert caught.value.reason == expected_reason
+
+    def test_unknown_finish_reason_is_not_echoed_verbatim(self):
+        """모델이 준 임의 문자열을 로그에 그대로 싣지 않는다."""
+        provider, _ = _provider(
+            _chat_response(json.dumps({"summary": "정상"}), finish_reason="비밀경로 C:/x")
+        )
+
+        with pytest.raises(SummaryNetworkError) as caught:
+            provider.summarize_group(_group_request())
+
+        assert caught.value.reason == "finish_other"
+        assert "비밀경로" not in str(caught.value)
+
+    def test_reduce_group_id_failures_are_distinguishable(self):
+        groups = [GroupSummary("g0", "구역", "요약", ["c0"])]
+        request = DocumentRequest(
+            group_summaries=groups, learner_level="nursing_student", language="ko"
+        )
+        shape_broken = {"overview": {"text": "개요", "sourceGroupIds": "g0"}}
+        unknown_id = {"overview": {"text": "개요", "sourceGroupIds": ["g99"]}}
+
+        with pytest.raises(SummaryNetworkError) as shape:
+            OpenAICompatibleSummaryProvider._resolve_group_sources(shape_broken, request)
+        with pytest.raises(SummaryNetworkError) as unknown:
+            OpenAICompatibleSummaryProvider._resolve_group_sources(unknown_id, request)
+
+        assert shape.value.reason == "reduce_group_ids_shape"
+        assert unknown.value.reason == "reduce_group_ids_unknown"
+
+
+def test_reduce_prompt_pins_object_shape_so_overview_is_not_dropped():
+    """실측에서 qwen3:8b가 overview를 문자열로 돌려줘 개요가 통째로 사라졌다.
+
+    출처 없는 항목은 저장하지 않는 계약이라 조용히 유실된다 — 프롬프트가 형태를
+    예시로 못박아야 한다.
+    """
+    content = json.dumps({"overview": {"text": "개요", "sourceGroupIds": ["g0"]}})
+    provider, capture = _provider(_chat_response(content))
+    groups = [GroupSummary("g0", "구역", "요약", ["c0"])]
+
+    provider.summarize_document(
+        DocumentRequest(group_summaries=groups, learner_level="nursing_student", language="ko")
+    )
+
+    prompt = "\n".join(m["content"] for m in capture.payloads[0]["messages"])
+    assert '"overview":{"text"' in prompt  # 객체 형태를 명시
+    assert '"sourceGroupIds"' in prompt
+    assert "g0" in prompt  # 고를 수 있는 group id 목록을 알려준다
+    assert "c0" not in prompt  # 실제 chunk id는 모델에 보내지 않는다
+
+
 def test_reduce_resolves_only_server_group_tokens_to_real_chunk_ids():
     structured = {
         "overview": {

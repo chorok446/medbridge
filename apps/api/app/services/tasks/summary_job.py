@@ -72,6 +72,11 @@ def _classify_pipeline_failure(exc: Exception) -> tuple[str, str | None]:
     return "SUMMARY_FAILED", None
 
 
+def _failure_reason(exc: Exception) -> str | None:
+    """어떤 계약이 깨졌는지 가리키는 분류값(원문 없음). 로그 진단용."""
+    return getattr(exc, "reason", None) if isinstance(exc, SummaryNetworkError) else None
+
+
 async def run_summary_job(
     document_id: uuid.UUID,
     correlation_id: str,
@@ -161,6 +166,9 @@ async def run_summary_job(
             document_id=str(document_id),
             error_type=type(exc).__name__,
             failure_category=failure_category or "unexpected",
+            # 어느 계약이 깨졌는지 — invalid_response 하나에 7가지 원인이 뭉쳐 있어
+            # 이 값이 없으면 로그만으로 원인을 좁힐 수 없다.
+            failure_reason=_failure_reason(exc) or "none",
         )
         async with factory() as session:
             if await _job_is_current(session, document_id, job_id):

@@ -44,11 +44,18 @@ NET_ERROR_MESSAGES = {
 
 
 class SummaryNetworkError(Exception):
-    """요약 네트워크 오류 — category만 노출하고 원문 오류·비밀은 담지 않는다."""
+    """요약 네트워크 오류 — category만 노출하고 원문 오류·비밀은 담지 않는다.
 
-    def __init__(self, category: str) -> None:
-        super().__init__(category)
+    `reason`은 같은 category 안에서 **어느 계약이 깨졌는지**를 가리키는 짧은 분류값이다.
+    `bad_response` 하나에 HTTP 400·JSON 파싱 실패·finish_reason 절단·필드 타입 위반·
+    길이 초과·group id 불일치가 전부 뭉쳐 있어 로그만으로는 원인을 좁힐 수 없었다.
+    reason에는 문서·질문·모델 출력 원문을 절대 담지 않는다(분류값·수치만).
+    """
+
+    def __init__(self, category: str, reason: str | None = None) -> None:
+        super().__init__(category if reason is None else f"{category}:{reason}")
         self.category = category
+        self.reason = reason
 
     @property
     def user_message(self) -> str:
@@ -389,13 +396,14 @@ def stream_lines(
 
 def _classify_http_status(code: int) -> SummaryNetworkError:
     if code in (401,):
-        return SummaryNetworkError("auth_failed")
+        return SummaryNetworkError("auth_failed", f"http_{code}")
     if code in (403,):
-        return SummaryNetworkError("forbidden")
+        return SummaryNetworkError("forbidden", f"http_{code}")
     if code in (404,):
-        return SummaryNetworkError("model_not_found")
+        return SummaryNetworkError("model_not_found", f"http_{code}")
     if code == 429:
-        return SummaryNetworkError("rate_limited")
+        return SummaryNetworkError("rate_limited", f"http_{code}")
     if 500 <= code <= 599:
-        return SummaryNetworkError("server_error")
-    return SummaryNetworkError("bad_response")
+        return SummaryNetworkError("server_error", f"http_{code}")
+    # 400(잘못된 파라미터 등)도 여기로 온다 — 응답 내용 위반과 구분되도록 reason을 남긴다.
+    return SummaryNetworkError("bad_response", f"http_{code}")
