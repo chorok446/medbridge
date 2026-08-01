@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     # keyring service 이름 접두사 — 테스트는 in-memory 백엔드를 주입해 실제 OS 저장소를 안 건드린다.
     keyring_service_name: str = Field(default="MedBridgeStudy")
 
+    # Q&A 공급자 강제 override (테스트·개발용). "auto"면 요약 모델 설정(SummarySettings)과
+    # keyring을 그대로 재사용해 실제 공급자를 결정한다.
+    qa_provider: str = Field(default="auto", pattern="^(auto|disabled|deterministic)$")
+
     @model_validator(mode="after")
     def _production_requires_token(self) -> "Settings":
         # 패키징 앱(production)에서 토큰이 없으면 인증 없이 열리므로 기동을 거부한다

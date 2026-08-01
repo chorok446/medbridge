@@ -16,22 +16,29 @@ class KeywordHit:
     raw_bm25: float  # SQLite bm25: 낮을수록(더 음수일수록) 더 좋은 매치
 
 
-def _sanitize_fts_query(query: str) -> str:
+def _sanitize_fts_query(query: str, *, match_all: bool = True) -> str:
     """사용자 입력을 FTS5 쿼리 문법이 아니라 일반 단어 목록으로 취급한다.
 
     각 단어를 큰따옴표로 감싸 리터럴 phrase로 만들어, 콜론·괄호 같은 FTS5
-    연산자 문자가 포함돼도 구문 오류 없이 안전하게 검색된다.
+    연산자 문자가 포함돼도 구문 오류 없이 안전하게 검색된다. match_all=False면
+    OR로 묶는다(자연어 질문처럼 일부 단어만 겹쳐도 되는 Q&A 검색용).
     """
     terms = [t.strip() for t in query.split() if t.strip()]
     escaped = [t.replace('"', '""') for t in terms]
-    return " ".join(f'"{t}"' for t in escaped)
+    joiner = " " if match_all else " OR "
+    return joiner.join(f'"{t}"' for t in escaped)
 
 
 _MIN_TRIGRAM_TERM_CHARS = 3
 
 
 async def search_keyword(
-    session: AsyncSession, document_id: uuid.UUID, query: str, limit: int
+    session: AsyncSession,
+    document_id: uuid.UUID,
+    query: str,
+    limit: int,
+    *,
+    match_all: bool = True,
 ) -> list[KeywordHit]:
     terms = [t.strip() for t in query.split() if t.strip()]
     if not terms:
@@ -41,9 +48,9 @@ async def search_keyword(
         # 안 된다("심장", "혈압" 등 2글자 한국어 의학 용어가 흔하다) — 이런 경우만
         # 문서 범위 LIKE 스캔으로 대체한다. 개인용 앱 규모(문서 하나의 청크 수십~
         # 수백 개)라 선형 스캔으로 충분하다.
-        return await _search_keyword_like(session, document_id, terms, limit)
+        return await _search_keyword_like(session, document_id, terms, limit, match_all=match_all)
 
-    fts_query = _sanitize_fts_query(query)
+    fts_query = _sanitize_fts_query(query, match_all=match_all)
     if not fts_query:
         return []
     rows = (
@@ -67,10 +74,15 @@ async def search_keyword(
 
 
 async def _search_keyword_like(
-    session: AsyncSession, document_id: uuid.UUID, terms: list[str], limit: int
+    session: AsyncSession,
+    document_id: uuid.UUID,
+    terms: list[str],
+    limit: int,
+    *,
+    match_all: bool = True,
 ) -> list[KeywordHit]:
     """bm25 점수는 없으므로 등장 횟수를 대체 점수로 쓴다(낮을수록 좋다는 bm25 관례에
-    맞춰 음수로 뒤집는다). 모든 검색어가 포함된 청크만 대상으로 한다."""
+    맞춰 음수로 뒤집는다). match_all=True면 모든 단어, False면 하나라도 포함된 청크."""
     columns = (DocumentChunk.id, DocumentChunk.normalized_text, DocumentChunk.section_title)
     rows = (
         await session.execute(select(*columns).where(DocumentChunk.document_id == document_id))
@@ -79,9 +91,10 @@ async def _search_keyword_like(
     hits: list[KeywordHit] = []
     for row in rows:
         haystack = f"{row.normalized_text}\n{row.section_title or ''}".lower()
-        if not all(t in haystack for t in lowered_terms):
+        present = [t for t in lowered_terms if t in haystack]
+        if (match_all and len(present) < len(lowered_terms)) or not present:
             continue
-        occurrences = sum(haystack.count(t) for t in lowered_terms)
+        occurrences = sum(haystack.count(t) for t in present)
         hits.append(KeywordHit(chunk_id=row.id, raw_bm25=-float(occurrences)))
     hits.sort(key=lambda h: h.raw_bm25)
     return hits[:limit]

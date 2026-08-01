@@ -7,6 +7,7 @@ from app.models.extraction import (
     DocumentWord,
 )
 from app.models.ocr import OcrRun
+from app.models.qa import QaClaim, QaMessage, QaThread
 from app.models.search import DocumentChunk
 from app.models.summary import SummaryArtifact, SummaryRun, SummarySettings
 from app.models.user import User
@@ -25,4 +26,7 @@ __all__ = [
     "SummaryRun",
     "SummaryArtifact",
     "SummarySettings",
+    "QaThread",
+    "QaMessage",
+    "QaClaim",
 ]

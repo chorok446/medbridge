@@ -109,6 +109,27 @@ class LearnerLevel(enum.StrEnum):
     EXPERIENCED_NURSE = "experienced_nurse"
 
 
+class QaMessageRole(enum.StrEnum):
+    USER = "user"
+    ASSISTANT = "assistant"
+
+
+class QaMessageStatus(enum.StrEnum):
+    PENDING = "pending"
+    COMPLETED = "completed"
+    NOT_FOUND = "not_found"
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
+    CONFLICTING_EVIDENCE = "conflicting_evidence"
+    FAILED = "failed"
+    REVISION_CHANGED = "revision_changed"
+
+
+class QaClaimVerification(enum.StrEnum):
+    SUPPORTED = "supported"
+    UNSUPPORTED = "unsupported"
+    CONFLICTING = "conflicting"
+
+
 class OcrRunStatus(enum.StrEnum):
     RUNNING = "running"
     OCR_COMPLETED = "ocr_completed"
