@@ -144,6 +144,8 @@ class OpenAICompatibleQaProvider:
     def answer(self, request: QaRequest) -> dict:
         from app.services.summary.endpoint import SummaryNetworkError, post_json
         from app.services.summary.settings import (
+            LOCAL_MAX_TOKENS,
+            LOCAL_REASONING_EFFORT,
             SUMMARY_MAX_RESPONSE_BYTES,
             SUMMARY_REQUEST_TIMEOUT_SEC,
         )
@@ -158,6 +160,11 @@ class OpenAICompatibleQaProvider:
             "temperature": 0.1,
             "response_format": {"type": "json_object"},
         }
+        if self.is_local:
+            # 로컬 Qwen3: 비사고·결정론적 + 출력 상한. 외부 provider 계약은 유지.
+            payload["temperature"] = 0
+            payload["reasoning_effort"] = LOCAL_REASONING_EFFORT
+            payload["max_tokens"] = LOCAL_MAX_TOKENS
         url = f"{self._endpoint}/chat/completions"
         if self._http is not None:
             raw = self._http(url, payload, self._api_key)
@@ -175,6 +182,10 @@ class OpenAICompatibleQaProvider:
             content = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
             raise SummaryNetworkError("bad_response") from exc
+        if isinstance(content, str):
+            from app.services.model_output import strip_thinking
+
+            content = strip_thinking(content)  # thinking 흔적 제거 후 JSON 파싱
         try:
             return json.loads(content) if isinstance(content, str) else content
         except (ValueError, TypeError) as exc:

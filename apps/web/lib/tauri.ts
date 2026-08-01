@@ -39,3 +39,17 @@ export async function relaunchApp(): Promise<void> {
   const { relaunch } = await import("@tauri-apps/plugin-process");
   await relaunch();
 }
+
+/**
+ * 외부 URL을 기본 브라우저로 연다(공식 설치 페이지 안내용). Tauri에서는 opener 플러그인,
+ * 브라우저 개발 모드에서는 새 탭. https URL만 허용한다.
+ */
+export async function openExternalUrl(url: string): Promise<void> {
+  if (!/^https:\/\//i.test(url)) return; // https만 — 안전
+  if (!isTauri()) {
+    if (typeof window !== "undefined") window.open(url, "_blank", "noopener,noreferrer");
+    return;
+  }
+  const { openUrl } = await import("@tauri-apps/plugin-opener");
+  await openUrl(url);
+}
