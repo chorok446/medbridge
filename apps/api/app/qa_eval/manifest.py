@@ -116,6 +116,7 @@ def parse_cases(raw: dict, fixtures: dict[str, Fixture]) -> list[EvalCase]:
         _require(category in VALID_CATEGORIES, f"[{case_id}] 알 수 없는 category: {category}")
         fixture = item.get("documentFixture")
         _require(fixture in fixtures, f"[{case_id}] 알 수 없는 documentFixture: {fixture}")
+        fixture_text = "\n".join(b for page in fixtures[fixture].pages for b in page)
         question = item.get("question")
         _require(
             isinstance(question, str) and question.strip(),
@@ -129,15 +130,22 @@ def parse_cases(raw: dict, fixtures: dict[str, Fixture]) -> list[EvalCase]:
         max_claims = item.get("maximumAcceptedClaims")
         _require(max_claims is None or (isinstance(max_claims, int) and max_claims >= 0),
                  f"[{case_id}] maximumAcceptedClaims는 0 이상 정수여야 합니다.")
+        required_evidence = _str_list(
+            item.get("requiredEvidence"), f"[{case_id}] requiredEvidence"
+        )
+        # requiredEvidence는 해당 fixture 본문에 실제로 존재해야 한다(오타·drift 방지).
+        for token in required_evidence:
+            _require(
+                token in fixture_text,
+                f"[{case_id}] requiredEvidence '{token}'가 fixture '{fixture}' 본문에 없습니다.",
+            )
         cases.append(EvalCase(
             case_id=case_id,
             category=category,
             document_fixture=fixture,
             question=question,
             expected_status=status,
-            required_evidence=_str_list(
-                item.get("requiredEvidence"), f"[{case_id}] requiredEvidence"
-            ),
+            required_evidence=required_evidence,
             forbidden_claims=_str_list(
                 item.get("forbiddenClaims"), f"[{case_id}] forbiddenClaims"
             ),

@@ -119,6 +119,13 @@ def test_nonexistent_commit_fails(tmp_path):
         _run(tmp_path, _approval(sha), commit_exists=False)
 
 
+def test_empty_current_sha_fails_closed(tmp_path):
+    # 현재 커밋을 알 수 없으면(GITHUB_SHA/HEAD 미확인) fail-closed — 조상·변경 검사 불가
+    sha = _write_artifact(tmp_path)
+    with pytest.raises(gate.GateError):
+        _run(tmp_path, _approval(sha), current_sha="")
+
+
 def test_verdict_not_recommended_fails(tmp_path):
     sha = _write_artifact(tmp_path)
     approval = _approval(sha, qwen3_8b={"verdict": "release_hold"})

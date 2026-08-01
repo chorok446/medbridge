@@ -41,11 +41,11 @@ Layer 1은 실제 애플리케이션 경로(검색 → 컨텍스트 → provider
 
 ```
 # 균형형(기본 후보)
-uv run python scripts/evaluate_local_qa.py --model qwen3:8b --repeat 3 --fail-on-gate
+cd apps/api && uv run python scripts/evaluate_local_qa.py --model qwen3:8b --repeat 3 --fail-on-gate
 
 # 경량형 / 고품질형 비교
-uv run python scripts/evaluate_local_qa.py --model qwen3:4b --repeat 3
-uv run python scripts/evaluate_local_qa.py --model qwen3:14b --repeat 3
+cd apps/api && uv run python scripts/evaluate_local_qa.py --model qwen3:4b --repeat 3
+cd apps/api && uv run python scripts/evaluate_local_qa.py --model qwen3:14b --repeat 3
 ```
 
 - 결과: `artifacts/qa-evaluation/qa-eval-qwen3-8b.json` / `.md` 등

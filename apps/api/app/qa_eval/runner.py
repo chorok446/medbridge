@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from app.qa_eval.evaluate import CaseResult, evaluate_case
 from app.qa_eval.gate import GateResult, evaluate_gate
 from app.qa_eval.manifest import Dataset
@@ -14,13 +16,14 @@ async def run_evaluation(
     dataset: Dataset,
     *,
     model_label: str,
-    provider_mode: str,  # "deterministic" | "local"
+    provider_mode: Literal["deterministic", "local"],
     model: str | None = None,
     repeat: int = 1,
     categories: list[str] | None = None,
     timeout_sec: float = 120.0,
 ) -> tuple[EvalSummary, GateResult, list[list[CaseResult]]]:
     """반환: (요약, 게이트, 케이스별 반복 결과)."""
+    effective_repeat = max(1, repeat)  # 실행·게이트에 같은 값을 쓴다
     cases = [
         c for c in dataset.cases
         if categories is None or c.category in categories
@@ -32,7 +35,7 @@ async def run_evaluation(
     for case in cases:
         fixture = dataset.fixtures[case.document_fixture]
         results: list[CaseResult] = []
-        for _ in range(max(1, repeat)):
+        for _ in range(effective_repeat):
             run = await run_case(
                 factory, case, fixture,
                 provider_mode=provider_mode, model=model, timeout_sec=timeout_sec,
@@ -43,6 +46,6 @@ async def run_evaluation(
     summary = summarize(model_label, per_case)
     gate = evaluate_gate(
         summary, release_mode=release_mode,
-        expected_categories=expected_categories, repeat=repeat,
+        expected_categories=expected_categories, repeat=effective_repeat,
     )
     return summary, gate, per_case

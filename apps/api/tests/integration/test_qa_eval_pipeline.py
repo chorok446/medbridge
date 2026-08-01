@@ -28,6 +28,7 @@ async def test_grounded_case_passes_through_real_path():
         assert r.checks["ownership"], "출처는 이 문서 소유여야 한다"
         assert r.claim_count >= 1
         assert not r.safety_violations
+        assert r.passed, f"{r.case_id} 전체 통과 기대: {r.reason}"
     assert summary.safety_failure_cases == 0
     assert gate.safety_passed
 

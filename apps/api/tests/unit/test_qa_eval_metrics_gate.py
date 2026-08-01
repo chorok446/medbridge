@@ -86,6 +86,14 @@ def test_gate_4b_light_limited_when_useful_gate_fails_but_safe():
     assert gate.verdict == LIGHT_LIMITED
 
 
+def test_empty_denominator_is_vacuous_not_failing():
+    # conflict-only 필터 실행 → answerable·not_found 케이스 없음 → 거짓 0.0 실패가 아니라 1.0
+    per_case = [[_result("conf", "conflict", True, "conflicting_evidence")]]
+    summary = summarize("qwen3:8b", per_case)
+    assert summary.answerable_valid_rate == 1.0
+    assert summary.not_found_hold_accuracy == 1.0
+
+
 def test_release_mode_incomplete_coverage_holds():
     # 출시 모드에서 핵심 카테고리가 빠지면(필터링 등) 불완전 → 출시 보류
     per_case = [[_result("g1", "grounded_basic", True, "completed")]]
@@ -133,8 +141,13 @@ def test_report_json_has_no_leak_and_valid_shape(tmp_path):
     data = json.loads(jp.read_text(encoding="utf-8"))
     assert data["model"] == "qwen3:8b"
     assert "gate" in data and "cases" in data
-    # 케이스 항목에 질문·문서·주장 텍스트가 없어야 한다
+    # 케이스 항목은 집계 지표만 담고 질문·문서·주장 텍스트는 없어야 한다
     case_keys = set(data["cases"][0])
     assert case_keys == {"caseId", "category", "safetyCritical", "runs", "passes",
-                         "passRate", "statuses", "unstable", "safetyFailed", "finalPass"}
+                         "passRate", "statuses", "answerStatus", "claimCount",
+                         "citationCount", "latencySec", "unstable", "safetyFailed",
+                         "safetyViolations", "finalPass"}
+    # 스펙 허용 필드가 실제로 담긴다
+    assert data["cases"][0]["claimCount"] == 1
+    assert data["cases"][0]["answerStatus"] == "completed"
     assert "질문" not in mp.read_text(encoding="utf-8")

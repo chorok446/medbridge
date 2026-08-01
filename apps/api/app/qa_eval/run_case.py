@@ -133,6 +133,7 @@ async def run_case(
     agen = stream_service.run_stream(
         doc_id, tid, aid, case.question, rid, crev, chrev, _FakeRequest()
     )
+    completed_message: dict | None = None
     try:
         async with asyncio.timeout(timeout_sec):
             async for ev in agen:
@@ -149,7 +150,8 @@ async def run_case(
                     run.reached_terminal = True
                     run.terminal_type = etype
                     if etype == "completed":
-                        run.status = (ev.get("message") or {}).get("status", "completed")
+                        completed_message = ev.get("message") or {}
+                        run.status = completed_message.get("status", "completed")
                     elif etype == "interrupted":
                         run.status = "interrupted"
                         run.error_code = ev.get("code")
@@ -160,18 +162,20 @@ async def run_case(
                         run.error_code = ev.get("code")
     except TimeoutError:
         run.timed_out = True
-        with contextlib.suppress(Exception):
-            await agen.aclose()
+    except Exception as exc:  # noqa: BLE001 — 러너는 던지지 않고 결과로 표현한다
+        run.status = "failed"
+        run.error_code = type(exc).__name__
     finally:
+        with contextlib.suppress(Exception):
+            await agen.aclose()  # 모든 경로에서 스트림 정리
         run.latency_sec = time.monotonic() - start
 
-    # completed면 저장된 최종 메시지에서 claim/source를 확정 반영(스트림 이벤트와 동일하지만
-    # 저장 경로까지 통과했는지 확인)
-    if run.terminal_type == "completed":
-        dto = await stream_service._message_dto(factory, aid)
-        run.status = dto.get("status", run.status)
+    # completed면 최종 message(공개 NDJSON 계약)의 claim/source로 확정 반영 —
+    # 저장 경로까지 통과한 결과를 본다(stream_service 내부에 의존하지 않는다).
+    if run.terminal_type == "completed" and completed_message is not None:
+        run.status = completed_message.get("status", run.status)
         run.claims = [
-            ClaimView(text=c["text"], sources=c.get("sourceRefs", []))
-            for c in dto.get("claims", [])
+            ClaimView(text=c.get("text", ""), sources=c.get("sourceRefs", []))
+            for c in completed_message.get("claims", [])
         ]
     return run

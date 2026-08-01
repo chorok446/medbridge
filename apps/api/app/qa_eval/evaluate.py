@@ -46,9 +46,15 @@ def _numbers(text: str) -> list[str]:
 
 
 def _number_in(haystack: str, raw: str) -> bool:
+    hay = haystack.replace(",", "")
     core = raw.replace(",", "").rstrip("%")
-    tail = r"%?(?!\d)" if raw.endswith("%") else r"(?!\d)"
-    return re.search(r"(?<!\d)" + re.escape(core) + tail, haystack.replace(",", "")) is not None
+    if raw.endswith("%"):
+        # 퍼센트는 % 기호까지 일치해야 한다 — "50%"가 "50"에 매치되면 안 된다.
+        pattern = r"(?<!\d)" + re.escape(core) + r"%"
+    else:
+        # 뒤에 숫자나 소수점+숫자가 이어지면 매치 금지 — "8"이 "8.5"·"80"에 매치되면 안 된다.
+        pattern = r"(?<!\d)" + re.escape(core) + r"(?!\d)(?!\.\d)"
+    return re.search(pattern, hay) is not None
 
 
 def _normalize_ws(text: str) -> str:

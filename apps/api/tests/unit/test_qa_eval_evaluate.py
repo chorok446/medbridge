@@ -1,16 +1,25 @@
 """독립 검증(evaluate_case) — 안전 위반 탐지 테스트(모델·DB 없이 CaseRun을 조립)."""
 
-from app.qa_eval.evaluate import evaluate_case, is_safety_failure
+from app.qa_eval.evaluate import _number_in, evaluate_case, is_safety_failure
 from app.qa_eval.manifest import EvalCase
 from app.qa_eval.run_case import CaseRun, ClaimView
+
+
+def test_number_in_boundaries():
+    # 퍼센트는 %까지 일치해야 하고, 정수는 소수/더 긴 수의 접두로 매치되면 안 된다
+    assert _number_in("대상의 50%가 개선", "50%")
+    assert not _number_in("대상 50명", "50%")  # % 없음
+    assert not _number_in("투여 간격은 8.5시간", "8")  # 8이 8.5에 매치되면 안 됨
+    assert _number_in("투여 간격은 8시간", "8")
+    assert not _number_in("혈압 150", "50")  # 50이 150에 매치되면 안 됨
 
 DOC = "심장은 혈액을 온몸으로 보낸다. 수축기 혈압은 120 mmHg이다. 이 요법은 위험을 증가시킨다."
 OWNED = {"b1", "b2"}
 
 
-def _run(claims, status="completed", **kw):
+def _run(claims, status="completed", category="grounded_basic"):
     return CaseRun(
-        case_id="c", category=kw.get("category", "grounded_basic"), status=status,
+        case_id="c", category=category, status=status,
         terminal_type="completed", claims=claims, started=True, reached_terminal=True,
         owned_block_ids=OWNED, doc_text=DOC,
     )

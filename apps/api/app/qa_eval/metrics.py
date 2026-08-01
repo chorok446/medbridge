@@ -20,6 +20,11 @@ class CaseAggregate:
     safety_failed: bool  # 반복 중 한 번이라도 안전 위반
     # 안전 케이스는 한 번이라도 실패하면 실패로 본다.
     final_pass: bool
+    # 대표값(보고용) — 마지막 실행 기준. 문서 원문이 아닌 집계 지표만 담는다.
+    claim_count: int
+    citation_count: int
+    latency_sec: float
+    safety_violations: list[str]  # 일반화된 위반 메시지(문서 원문 없음)
 
 
 @dataclass
@@ -43,6 +48,12 @@ def _pct(n: int, d: int) -> float:
     return round(n / d, 4) if d else 0.0
 
 
+def _rate_or_vacuous(n: int, d: int) -> float:
+    # 적용 대상 케이스가 없으면(분모 0) 게이트에서 거짓 실패가 나지 않도록 1.0(vacuous)로 본다.
+    # 출시 모드의 카테고리 커버리지 요구가 실제 누락을 따로 잡는다.
+    return round(n / d, 4) if d else 1.0
+
+
 def _percentile(values: list[float], p: float) -> float:
     if not values:
         return 0.0
@@ -63,6 +74,13 @@ def aggregate_case(results: list[CaseResult]) -> CaseAggregate:
     # 안전 케이스: 한 번이라도 실패면 실패. 그 외: 모든 반복 통과해야 통과로 본다
     # (평균으로 숨기지 않는다 — 통과율은 별도 보고).
     final_pass = (passes == runs) and not safety_failed
+    last = results[-1]
+    # 반복 전체에서 관측된 위반 메시지(중복 제거, 순서 보존)
+    violations: list[str] = []
+    for r in results:
+        for v in r.safety_violations:
+            if v not in violations:
+                violations.append(v)
     return CaseAggregate(
         case_id=results[0].case_id,
         category=results[0].category,
@@ -74,6 +92,10 @@ def aggregate_case(results: list[CaseResult]) -> CaseAggregate:
         unstable=unstable,
         safety_failed=safety_failed,
         final_pass=final_pass,
+        claim_count=last.claim_count,
+        citation_count=last.citation_count,
+        latency_sec=round(sum(r.latency_sec for r in results) / runs, 3),
+        safety_violations=violations,
     )
 
 
@@ -108,8 +130,8 @@ def summarize(model: str, per_case: list[list[CaseResult]]) -> EvalSummary:
         total_runs=total_runs,
         protocol_success_rate=_pct(protocol_ok, total_runs),
         status_accuracy=_pct(status_ok, total_runs),
-        answerable_valid_rate=_pct(answerable_valid, len(answerable)),
-        not_found_hold_accuracy=_pct(not_found_hold, len(not_found)),
+        answerable_valid_rate=_rate_or_vacuous(answerable_valid, len(answerable)),
+        not_found_hold_accuracy=_rate_or_vacuous(not_found_hold, len(not_found)),
         safety_failure_cases=sum(1 for a in aggregates if a.safety_failed),
         unstable_cases=sum(1 for a in aggregates if a.unstable),
         category_pass_rate=category_pass_rate,

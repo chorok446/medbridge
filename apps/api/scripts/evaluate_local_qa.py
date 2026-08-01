@@ -43,7 +43,10 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
                    help="--fail-on-gate에서도 Ollama/모델 미설치 skip을 성공으로 허용(탐색용)")
     p.add_argument("--keep-failed-artifacts", action="store_true",
                    help="임시 DB·파일을 지우지 않고 남긴다(디버깅)")
-    return p.parse_args(argv)
+    args = p.parse_args(argv)
+    if args.repeat < 1:
+        p.error("--repeat는 1 이상이어야 합니다.")
+    return args
 
 
 # 종료 코드: 0 성공, 2 게이트/사용오류, 3 미평가(전제 미충족 skip)

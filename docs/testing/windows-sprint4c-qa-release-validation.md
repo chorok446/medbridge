@@ -59,7 +59,7 @@ Q&A를 안정적으로 쓸 수 있는지 확인한다. AI는 GUI를 조작할 �
 실기기 검증 전에 Layer 2 자동 평가를 먼저 통과하는 것을 권장한다:
 
 ```
-uv run python scripts/evaluate_local_qa.py --model qwen3:8b --repeat 3 --fail-on-gate
+cd apps/api && uv run python scripts/evaluate_local_qa.py --model qwen3:8b --repeat 3 --fail-on-gate
 ```
 
 Ollama·모델이 없으면 평가는 자동 다운로드 없이 skip된다.

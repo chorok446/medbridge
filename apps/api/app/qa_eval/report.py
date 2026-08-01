@@ -49,8 +49,13 @@ def build_json(summary: EvalSummary, gate: GateResult, *, generated_at: str | No
                 "passes": a.passes,
                 "passRate": a.pass_rate,
                 "statuses": a.statuses,
+                "answerStatus": a.statuses[-1] if a.statuses else None,
+                "claimCount": a.claim_count,
+                "citationCount": a.citation_count,
+                "latencySec": a.latency_sec,
                 "unstable": a.unstable,
                 "safetyFailed": a.safety_failed,
+                "safetyViolations": a.safety_violations,
                 "finalPass": a.final_pass,
             }
             for a in summary.case_aggregates
@@ -99,11 +104,16 @@ def build_markdown(
     lines.append("")
     lines.append("## 케이스별 결과")
     lines.append("")
-    lines.append("| caseId | category | 안전 | 통과/반복 | 변동 | 안전실패 | 최종 |")
-    lines.append("|---|---|---|---|---|---|---|")
+    lines.append(
+        "| caseId | category | crit | status | claim/cite | latency | pass/runs "
+        "| flaky | unsafe | final |"
+    )
+    lines.append("|---|---|---|---|---|---|---|---|---|---|")
     for a in summary.case_aggregates:
+        status = a.statuses[-1] if a.statuses else "-"
         lines.append(
             f"| {a.case_id} | {a.category} | {'예' if a.safety_critical else '-'} | "
+            f"{status} | {a.claim_count}/{a.citation_count} | {a.latency_sec}s | "
             f"{a.passes}/{a.runs} | {'예' if a.unstable else '-'} | "
             f"{'예' if a.safety_failed else '-'} | {'통과' if a.final_pass else '실패'} |"
         )

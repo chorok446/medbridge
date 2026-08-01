@@ -74,12 +74,15 @@ def check_release_gate(
     changed_files: Callable[[str, str], list[str]],
 ) -> None:
     """게이트 통과면 정상 반환, 아니면 GateError. git 연산은 주입받아 테스트 가능하게 한다."""
+    # 현재 커밋을 알 수 없으면 조상·변경 파일 검사를 할 수 없다 → fail-closed.
+    if not current_sha:
+        raise GateError("현재 커밋 SHA를 확인할 수 없습니다(GITHUB_SHA/HEAD 미확인).")
     tested = str(approval.get("testedCommit", "")).strip()
     if not tested:
         raise GateError("승인에 testedCommit이 없습니다.")
     if not commit_exists(tested):
         raise GateError(f"testedCommit이 저장소에 존재하지 않습니다: {tested[:12]}")
-    if current_sha and not is_ancestor(tested, current_sha):
+    if not is_ancestor(tested, current_sha):
         raise GateError(
             f"testedCommit({tested[:12]})이 현재 커밋({current_sha[:12]})의 조상이 아닙니다."
         )
@@ -105,14 +108,13 @@ def check_release_gate(
         allowed_changed.add(rel)
 
     # testedCommit 이후 변경은 승인·보고·artifact 파일로만 한정되어야 한다.
-    if current_sha:
-        changed = changed_files(tested, current_sha)
-        unexpected = sorted(c for c in changed if c not in allowed_changed)
-        if unexpected:
-            raise GateError(
-                "testedCommit 이후 승인·보고·artifact 외 파일이 변경되었습니다(재평가 필요): "
-                + ", ".join(unexpected[:10])
-            )
+    changed = changed_files(tested, current_sha)
+    unexpected = sorted(c for c in changed if c not in allowed_changed)
+    if unexpected:
+        raise GateError(
+            "testedCommit 이후 승인·보고·artifact 외 파일이 변경되었습니다(재평가 필요): "
+            + ", ".join(unexpected[:10])
+        )
 
     qwen = approval.get("qwen3_8b") or {}
     if qwen.get("verdict") != "default_recommended":
