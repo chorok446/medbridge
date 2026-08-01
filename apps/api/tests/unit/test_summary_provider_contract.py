@@ -20,9 +20,11 @@ class _Capture:
     def __init__(self, response: dict):
         self.response = response
         self.payloads: list[dict] = []
+        self.calls: list[tuple[str, dict, str]] = []  # (url, payload, api_key)
 
-    def __call__(self, _url, payload, _api_key):
+    def __call__(self, url, payload, api_key):
         self.payloads.append(payload)
+        self.calls.append((url, payload, api_key))
         return self.response
 
 
@@ -212,6 +214,125 @@ class TestContextOverflow:
         err = SummaryNetworkError("context_overflow", "map_context_overflow")
         assert self.REAL_OVERFLOW not in err.user_message
         assert "컨텍스트" in err.user_message
+
+
+class TestLocalNativePath:
+    """로컬은 Ollama native /api/chat을 쓴다.
+
+    OpenAI 호환 endpoint로는 컨텍스트를 지정할 수도 조회할 수도 없어, Ollama가 기기별로
+    잡은 값에 요약 성패가 좌우됐다(실기기 실패의 원인). native는 num_ctx를 직접 지정하고
+    JSON schema로 응답 구조를 강제한다.
+    """
+
+    def _local(self, response: dict):
+        capture = _Capture(response)
+        provider = OpenAICompatibleSummaryProvider(
+            endpoint="http://127.0.0.1:11434/v1",
+            model_name="qwen3:8b",
+            api_key="",
+            is_local=True,
+            http_client=capture,
+        )
+        return provider, capture
+
+    @staticmethod
+    def _native_response(content: str, *, done_reason: str = "stop") -> dict:
+        return {"message": {"content": content}, "done_reason": done_reason}
+
+    def test_local_uses_native_endpoint_with_explicit_context(self):
+        from app.services.summary.settings import LOCAL_KEEP_ALIVE, LOCAL_NUM_CTX
+
+        provider, capture = self._local(
+            self._native_response(json.dumps({"summary": "요약"}))
+        )
+
+        provider.summarize_group(_group_request())
+
+        url, payload, _key = capture.calls[0]
+        assert url == "http://127.0.0.1:11434/api/chat"
+        assert payload["options"]["num_ctx"] == LOCAL_NUM_CTX
+        assert payload["options"]["num_predict"] == SUMMARY_MAP_MAX_TOKENS
+        assert payload["think"] is False
+        assert payload["keep_alive"] == LOCAL_KEEP_ALIVE
+        assert payload["stream"] is False
+
+    def test_map_response_shape_is_enforced_by_schema(self):
+        provider, capture = self._local(
+            self._native_response(json.dumps({"summary": "요약"}))
+        )
+
+        provider.summarize_group(_group_request())
+
+        schema = capture.calls[0][1]["format"]
+        assert schema["required"] == ["summary"]
+        assert schema["properties"]["summary"]["type"] == "string"
+
+    def test_document_schema_requires_object_overview_with_sources(self):
+        """overview를 문자열로 돌려주던 실측 문제를 스키마로 막는다."""
+        provider, capture = self._local(
+            self._native_response(
+                json.dumps({"overview": {"text": "개요", "sourceGroupIds": ["g0"]}})
+            )
+        )
+        groups = [GroupSummary("g0", "구역", "요약", ["c0"])]
+
+        provider.summarize_document(
+            DocumentRequest(
+                group_summaries=groups, learner_level="nursing_student", language="ko"
+            )
+        )
+
+        schema = capture.calls[0][1]["format"]
+        overview = schema["properties"]["overview"]
+        assert overview["type"] == "object"
+        assert set(overview["required"]) == {"text", "sourceGroupIds"}
+        assert "overview" in schema["required"]
+
+    def test_schema_omits_sections_when_not_requested(self):
+        provider, capture = self._local(
+            self._native_response(
+                json.dumps({"overview": {"text": "개요", "sourceGroupIds": ["g0"]}})
+            )
+        )
+        groups = [GroupSummary("g0", "구역", "요약", ["c0"])]
+
+        provider.summarize_document(
+            DocumentRequest(
+                group_summaries=groups,
+                learner_level="nursing_student",
+                language="ko",
+                include_sections=False,
+                include_prerequisites=False,
+            )
+        )
+
+        schema = capture.calls[0][1]["format"]
+        assert "sections" not in schema["properties"]
+        assert "prerequisites" not in schema["properties"]
+
+    def test_native_done_reason_is_checked_like_finish_reason(self):
+        provider, _ = self._local(
+            self._native_response(json.dumps({"summary": "정상"}), done_reason="length")
+        )
+
+        with pytest.raises(SummaryNetworkError) as caught:
+            provider.summarize_group(_group_request())
+
+        assert caught.value.reason == "finish_length"
+
+    def test_external_provider_still_uses_openai_endpoint(self):
+        """외부 공급자 계약은 건드리지 않는다 — native는 Ollama 전용이다."""
+        provider, capture = _provider(
+            _chat_response(json.dumps({"summary": "요약"}))
+        )
+
+        provider.summarize_group(_group_request())
+
+        url, payload, _key = capture.calls[0]
+        assert url.endswith("/chat/completions")
+        assert "options" not in payload
+        assert "keep_alive" not in payload
+        assert payload["max_tokens"] == SUMMARY_MAP_MAX_TOKENS
 
 
 def test_group_size_fits_common_local_context_window():

@@ -59,3 +59,15 @@ SUMMARY_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 # 로컬(Ollama) 모델 요청 튜닝 — 비사고 모드·결정론적 출력 + 출력 길이 상한.
 LOCAL_MAX_TOKENS = 2048
 LOCAL_REASONING_EFFORT = "none"
+
+# --- 로컬 전용 native /api/chat 경로 ---
+#
+# OpenAI 호환 endpoint로는 컨텍스트를 지정할 수도 조회할 수도 없어, Ollama가 기기별로 잡은
+# 값에 요약 성패가 좌우됐다(실측: 같은 0.32.5에서 8192로 뜨는 기기와 더 작게 뜨는 기기).
+# native 경로는 num_ctx를 직접 지정할 수 있고 JSON schema로 응답 구조를 강제할 수 있다.
+#
+# 8192로 잡는 이유: map은 그룹 4,000자 ≈ 3,155토큰 + 출력 512, reduce는 프롬프트 약
+# 2,000토큰 + 출력 4,096이 필요하다. 둘 다 여유 있게 덮는 가장 작은 2의 거듭제곱이다.
+LOCAL_NUM_CTX = 8192
+# 대형 문서는 모델 호출이 1,000회를 넘는다. 사이마다 언로드되면 재로딩만으로 시간이 배가된다.
+LOCAL_KEEP_ALIVE = "30m"

@@ -22,6 +22,75 @@ _KNOWN_FINISH_REASONS = frozenset({"length", "content_filter", "tool_calls", "fu
 _OVERFLOW_HINTS = ("too long", "too large", "context", "excessive repetition")
 
 
+def _map_schema() -> dict:
+    """map 응답 구조 — 로컬 native 경로에서 모델 출력을 이 형태로 강제한다."""
+    return {
+        "type": "object",
+        "properties": {"summary": {"type": "string"}},
+        "required": ["summary"],
+    }
+
+
+def _sourced(properties: dict, required: list[str]) -> dict:
+    """모든 항목은 출처(group id)를 반드시 달고 나와야 한다."""
+    return {
+        "type": "object",
+        "properties": {
+            **properties,
+            "sourceGroupIds": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": [*required, "sourceGroupIds"],
+    }
+
+
+def _document_schema(*, include_sections: bool, include_prerequisites: bool) -> dict:
+    """구조화 reduce 응답 구조.
+
+    스키마를 강제하지 않으면 로컬 모델이 overview를 문자열로 돌려주거나 sourceGroupIds를
+    빠뜨려 서버가 항목을 통째로 버린다(실측). 강제하면 계약대로 나온다.
+    """
+    props: dict = {
+        "overview": _sourced({"text": {"type": "string"}}, ["text"]),
+        "keyConcepts": {
+            "type": "array",
+            "items": _sourced(
+                {"term": {"type": "string"}, "explanation": {"type": "string"}},
+                ["term", "explanation"],
+            ),
+        },
+        "learnerExplanations": {
+            "type": "array",
+            "items": _sourced(
+                {"level": {"type": "string"}, "text": {"type": "string"}},
+                ["level", "text"],
+            ),
+        },
+    }
+    required = ["overview"]
+    if include_sections:
+        props["sections"] = {
+            "type": "array",
+            "items": _sourced(
+                {"title": {"type": "string"}, "summary": {"type": "string"}},
+                ["title", "summary"],
+            ),
+        }
+        required.append("sections")
+    if include_prerequisites:
+        props["prerequisites"] = {
+            "type": "array",
+            "items": _sourced(
+                {
+                    "concept": {"type": "string"},
+                    "whyNeeded": {"type": "string"},
+                    "sourceType": {"type": "string"},
+                },
+                ["concept", "whyNeeded"],
+            ),
+        }
+    return {"type": "object", "properties": props, "required": required}
+
+
 def _looks_like_context_overflow(parsed: dict) -> bool:
     """계약 필드 대신 error 객체가 온 경우 — 입력 초과인지 판별한다.
 
@@ -266,6 +335,82 @@ class OpenAICompatibleSummaryProvider:
         # thinking 흔적은 UI·저장·로그에 남기지 않는다(JSON 파싱 전에 제거).
         return strip_thinking(content)
 
+    def _native_url(self) -> str:
+        """OpenAI 호환 base(.../v1)에서 Ollama native chat 주소를 만든다."""
+        base = self._endpoint[: -len("/v1")] if self._endpoint.endswith("/v1") else self._endpoint
+        return f"{base}/api/chat"
+
+    def _chat_native(
+        self, system: str, user: str, *, max_tokens: int, schema: dict | None
+    ) -> str:
+        """로컬(Ollama) 전용 경로 — 컨텍스트를 직접 지정하고 응답 구조를 강제한다.
+
+        OpenAI 호환 경로는 num_ctx를 받지 않아 기기별 기본 컨텍스트에 성패가 좌우됐다.
+        여기서는 num_ctx를 명시하고, JSON schema로 계약 위반 자체를 줄인다.
+        """
+        from app.services.model_output import strip_thinking
+        from app.services.summary.endpoint import SummaryNetworkError, post_json
+        from app.services.summary.settings import (
+            LOCAL_KEEP_ALIVE,
+            LOCAL_NUM_CTX,
+            SUMMARY_MAX_RESPONSE_BYTES,
+            SUMMARY_REQUEST_TIMEOUT_SEC,
+        )
+
+        payload: dict = {
+            "model": self.model_name,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "stream": False,
+            "think": False,  # 사고 흔적이 출력 예산을 잡아먹지 않게 명시적으로 끈다
+            "keep_alive": LOCAL_KEEP_ALIVE,
+            "options": {
+                "temperature": 0,
+                "num_ctx": LOCAL_NUM_CTX,
+                "num_predict": max_tokens,
+            },
+        }
+        payload["format"] = schema if schema is not None else "json"
+
+        try:
+            if self._http is not None:
+                raw = self._http(self._native_url(), payload, self._api_key)
+                data = json.loads(raw) if isinstance(raw, str) else raw
+            else:
+                data = post_json(
+                    self._native_url(),
+                    payload,
+                    self._api_key,
+                    is_local=True,
+                    timeout=self._timeout or SUMMARY_REQUEST_TIMEOUT_SEC,
+                    max_response_bytes=SUMMARY_MAX_RESPONSE_BYTES,
+                )
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise SummaryNetworkError("bad_response", "envelope_not_json") from exc
+
+        try:
+            content = data["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise SummaryNetworkError("bad_response", "envelope_shape") from exc
+        # native는 done_reason으로 중단 사유를 준다(OpenAI의 finish_reason과 같은 역할).
+        done_reason = data.get("done_reason")
+        if done_reason not in (None, "stop"):
+            safe = done_reason if done_reason in _KNOWN_FINISH_REASONS else "other"
+            raise SummaryNetworkError("bad_response", f"finish_{safe}")
+        if not isinstance(content, str):
+            raise SummaryNetworkError("bad_response", "content_not_text")
+        return strip_thinking(content)
+
+    def _chat_for(
+        self, system: str, user: str, *, max_tokens: int, schema: dict | None
+    ) -> str:
+        """로컬은 native, 외부는 OpenAI 호환 경로. 외부 공급자 계약은 건드리지 않는다."""
+        if self.is_local:
+            return self._chat_native(system, user, max_tokens=max_tokens, schema=schema)
+        return self._chat(system, user, max_tokens=max_tokens)
+
     @staticmethod
     def _parse_json_object(raw: str, *, stage: str) -> dict:
         from app.services.summary.endpoint import SummaryNetworkError
@@ -294,7 +439,9 @@ class OpenAICompatibleSummaryProvider:
         )
         from app.services.summary.endpoint import SummaryNetworkError
 
-        raw = self._chat(system, user, max_tokens=SUMMARY_MAP_MAX_TOKENS)
+        raw = self._chat_for(
+            system, user, max_tokens=SUMMARY_MAP_MAX_TOKENS, schema=_map_schema()
+        )
         parsed = self._parse_json_object(raw, stage="map")
         summary = parsed.get("summary")
         if not isinstance(summary, str):
@@ -343,7 +490,15 @@ class OpenAICompatibleSummaryProvider:
             f'{request.learner_level}","text":"...","sourceGroupIds":["g0"]}}]}}'
             f"\n\n{group_block}"
         )
-        raw = self._chat(system, user, max_tokens=SUMMARY_REDUCE_MAX_TOKENS)
+        raw = self._chat_for(
+            system,
+            user,
+            max_tokens=SUMMARY_REDUCE_MAX_TOKENS,
+            schema=_document_schema(
+                include_sections=request.include_sections,
+                include_prerequisites=request.include_prerequisites,
+            ),
+        )
         parsed = self._parse_json_object(raw, stage="reduce")
         return self._resolve_group_sources(parsed, request)
 
