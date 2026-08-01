@@ -5,8 +5,10 @@ SCHEMA_VERSION = 1
 
 # 그룹 하나에 넣는 청크 텍스트 최대 문자 수 (모델 입력 길이 제한). 초과 시 섹션을 분할한다.
 GROUP_MAX_CHARS = 6000
-# map 요약 최대 길이
-GROUP_SUMMARY_MAX_CHARS = 1200
+# map은 계층 reduce 입력용 짧은 JSON만 만든다. 로컬 모델이 불필요하게 긴 출력을
+# 만들어 finish_reason=length와 잘린 JSON을 반환하지 않도록 문자·토큰을 함께 제한한다.
+GROUP_SUMMARY_MAX_CHARS = 400
+SUMMARY_MAP_MAX_TOKENS = 512
 
 # artifact 내용 필드 최대 길이 (검증 단계에서 자른다)
 OVERVIEW_MAX_CHARS = 2000

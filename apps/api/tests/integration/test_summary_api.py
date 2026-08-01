@@ -90,14 +90,14 @@ class TestSummaryFlow:
         assert "deterministic-test-v1" not in raw
         assert "tokenCount" not in raw
 
-    async def test_study_caution_always_present(self, client):
+    async def test_model_study_caution_is_not_persisted_as_document_evidence(self, client):
         await enable_deterministic()
         doc_id = await upload_chunked(client, fx.single_column_korean(pages=1))
         await make_summary(client, doc_id)
         listed = (await client.get(f"/api/documents/{doc_id}/summaries")).json()["data"]
         cautions = [a for a in listed["artifacts"] if a["artifactType"] == "study_caution"]
-        assert cautions
-        assert "학습 보조용" in cautions[0]["content"]["text"]
+        assert cautions == []
+        # 안전 고지는 프런트 SummaryView의 시스템 소유 고정 배너로 별도 검증한다.
 
 
 class TestSummaryValidation:
@@ -301,6 +301,11 @@ class TestSummaryExternalConsent:
         )
         assert res.status_code == 202
         await drain_jobs()
+        status = (
+            await client.get(f"/api/documents/{doc_id}/summaries/status")
+        ).json()["data"]
+        # 인증·연결 같은 공급자 세부 범주는 공개 계약으로 노출하지 않는다.
+        assert status["failureCategory"] is None
 
 
 class TestSummaryDeleteWhileActive:

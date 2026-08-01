@@ -1,6 +1,8 @@
 """알파벳 순서상 마지막에 실행 — downgrade가 테이블을 비우므로 다른 테스트 뒤에 돈다."""
 
+import logging
 import sqlite3
+import uuid
 from contextlib import closing
 from pathlib import Path
 
@@ -107,3 +109,30 @@ def test_startup_migration_runner():
     from app.main import run_migrations
 
     run_migrations()  # 이미 head — no-op이어야 한다
+
+
+def test_startup_migration_preserves_structured_sidecar_file_logging():
+    """embedded Alembic이 앱 root FileHandler를 제거하지 않고 structlog도 그 경로를 쓴다."""
+    from app.core.logging import configure_logging, get_logger
+    from app.core.paths import get_path_provider
+    from app.main import run_migrations
+
+    configure_logging()
+    root = logging.getLogger()
+    before = [handler for handler in root.handlers if isinstance(handler, logging.FileHandler)]
+    assert len(before) == 1
+
+    run_migrations()
+    sentinel = f"migration-log-sentinel-{uuid.uuid4()}"
+    get_logger("tests.migration_logging").warning(
+        "migration_logging_probe", marker=sentinel
+    )
+    for handler in root.handlers:
+        handler.flush()
+
+    after = [handler for handler in root.handlers if isinstance(handler, logging.FileHandler)]
+    assert after == before
+    log_file = get_path_provider().logs_dir / "sidecar.log"
+    logged = log_file.read_text(encoding="utf-8", errors="replace")
+    assert "migration_logging_probe" in logged
+    assert sentinel in logged

@@ -242,6 +242,7 @@ class SummaryStatus:
     current_revision: int
     progress: int
     can_retry: bool
+    failure_category: str | None
 
 
 async def get_summary_status(db: AsyncSession, doc: Document) -> SummaryStatus:
@@ -260,6 +261,10 @@ async def get_summary_status(db: AsyncSession, doc: Document) -> SummaryStatus:
             SummaryRunStatus.FAILED: 0,
             SummaryRunStatus.CANCELLED: 0,
         }.get(run.status, 0)
+    failure_category = {
+        "SUMMARY_TIMEOUT": "timeout",
+        "SUMMARY_INVALID_RESPONSE": "invalid_response",
+    }.get(run.error_code if run else None)
     can_retry = bool(
         provider.available
         and (run is None or run.status in (SummaryRunStatus.FAILED, SummaryRunStatus.CANCELLED))
@@ -272,6 +277,7 @@ async def get_summary_status(db: AsyncSession, doc: Document) -> SummaryStatus:
         current_revision=doc.content_revision,
         progress=progress,
         can_retry=can_retry,
+        failure_category=failure_category,
     )
 
 

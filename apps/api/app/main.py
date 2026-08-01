@@ -93,6 +93,9 @@ def run_migrations() -> None:
 
     cfg = Config(str(ALEMBIC_INI))
     cfg.set_main_option("script_location", str(ALEMBIC_DIR))
+    # 앱 내부 실행에서는 configure_logging()이 만든 stream+sidecar FileHandler를 보존한다.
+    # 이 플래그가 없는 Alembic CLI 실행은 env.py의 기존 fileConfig 동작을 유지한다.
+    cfg.attributes["configure_logger"] = False
     command.upgrade(cfg, "head")
     logger.info("migrations_applied", revision=head)
 

@@ -31,6 +31,8 @@ export interface SummaryList {
   artifacts: SummaryArtifact[];
 }
 
+export type SummaryFailureCategory = "timeout" | "invalid_response";
+
 export interface SummaryStatus {
   providerAvailable: boolean;
   status: string | null;
@@ -39,6 +41,7 @@ export interface SummaryStatus {
   currentRevision: number;
   progress: number;
   canRetry: boolean;
+  failureCategory: SummaryFailureCategory | null;
 }
 
 export interface SummaryStartResult {

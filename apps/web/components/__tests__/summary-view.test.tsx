@@ -33,6 +33,7 @@ function status(overrides: Record<string, unknown> = {}) {
     currentRevision: 2,
     progress: 100,
     canRetry: false,
+    failureCategory: null,
     ...overrides,
   };
 }
@@ -85,10 +86,36 @@ describe("SummaryView", () => {
     expect(await screen.findByText(/요약을 만드는 중이에요/)).toBeInTheDocument();
   });
 
-  it("실패 상태면 다시 시도할 수 있다", async () => {
-    apiMock.getSummaryStatus.mockResolvedValue(status({ status: "failed" }));
+  it("시간 초과 실패는 안전한 안내와 재시도 가능한 생성 버튼을 보여준다", async () => {
+    apiMock.getSummaryStatus.mockResolvedValue(
+      status({ status: "failed", failureCategory: "timeout", canRetry: true }),
+    );
     renderView();
-    expect(await screen.findByText(/요약을 만들지 못했어요/)).toBeInTheDocument();
+
+    expect(await screen.findByText(/요약 모델의 응답이 늦어/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "요약 만들기" })).toBeInTheDocument();
+  });
+
+  it("잘못된 모델 응답은 안전한 안내만 보여준다", async () => {
+    apiMock.getSummaryStatus.mockResolvedValue(
+      status({ status: "failed", failureCategory: "invalid_response", canRetry: true }),
+    );
+    const { container } = renderView();
+
+    expect(await screen.findByText(/응답 형식이 올바르지 않아/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "요약 만들기" })).toBeInTheDocument();
+    expect(container.textContent).not.toContain("invalid_response");
+  });
+
+  it("분류되지 않은 실패는 일반 안내와 생성 버튼을 보여준다", async () => {
+    apiMock.getSummaryStatus.mockResolvedValue(
+      status({ status: "failed", failureCategory: null, canRetry: true }),
+    );
+    renderView();
+
+    expect(
+      await screen.findByText("요약을 만들지 못했어요. 다시 시도해 주세요."),
+    ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "요약 만들기" })).toBeInTheDocument();
   });
 
@@ -124,13 +151,16 @@ describe("SummaryView", () => {
   });
 
   it("최신 시도가 실패해도 이전 성공 요약을 계속 보여준다", async () => {
-    apiMock.getSummaryStatus.mockResolvedValue(status({ status: "failed" }));
+    apiMock.getSummaryStatus.mockResolvedValue(
+      status({ status: "failed", failureCategory: "timeout", canRetry: true }),
+    );
     apiMock.getSummaries.mockResolvedValue({ stale: false, artifacts: [overviewArtifact] });
     renderView();
-    // 이전 성공 요약이 보이고, 실패 안내 + 다시 시도 링크가 함께 뜬다
+
     expect(await screen.findByText("이 문서는 심부전을 다룹니다.")).toBeInTheDocument();
     expect(screen.getByText(/최근 다시 요약이 실패되어 이전 요약을 보여드려요/)).toBeInTheDocument();
-    // "요약 만들기" 초기 프롬프트는 뜨지 않는다(이전 요약이 있으므로)
+    expect(screen.getByText(/요약 모델의 응답이 늦어/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "다시 시도" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "요약 만들기" })).not.toBeInTheDocument();
   });
 

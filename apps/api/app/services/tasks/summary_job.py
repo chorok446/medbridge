@@ -17,6 +17,7 @@ from app.models.enums import JobStatus, JobType, SummaryRunStatus
 from app.models.summary import SummaryArtifact, SummaryRun
 from app.models.user import User
 from app.services.summary import service as summary_service
+from app.services.summary.endpoint import SummaryNetworkError
 from app.services.summary.factory import get_summary_provider
 from app.services.summary.pipeline import run_summary
 
@@ -54,6 +55,17 @@ async def _fail_run(session, run_id: uuid.UUID, job_id: uuid.UUID, code: str) ->
         job.failure_code = code
         job.completed_at = datetime.now(UTC)
     await session.commit()
+
+
+def _classify_pipeline_failure(exc: Exception) -> tuple[str, str | None]:
+    """내부 예외 원문 없이 DB/API에 저장할 안전한 실패 범주로 축약한다."""
+    if isinstance(exc, SummaryNetworkError):
+        if exc.category == "timeout":
+            return "SUMMARY_TIMEOUT", "timeout"
+        if exc.category in ("bad_response", "response_too_large"):
+            return "SUMMARY_INVALID_RESPONSE", "invalid_response"
+        return "SUMMARY_PROVIDER_ERROR", "provider_error"
+    return "SUMMARY_FAILED", None
 
 
 async def run_summary_job(
@@ -117,14 +129,16 @@ async def run_summary_job(
             include_prerequisites=include_prerequisites,
         )
     except Exception as exc:
+        failure_code, failure_category = _classify_pipeline_failure(exc)
         logger.warning(
             "summary_pipeline_failed",
             document_id=str(document_id),
-            error=type(exc).__name__,
+            error_type=type(exc).__name__,
+            failure_category=failure_category or "unexpected",
         )
         async with factory() as session:
             if await _job_is_current(session, document_id, job_id):
-                await _fail_run(session, run_id, job_id, "SUMMARY_FAILED")
+                await _fail_run(session, run_id, job_id, failure_code)
         return
 
     # 3) revision-guarded 원자적 저장
