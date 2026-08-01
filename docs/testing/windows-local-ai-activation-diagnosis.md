@@ -113,22 +113,61 @@ GitHub Actions run `30687924315`에서 versions/backend/frontend/windows-build�
 pytest에는 기존 Starlette deprecation warning과 Windows cp949 reader-thread warning이
 각 1건 남지만 테스트 실패는 없었다.
 
-## 6. 300MB 이상 문서 지원 방향
+## 6. 300MB 이상 문서 지원 — 구현 상태
 
-문서 크기나 group 수로 사용을 막는 방식은 채택하지 않는다. 다음 구현은 입력 파일
-크기가 아니라 추출된 텍스트량을 기준으로 동작해야 한다.
+문서 크기나 group 수로 사용을 막는 방식은 채택하지 않는다. 구현은 입력 파일 크기가
+아니라 추출된 텍스트량을 기준으로 동작한다.
 
-1. section 제목이 바뀔 때마다 group을 끊지 않고 reading order를 보존한 bounded
-   char/token packing을 공통 함수로 사용한다.
-2. main DB에 run별 summary node/checkpoint를 저장한다.
-3. 각 node는 서버 소유 source IDs, 입력 hash, 출력 hash, 상태와 시도 횟수를 보관한다.
-4. bounded fan-in으로 여러 단계 reduce를 수행해 어떤 단계도 모델 context를 넘지 않는다.
-5. 앱 종료·재실행 시 revision/chunk hash/model/prompt가 같으면 성공 node를 재사용하고,
-   달라졌으면 섞지 않고 새 run으로 시작한다.
-6. 각 호출 전후 취소와 revision을 확인하고, 처리 chunk 수와 모델 호출 진행률을 UI에
-   제공한다.
-7. 빠른 대표 개요와 전체 정밀 요약을 구분해 대표 근거만 사용한 결과를 전체 내용의
-   완전한 요약으로 표시하지 않는다.
+| # | 항목 | 상태 |
+|---|---|---|
+| 1 | reading order 보존 bounded char packing | 반영 (`237b193`) |
+| 2 | main DB에 run별 summary node/checkpoint 저장 | 반영 (`237b193`) |
+| 3 | node별 서버 소유 source IDs·입력/출력 hash·상태·시도 횟수 | 반영 (`237b193`) |
+| 4 | bounded fan-in 다단계 reduce | 반영 (`237b193`) |
+| 5 | 앱 종료·재실행 시 성공 node 재사용 | 반영 (`237b193`) |
+| 6 | 호출 사이 취소·revision 확인, 진행률 제공 | 반영 (`237b193`) |
+| 7 | 빠른 대표 개요 / 전체 정밀 요약 구분 | **미구현** |
+
+### 반영 내용 (`237b193`)
+
+- **grouping**: 섹션 제목은 강제 분할점이 아니라 그룹이 `GROUP_MIN_CHARS`(5,000)를 넘긴
+  뒤에만 쓰는 정렬 장치다. 상한은 `GROUP_MAX_CHARS`(6,000)로 유지한다.
+- **`summary_nodes` 테이블** (migration `0010`): `level`·`position`·`status`·
+  `input_hash`·`output_hash`·`summary_text`·`source_chunk_ids_json`·`attempt_count`·
+  `reused`. `(summary_run_id, level, position)` 유니크, `(document_id, input_hash)` 인덱스.
+- **재사용 키**: provider·model·prompt_version·schema_version·learner_level·language·
+  `source_revision`·`source_chunk_hash` + 입력 내용을 모두 해시에 넣는다. 하나라도
+  다르면 이전 node를 섞어 쓰지 않는다. chunk id가 바뀌면(재생성) 텍스트가 같아도 다른
+  키가 된다.
+- **다단계 reduce**: fan-in 8 고정. 어느 단계도 모델 context를 넘지 않는다.
+- **짧은 트랜잭션**: node마다 세션을 열고 닫으며, 모델 호출은 트랜잭션 밖에서 한다.
+  §2에서 확인한 장시간 writer 트랜잭션 경합을 다시 만들지 않기 위한 것이다.
+- **출처 소유**: 레벨 0은 그룹의 chunk id, 레벨 1+는 자식 출처의 합집합을 서버가
+  계산한다. 공급자가 돌려준 id는 저장하지 않는다.
+- **진행률**: 상태 기반 근사치(5/50/100)를 실제 완료 node 수 기준으로 교체했다.
+  `summary_runs.planned_nodes` / `completed_nodes`.
+
+### 계산상 호출 수 변화
+
+실기기 문서와 같은 규모(7,965청크 · 평균 536자 · 약 4.27M자)를 합성 입력으로 재현한
+결과다. 실기기 재측정값이 아니라 grouping 로직의 계산값이다.
+
+| 항목 | 이전 | 이후 |
+|---|---|---|
+| map 호출 | 3,074 | 797 |
+| reduce 레벨 | 1 | 100 → 13 → 2 |
+| 총 모델 호출 | 3,075 | 913 |
+
+호출 수가 약 3.4배 줄지만, 절대 시간은 여전히 수십 분 단위다. 핵심 개선은 중단·재시작
+후 성공한 node를 재사용해 처음부터 다시 돌지 않는다는 점이다.
+
+### 남은 항목 (7번)
+
+빠른 대표 개요와 전체 정밀 요약의 구분은 구현하지 않았다. 현재는 전체 정밀 경로만
+있으므로 "대표 근거만 사용한 결과를 전체 요약으로 표시"하는 위험은 없지만, 대형 문서에서
+사용자가 먼저 볼 빠른 개요도 없다.
+
+### 로컬 전용 최적화 (미적용)
 
 Ollama의 OpenAI-compatible endpoint에서는 request별 context size 설정을 지원하지
 않으므로, 향후 로컬 전용 최적화는 native `/api/chat`의 `options.num_ctx`, JSON schema
@@ -137,6 +176,25 @@ structured output, `think=false`, `keep_alive`를 별도 검증한 뒤 적용한
 - OpenAI compatibility: <https://docs.ollama.com/api/openai-compatibility>
 - Native chat API: <https://docs.ollama.com/api/chat>
 - Structured outputs: <https://docs.ollama.com/capabilities/structured-outputs>
+
+Ollama의 OpenAI-compatible endpoint에서는 request별 context size 설정을 지원하지
+않으므로, 향후 로컬 전용 최적화는 native `/api/chat`의 `options.num_ctx`, JSON schema
+structured output, `think=false`, `keep_alive`를 별도 검증한 뒤 적용한다.
+
+- OpenAI compatibility: <https://docs.ollama.com/api/openai-compatibility>
+- Native chat API: <https://docs.ollama.com/api/chat>
+- Structured outputs: <https://docs.ollama.com/capabilities/structured-outputs>
+
+### 자동 검증 (`237b193` 기준)
+
+- Backend pytest: `569 passed, 3 skipped` (이전 538 → 계층 요약 테스트 31건 추가)
+- Ruff (`app`, `tests` 전체): 통과
+- Frontend Vitest: `17 files, 97 tests` 통과
+- Frontend `tsc --noEmit`: 통과
+
+추가된 테스트는 packing 경계·레벨 계획·재사용 키 무효화 조건과, 체크포인트 저장·재사용·
+부분 실패 후 재개·취소·revision 변경·다단계 reduce 출처 합집합·공급자가 준 가짜 chunk
+id 무시를 확인한다. **실기기 대형 문서 재검증은 아직 수행하지 않았다.**
 
 ## 7. 데이터 보호와 남은 출시 게이트
 
