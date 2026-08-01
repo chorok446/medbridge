@@ -34,7 +34,7 @@ from app.services.qa import context as qa_context
 from app.services.qa import stream_protocol as sp
 from app.services.qa.factory import get_qa_streaming_provider
 from app.services.qa.provider import QaRequest
-from app.services.qa.schema import verify_claim_event
+from app.services.qa.schema import claims_conflict, classify_claim_event
 from app.services.qa.service import (
     _fresh_document,
     _fresh_user,
@@ -290,14 +290,25 @@ async def run_stream(
     start_content_rev: int,
     start_chunk_rev: int | None,
     request,
+    *,
+    diag: dict | None = None,
 ):
-    """NDJSON 이벤트 dict를 순차 yield하는 async 제너레이터. 항상 assistant를 terminal로 확정."""
+    """NDJSON 이벤트 dict를 순차 yield하는 async 제너레이터. 항상 assistant를 terminal로 확정.
+
+    diag(선택): 주어지면 모델이 방출한 claim 수·거부 수·거부 사유 코드·final 힌트를 안전한
+    분류값으로 기록한다(원문 비노출). 프로덕션은 None으로 두어 계측 비용이 없다(평가 전용).
+    """
     from app.db.session import get_session_factory
 
     factory = get_session_factory()
     cancel_event = cancel_registry.register(str(assistant_id))
     token = _CancelToken(cancel_event)
     supported: list = []
+    if diag is not None:
+        diag.setdefault("emitted_claims", 0)
+        diag.setdefault("rejected_claims", 0)
+        diag.setdefault("rejection_reasons", [])
+        diag.setdefault("final_hint", "")
 
     async def _check_broken(s: AsyncSession) -> str | None:
         """주어진 세션에서 revision/동의 변경 확인. 변경 시 사유 문자열, 정상이면 None."""
@@ -327,6 +338,8 @@ async def run_stream(
         async with factory() as s:
             retrieval = await qa_context.retrieve(s, document_id, user_content)
             provider = await get_qa_streaming_provider(s)
+        if diag is not None:
+            diag["retrieved_chunks"] = len(retrieval.chunks)
         is_external = provider_is_external(provider)
         searched_ids = retrieval.searched_ids
         start_hash = compute_chunk_hash(retrieval.chunk_hash_pairs)
@@ -422,10 +435,14 @@ async def run_stream(
             event = val
             if event.get("type") == "final":
                 stream_final_hint = str(event.get("answerStatus") or "")
+                if diag is not None:
+                    diag["final_hint"] = stream_final_hint
                 cancel_event.set()  # 공급자 스트림 종료
                 break
             if event.get("type") != "claim":
                 continue
+            if diag is not None:
+                diag["emitted_claims"] += 1
 
             # 주기적으로 revision·동의 재확인 → 변경 시 즉시 중단
             since_recheck += 1
@@ -438,8 +455,14 @@ async def run_stream(
                     yield sp.interrupted(broken.upper())
                     return
 
-            vc = verify_claim_event(event, retrieval.lookup, claim_index=claim_index)
+            vc, reject_reason = classify_claim_event(
+                event, retrieval.lookup, claim_index=claim_index
+            )
             if vc is None:
+                if diag is not None:
+                    diag["rejected_claims"] += 1
+                    if reject_reason:
+                        diag["rejection_reasons"].append(reject_reason)
                 continue  # unsupported → 사용자에게 노출하지 않음
             supported.append(vc)
             seq += 1
@@ -518,7 +541,11 @@ def _final_status(supported: list, final_hint: str, *, had_results: bool):
             QaMessageStatus.INSUFFICIENT_EVIDENCE,
             "문서에서 충분한 근거를 찾지 못했어요. 다른 표현으로 다시 물어봐 주세요.",
         )
-    if final_hint == "conflicting_evidence" and len(supported) >= 2:
+    # 모델이 상충을 명시했거나, final 힌트를 빠뜨렸어도 지원 주장들이 같은 대상에 상반된
+    # 극성을 보이면 상충으로 확정한다(상반 근거를 통일된 completed로 노출하지 않는다).
+    if len(supported) >= 2 and (
+        final_hint == "conflicting_evidence" or claims_conflict([c.text for c in supported])
+    ):
         return QaMessageStatus.CONFLICTING_EVIDENCE, "\n".join(c.text for c in supported)
     return QaMessageStatus.COMPLETED, "\n".join(c.text for c in supported)
 

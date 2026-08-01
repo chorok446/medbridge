@@ -48,6 +48,35 @@ class CaseRun:
     owned_block_ids: set[str] = field(default_factory=set)
     doc_text: str = ""
     prestream_error: str | None = None  # prepare_stream 단계 거부(501/403/409 등)
+    # 진단(안전 분류값만 — 원문 비노출)
+    emitted_claim_count: int = 0  # 모델이 방출한 claim 이벤트 수(검증 전)
+    rejected_claim_count: int = 0  # 서버 검증에서 거부된 수
+    rejection_reason_codes: list[str] = field(default_factory=list)
+    provider_final_hint: str = ""  # 모델이 낸 final answerStatus 힌트(없으면 "")
+    retrieved_chunk_count: int = 0  # 검색이 반환한 청크 수(검색 실패 vs 모델 실패 구분용)
+
+    @property
+    def provider_error_category(self) -> str | None:
+        """스트림/공급자 단계 실패 분류(원문 없이 코드만)."""
+        if self.prestream_error is not None:
+            return None
+        if self.timed_out:
+            return "timeout"
+        code = self.error_code
+        if code is None:
+            return None
+        return {
+            "QA_STREAM_FAILED": "provider_stream_error",
+            "QA_FAILED": "provider_error",
+            "CONNECTION_LOST": "connection_lost",
+            "REVISION_CHANGED": "revision_changed",
+            "CONSENT_REVOKED": "consent_revoked",
+        }.get(code, "internal_error")
+
+    @property
+    def prestream_error_category(self) -> str | None:
+        """prepare_stream 단계 거부 분류(AppError 코드는 안전 상수)."""
+        return self.prestream_error
 
 
 class _FakeRequest:
@@ -130,8 +159,9 @@ async def run_case(
         crev, chrev = doc.content_revision, doc.chunk_revision
 
     start = time.monotonic()
+    diag: dict = {}
     agen = stream_service.run_stream(
-        doc_id, tid, aid, case.question, rid, crev, chrev, _FakeRequest()
+        doc_id, tid, aid, case.question, rid, crev, chrev, _FakeRequest(), diag=diag
     )
     completed_message: dict | None = None
     try:
@@ -169,6 +199,11 @@ async def run_case(
         with contextlib.suppress(Exception):
             await agen.aclose()  # 모든 경로에서 스트림 정리
         run.latency_sec = time.monotonic() - start
+        run.emitted_claim_count = int(diag.get("emitted_claims", 0))
+        run.rejected_claim_count = int(diag.get("rejected_claims", 0))
+        run.rejection_reason_codes = list(diag.get("rejection_reasons", []))
+        run.provider_final_hint = str(diag.get("final_hint", ""))
+        run.retrieved_chunk_count = int(diag.get("retrieved_chunks", 0))
 
     # completed면 최종 message(공개 NDJSON 계약)의 claim/source로 확정 반영 —
     # 저장 경로까지 통과한 결과를 본다(stream_service 내부에 의존하지 않는다).

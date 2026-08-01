@@ -169,6 +169,34 @@ class TestVerify:
         assert out.answer_status == "conflicting_evidence"
         assert all(c.verification_status == QaClaimVerification.CONFLICTING for c in out.claims)
 
+    def test_conflict_detected_without_model_final_hint(self):
+        # 모델이 상충을 명시하지 않아도(answered/누락) 양쪽 지원 주장이 같은 대상에 상반된
+        # 극성을 보이면 서버가 conflicting_evidence로 확정한다(상반 근거를 completed로 노출 방지).
+        c1 = "초기 연구에서는 이 요법이 사망 위험을 감소시킨다고 보고하였다"
+        c2 = "후속 연구에서는 이 요법이 사망 위험에 영향을 주지 않았다고 보고하였다"
+        lookup = _lookup(("c1", c1), ("c2", c2))
+        out = verify(
+            {"answer": "", "answerStatus": "answered",
+             "claims": [{"text": c1, "sourceChunkIds": ["c1"]},
+                        {"text": c2, "sourceChunkIds": ["c2"]}]},
+            lookup, had_results=True,
+        )
+        assert out.answer_status == "conflicting_evidence"
+        assert all(c.verification_status == QaClaimVerification.CONFLICTING for c in out.claims)
+
+    def test_no_false_conflict_for_unrelated_claims(self):
+        # 부정 극성 차이가 없는 무관한 다중 주장은 상충으로 오탐하지 않는다.
+        c1 = "심장은 혈액을 온몸으로 보낸다"
+        c2 = "성인의 정상 안정 시 심박수는 분당 범위에 있다"
+        lookup = _lookup(("c1", c1), ("c2", c2))
+        out = verify(
+            {"answer": "x", "answerStatus": "answered",
+             "claims": [{"text": c1, "sourceChunkIds": ["c1"]},
+                        {"text": c2, "sourceChunkIds": ["c2"]}]},
+            lookup, had_results=True,
+        )
+        assert out.answer_status == "completed"
+
     def test_followups_capped_at_three(self):
         lookup = _lookup(("c1", "본문 내용"))
         out = verify(
@@ -179,6 +207,47 @@ class TestVerify:
             had_results=True,
         )
         assert len(out.followups) == 3
+
+
+class TestConflictDetectorAndReasons:
+    C1 = "초기 연구에서는 이 요법이 사망 위험을 감소시킨다고 보고하였다"
+    C2 = "후속 연구에서는 이 요법이 사망 위험에 영향을 주지 않았다고 보고하였다"
+
+    def test_claims_conflict_needs_negation_divergence_and_shared_subject(self):
+        from app.services.qa.schema import claims_conflict
+
+        assert claims_conflict([self.C1, self.C2])  # 극성 반대 + 주제 겹침
+        assert not claims_conflict([self.C1])  # 단일 주장
+        # 부정 극성 차이가 없으면 상충 아님
+        assert not claims_conflict(["약은 통증을 줄인다", "약은 효과가 있다고 보고되었다"])
+        # 부정 극성은 다르지만 주제 어휘가 거의 안 겹치면 상충 아님(오탐 방지)
+        assert not claims_conflict(["심장은 혈액을 보낸다", "부작용은 보고되지 않았다"])
+
+    def test_classify_claim_event_reason_codes(self):
+        from app.services.qa.schema import (
+            REJECT_NO_SOURCE,
+            REJECT_NOT_GROUNDED,
+            REJECT_NUMBER_ABSENT,
+            classify_claim_event,
+        )
+
+        lookup = _lookup(("c1", "심장은 혈액을 온몸으로 보낸다"))
+        vc, reason = classify_claim_event(
+            {"text": "심장은 혈액을 보낸다", "sourceChunkIds": ["c1"]}, lookup, claim_index=0
+        )
+        assert vc is not None and reason is None
+        _, r_src = classify_claim_event(
+            {"text": "심장은 혈액을 보낸다", "sourceChunkIds": ["zzz"]}, lookup, claim_index=0
+        )
+        assert r_src == REJECT_NO_SOURCE
+        _, r_num = classify_claim_event(
+            {"text": "심장은 500 단위를 보낸다", "sourceChunkIds": ["c1"]}, lookup, claim_index=0
+        )
+        assert r_num == REJECT_NUMBER_ABSENT
+        _, r_grd = classify_claim_event(
+            {"text": "무관한 날조 주장이다", "sourceChunkIds": ["c1"]}, lookup, claim_index=0
+        )
+        assert r_grd == REJECT_NOT_GROUNDED
 
 
 class TestProviders:

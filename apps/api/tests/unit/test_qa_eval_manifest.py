@@ -59,3 +59,67 @@ def test_rejects_duplicate_case_id():
 def test_rejects_empty_fixture_pages():
     with pytest.raises(manifest.ManifestError):
         manifest.parse_fixtures({"d": {"language": "ko", "pages": []}})
+
+
+def test_shipped_dataset_has_unit_category():
+    ds = manifest.load_dataset(DATASET)
+    unit_cases = [c for c in ds.cases if c.category == "unit"]
+    assert len(unit_cases) >= 2
+    for c in unit_cases:
+        assert c.expected_numbers and c.expected_units  # 값-단위 짝
+        assert c.safety_critical
+
+
+def test_rejects_expected_number_absent_in_fixture():
+    fx = {"d": manifest.Fixture("d", "ko", [["약물 A의 용량은 5 mg이다"]])}
+    with pytest.raises(manifest.ManifestError):
+        manifest.parse_cases(
+            {"cases": [{"caseId": "c1", "category": "unit", "documentFixture": "d",
+                        "question": "q", "expectedStatus": "answered",
+                        "expectedNumbers": ["9"], "expectedUnits": ["mg"]}]},  # 9는 본문에 없음
+            fx,
+        )
+
+
+def test_rejects_expected_unit_absent_in_fixture():
+    fx = {"d": manifest.Fixture("d", "ko", [["약물 A의 용량은 5 mg이다"]])}
+    with pytest.raises(manifest.ManifestError):
+        manifest.parse_cases(
+            {"cases": [{"caseId": "c1", "category": "unit", "documentFixture": "d",
+                        "question": "q", "expectedStatus": "answered",
+                        "expectedNumbers": ["5"], "expectedUnits": ["μg"]}]},  # μg는 본문에 없음
+            fx,
+        )
+
+
+def test_rejects_unit_case_without_numbers_or_units():
+    fx = {"d": manifest.Fixture("d", "ko", [["약물 A의 용량은 5 mg이다"]])}
+    with pytest.raises(manifest.ManifestError):
+        manifest.parse_cases(
+            {"cases": [{"caseId": "c1", "category": "unit", "documentFixture": "d",
+                        "question": "q", "expectedStatus": "answered"}]},  # 값·단위 없음
+            fx,
+        )
+
+
+def test_rejects_unit_case_without_adjacent_pair():
+    # 수치와 단위가 본문에 있으나 인접하지 않으면(짝이 아니면) 거부
+    fx = {"d": manifest.Fixture("d", "ko", [["수치는 5, 그리고 단위는 별도로 mg"]])}
+    with pytest.raises(manifest.ManifestError):
+        manifest.parse_cases(
+            {"cases": [{"caseId": "c1", "category": "unit", "documentFixture": "d",
+                        "question": "q", "expectedStatus": "answered",
+                        "expectedNumbers": ["5"], "expectedUnits": ["mg"]}]},
+            fx,
+        )
+
+
+def test_rejects_conflict_case_without_safety_critical():
+    fx = {"d": manifest.Fixture("d", "ko", [["A는 참", "A는 거짓"]])}
+    with pytest.raises(manifest.ManifestError):
+        manifest.parse_cases(
+            {"cases": [{"caseId": "c1", "category": "conflict", "documentFixture": "d",
+                        "question": "q", "expectedStatus": "conflicting_evidence",
+                        "expectedConflict": True}]},  # safetyCritical 누락
+            fx,
+        )

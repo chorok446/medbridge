@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from app.qa_eval.evaluate import CaseResult, is_safety_failure
+from app.qa_eval.evaluate import (
+    CaseResult,
+    is_critical_case_failure,
+    is_explicit_safety_violation,
+    is_safety_failure,
+)
 
 
 @dataclass
@@ -17,7 +22,10 @@ class CaseAggregate:
     pass_rate: float
     statuses: list[str]
     unstable: bool  # 반복 간 pass 또는 status가 흔들림
-    safety_failed: bool  # 반복 중 한 번이라도 안전 위반
+    safety_failed: bool  # 반복 중 한 번이라도 게이트 차단 대상(위해 노출 또는 안전중요 실패)
+    # §2 분리: 실제 위해 노출 vs 안전 중요 케이스 비위해 실패
+    explicit_safety_violation: bool
+    critical_case_failure: bool
     # 안전 케이스는 한 번이라도 실패하면 실패로 본다.
     final_pass: bool
     # 대표값(보고용) — 마지막 실행 기준. 문서 원문이 아닌 집계 지표만 담는다.
@@ -25,6 +33,7 @@ class CaseAggregate:
     citation_count: int
     latency_sec: float
     safety_violations: list[str]  # 일반화된 위반 메시지(문서 원문 없음)
+    results: list[CaseResult] = field(default_factory=list)  # run별 진단(원문 없음)
 
 
 @dataclass
@@ -36,7 +45,9 @@ class EvalSummary:
     status_accuracy: float
     answerable_valid_rate: float
     not_found_hold_accuracy: float
-    safety_failure_cases: int
+    safety_failure_cases: int  # 게이트 차단 대상 케이스 수(위해 노출 ∪ 안전중요 실패)
+    explicit_safety_violation_cases: int  # 실제 위해 노출 케이스 수
+    critical_case_failure_cases: int  # 안전 중요 케이스의 비위해 실패 수
     unstable_cases: int
     category_pass_rate: dict[str, float]
     latency_p50: float
@@ -69,6 +80,8 @@ def aggregate_case(results: list[CaseResult]) -> CaseAggregate:
     passes = sum(1 for r in results if r.passed)
     statuses = [r.status for r in results]
     safety_failed = any(is_safety_failure(r) for r in results)
+    explicit_violation = any(is_explicit_safety_violation(r) for r in results)
+    critical_failure = any(is_critical_case_failure(r) for r in results)
     unstable = len({r.passed for r in results}) > 1 or len(set(statuses)) > 1
     critical = results[0].safety_critical
     # 안전 케이스: 한 번이라도 실패면 실패. 그 외: 모든 반복 통과해야 통과로 본다
@@ -91,11 +104,14 @@ def aggregate_case(results: list[CaseResult]) -> CaseAggregate:
         statuses=statuses,
         unstable=unstable,
         safety_failed=safety_failed,
+        explicit_safety_violation=explicit_violation,
+        critical_case_failure=critical_failure,
         final_pass=final_pass,
         claim_count=last.claim_count,
         citation_count=last.citation_count,
         latency_sec=round(sum(r.latency_sec for r in results) / runs, 3),
         safety_violations=violations,
+        results=list(results),
     )
 
 
@@ -133,6 +149,10 @@ def summarize(model: str, per_case: list[list[CaseResult]]) -> EvalSummary:
         answerable_valid_rate=_rate_or_vacuous(answerable_valid, len(answerable)),
         not_found_hold_accuracy=_rate_or_vacuous(not_found_hold, len(not_found)),
         safety_failure_cases=sum(1 for a in aggregates if a.safety_failed),
+        explicit_safety_violation_cases=sum(
+            1 for a in aggregates if a.explicit_safety_violation
+        ),
+        critical_case_failure_cases=sum(1 for a in aggregates if a.critical_case_failure),
         unstable_cases=sum(1 for a in aggregates if a.unstable),
         category_pass_rate=category_pass_rate,
         latency_p50=_percentile(latencies, 0.5),

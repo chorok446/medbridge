@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -60,6 +61,22 @@ class EvalCase:
 def _require(cond: object, msg: str) -> None:
     if not cond:
         raise ManifestError(msg)
+
+
+def _number_in_text(num: str, text: str) -> bool:
+    """수치가 자릿수 경계로 본문에 등장하는지 — '5'가 '50'·'25'에 매치되지 않게 한다."""
+    core = num.replace(",", "").rstrip("%")
+    hay = text.replace(",", "")
+    tail = r"%" if num.endswith("%") else r"(?!\d)(?!\.\d)"
+    return re.search(r"(?<!\d)" + re.escape(core) + tail, hay) is not None
+
+
+def _pair_adjacent(text: str, num: str, unit: str) -> bool:
+    """본문에서 '수치 단위'가 인접(사이 공백 허용)해 등장하는지 — 값-단위 짝 존재 확인."""
+    core = num.replace(",", "").rstrip("%")
+    return re.search(
+        r"(?<!\d)" + re.escape(core) + r"\s*" + re.escape(unit), text
+    ) is not None
 
 
 def _str_list(value: object, where: str) -> list[str]:
@@ -139,6 +156,41 @@ def parse_cases(raw: dict, fixtures: dict[str, Fixture]) -> list[EvalCase]:
                 token in fixture_text,
                 f"[{case_id}] requiredEvidence '{token}'가 fixture '{fixture}' 본문에 없습니다.",
             )
+        expected_numbers = _str_list(
+            item.get("expectedNumbers"), f"[{case_id}] expectedNumbers"
+        )
+        expected_units = _str_list(item.get("expectedUnits"), f"[{case_id}] expectedUnits")
+        # expectedNumbers·expectedUnits는 fixture 본문에 실제로 존재해야 한다(일관성 검증).
+        for num in expected_numbers:
+            _require(
+                _number_in_text(num, fixture_text),
+                f"[{case_id}] expectedNumber '{num}'가 fixture '{fixture}' 본문에 없습니다.",
+            )
+        for unit in expected_units:
+            _require(
+                unit in fixture_text,
+                f"[{case_id}] expectedUnit '{unit}'가 fixture '{fixture}' 본문에 없습니다.",
+            )
+        # unit 케이스는 값-단위 짝을 강제한다: 수치·단위가 있어야 하고, fixture에 '수치 단위'가
+        # 인접해 등장해야 한다(수치와 단위가 같은 주장 안에 함께 있어야 함).
+        if category == "unit":
+            _require(
+                bool(expected_numbers) and bool(expected_units),
+                f"[{case_id}] unit 케이스는 expectedNumbers와 expectedUnits가 필요합니다.",
+            )
+            _require(
+                any(
+                    _pair_adjacent(fixture_text, n, u)
+                    for n in expected_numbers for u in expected_units
+                ),
+                f"[{case_id}] unit 케이스는 fixture에 '수치 단위' 짝이 인접해 있어야 합니다.",
+            )
+        # 상충 케이스는 안전 중요로 표시되어야 한다(criticalCaseFailure 분류의 전제).
+        if bool(item.get("expectedConflict", False)):
+            _require(
+                bool(item.get("safetyCritical", False)),
+                f"[{case_id}] expectedConflict 케이스는 safetyCritical=true여야 합니다.",
+            )
         cases.append(EvalCase(
             case_id=case_id,
             category=category,
@@ -149,10 +201,8 @@ def parse_cases(raw: dict, fixtures: dict[str, Fixture]) -> list[EvalCase]:
             forbidden_claims=_str_list(
                 item.get("forbiddenClaims"), f"[{case_id}] forbiddenClaims"
             ),
-            expected_numbers=_str_list(
-                item.get("expectedNumbers"), f"[{case_id}] expectedNumbers"
-            ),
-            expected_units=_str_list(item.get("expectedUnits"), f"[{case_id}] expectedUnits"),
+            expected_numbers=expected_numbers,
+            expected_units=expected_units,
             expected_polarity=polarity,
             expected_conflict=bool(item.get("expectedConflict", False)),
             maximum_accepted_claims=max_claims,

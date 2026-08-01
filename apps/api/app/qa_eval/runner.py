@@ -35,12 +35,12 @@ async def run_evaluation(
     for case in cases:
         fixture = dataset.fixtures[case.document_fixture]
         results: list[CaseResult] = []
-        for _ in range(effective_repeat):
+        for run_index in range(effective_repeat):
             run = await run_case(
                 factory, case, fixture,
                 provider_mode=provider_mode, model=model, timeout_sec=timeout_sec,
             )
-            results.append(evaluate_case(case, run))
+            results.append(evaluate_case(case, run, run_index=run_index))
         per_case.append(results)
 
     summary = summarize(model_label, per_case)
