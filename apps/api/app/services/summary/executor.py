@@ -168,12 +168,16 @@ async def execute_hierarchical_summary(
             run.completed_nodes = 0
             await session.commit()
 
+    group_chars = [g.char_count for g in groups]
     logger.info(
         "summary_hierarchy_planned",
         document_id=str(document_id),
         chunks=len(chunks),
         groups=len(groups),
         planned_nodes=planned,
+        # 그룹 크기 분포 — 모델 컨텍스트 초과 진단에 필요하다(가장 큰 그룹이 상한이다).
+        group_chars_max=max(group_chars),
+        group_chars_avg=sum(group_chars) // len(group_chars),
     )
 
     guard_args = dict(
@@ -350,7 +354,24 @@ async def _process_node(
             )
 
     # 모델 호출은 트랜잭션 밖에서 한다 — writer 락을 붙잡은 채 네트워크를 기다리지 않는다.
-    summary = await asyncio.to_thread(provider.summarize_group, request)
+    try:
+        summary = await asyncio.to_thread(provider.summarize_group, request)
+    except Exception as exc:
+        # 어느 노드에서 죽었는지 남긴다. 이게 없으면 "요약 실패"만 보이고 첫 호출에서
+        # 실패했는지 수백 번째에서 실패했는지 구분할 수 없다(원인 범위가 완전히 다르다).
+        logger.warning(
+            "summary_node_failed",
+            document_id=str(document_id),
+            level=level,
+            position=position,
+            completed_before=counter.processed,
+            input_chunks=len(request.chunks),
+            input_chars=sum(len(c.text) for c in request.chunks),
+            error_type=type(exc).__name__,
+            failure_category=getattr(exc, "category", None) or "unexpected",
+            failure_reason=getattr(exc, "reason", None) or "none",
+        )
+        raise
     text = summary.summary_text
 
     async with factory() as session:
