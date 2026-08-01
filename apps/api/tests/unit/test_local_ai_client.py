@@ -107,7 +107,8 @@ class TestStatus:
         assert client.get_status().status == client.STATUS_NOT_RUNNING
 
     def test_external_address_not_called(self, monkeypatch):
-        # loopback이 아닌 주소는 is_local 검증에서 막혀 error (외부 호출 불가)
+        # 안전 HTTP 계층이 요청 직전 호스트를 해석해 소켓 연결 전에 unsafe_address로 막는다
+        # → 외부 주소로는 실제 호출이 나가지 않고 error 상태가 된다.
         monkeypatch.setattr(st, "OLLAMA_BASE", "http://93.184.216.34:11434")
         assert client.get_status().status == client.STATUS_ERROR
 

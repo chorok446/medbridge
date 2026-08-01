@@ -157,10 +157,12 @@ def test_model(model: str) -> tuple[bool, str]:
     """
     if model not in st.ALLOWED_MODELS:
         return False, "선택한 모델을 찾을 수 없습니다. 모델을 다시 선택해 주세요."
+    from app.services.summary.settings import LOCAL_REASONING_EFFORT
+
     payload = {
         "model": model,
         "temperature": 0,
-        "reasoning_effort": "none",
+        "reasoning_effort": LOCAL_REASONING_EFFORT,
         "stream": False,
         "max_tokens": 32,
         "messages": [

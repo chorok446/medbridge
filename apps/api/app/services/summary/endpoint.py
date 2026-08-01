@@ -172,6 +172,14 @@ def assert_host_allowed(hostname: str, port: int, *, is_local: bool) -> None:
             raise SummaryNetworkError("unsafe_address")
 
 
+def _assert_url_allowed(url: str, *, is_local: bool) -> None:
+    """요청 직전 URL의 호스트를 해석해 정책을 재검증한다(get/post/stream 공통)."""
+    parts = urlsplit(url)
+    hostname = parts.hostname or ""
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    assert_host_allowed(hostname, port, is_local=is_local)
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """3xx redirect를 추적하지 않는다 — 내부 주소 우회·API 키 유출 방지."""
 
@@ -202,10 +210,7 @@ def get_json(
 ) -> dict:
     """검증된 endpoint로 GET(JSON). post_json과 동일한 안전 정책(정책 재검증·redirect
     차단·크기/데드라인 상한). 인증 헤더는 보내지 않는다(Ollama 로컬 조회용)."""
-    parts = urlsplit(url)
-    hostname = parts.hostname or ""
-    port = parts.port or (443 if parts.scheme == "https" else 80)
-    assert_host_allowed(hostname, port, is_local=is_local)
+    _assert_url_allowed(url, is_local=is_local)
 
     req = urllib.request.Request(
         url,
@@ -316,10 +321,7 @@ def stream_lines(
     크기 상한)을 적용하되, 취소 가능하고 idle/total deadline을 강제한다. should_cancel()이
     True면 즉시 응답을 닫고 종료한다. UTF-8 멀티바이트가 청크 경계에서 나뉘어도 안전하다.
     """
-    parts = urlsplit(url)
-    hostname = parts.hostname or ""
-    port = parts.port or (443 if parts.scheme == "https" else 80)
-    assert_host_allowed(hostname, port, is_local=is_local)
+    _assert_url_allowed(url, is_local=is_local)
 
     body = _json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(

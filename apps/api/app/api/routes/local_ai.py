@@ -192,17 +192,15 @@ async def _pull_events(model: str, request: Request):
     def _worker() -> None:
         try:
             for event in client.pull_model(model, should_cancel=cancel.is_set):
-                # 소비자가 느리면 여기서 대기한다(취소되면 중단). done은 세마포어를 쓰지 않는다.
+                # progress 이벤트만 backpressure 대상 — 소비자가 느리면 여기서 대기한다.
                 while not slots.acquire(timeout=0.5):
                     if cancel.is_set():
                         return
                 _put(("event", event))
         except SummaryNetworkError as exc:
-            if slots.acquire(timeout=5.0):
-                _put(("error", exc.category))
+            _put(("error", exc.category))  # terminal 이벤트는 슬롯 없이 항상 전달
         except Exception:  # noqa: BLE001 — 원문 비노출
-            if slots.acquire(timeout=5.0):
-                _put(("error", "unknown"))
+            _put(("error", "unknown"))
         finally:
             _put(("done", None))
             pull_registry.finish(model)  # 스레드가 진짜 끝날 때만 해제
@@ -219,8 +217,8 @@ async def _pull_events(model: str, request: Request):
                     cancel.set()
                     return
                 continue
-            if kind != "done":
-                slots.release()  # 소비 완료 → 슬롯 반환
+            if kind == "event":
+                slots.release()  # progress 소비 완료 → 슬롯 반환(error/done은 슬롯 미사용)
             if kind == "done":
                 return
             if kind == "error":
@@ -274,14 +272,14 @@ def _phase_label(raw_status: str) -> str:
     s = raw_status.lower()
     if "success" in s:
         return "완료"
-    if "manifest" in s or "pulling" in s and "manifest" in s:
+    if "writing" in s or "removing" in s:  # writing/removing manifest → 마무리
+        return "마무리 중"
+    if "manifest" in s or "pulling" in s:
         return "준비 중"
-    if "download" in s or "pulling" in s:
+    if "download" in s:
         return "내려받는 중"
     if "verif" in s:
         return "확인 중"
-    if "writing" in s or "removing" in s:
-        return "마무리 중"
     return "진행 중"
 
 
