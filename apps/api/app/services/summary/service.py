@@ -279,6 +279,7 @@ async def get_summary_status(db: AsyncSession, doc: Document) -> SummaryStatus:
         failure_category = {
             "SUMMARY_TIMEOUT": "timeout",
             "SUMMARY_INVALID_RESPONSE": "invalid_response",
+            "SUMMARY_CONTEXT_OVERFLOW": "context_overflow",
         }.get(run.error_code)
     can_retry = bool(
         provider.available

@@ -66,6 +66,9 @@ def _classify_pipeline_failure(exc: Exception) -> tuple[str, str | None]:
     if isinstance(exc, SummaryNetworkError):
         if exc.category == "timeout":
             return "SUMMARY_TIMEOUT", "timeout"
+        if exc.category == "context_overflow":
+            # 사용자가 조치할 수 있는 실패(모델 컨텍스트 설정) — 형식 오류와 구분한다.
+            return "SUMMARY_CONTEXT_OVERFLOW", "context_overflow"
         if exc.category in ("bad_response", "response_too_large"):
             return "SUMMARY_INVALID_RESPONSE", "invalid_response"
         return "SUMMARY_PROVIDER_ERROR", "provider_error"

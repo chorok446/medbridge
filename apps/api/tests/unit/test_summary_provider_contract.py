@@ -167,6 +167,71 @@ class TestFailureIsDiagnosable:
         assert unknown.value.reason == "reduce_group_ids_unknown"
 
 
+class TestContextOverflow:
+    """실기기 대형 문서 실패의 확정 원인.
+
+    그룹이 모델 컨텍스트 창을 넘으면 Ollama가 프롬프트를 조용히 자르고(HTTP 200),
+    모델은 summary 대신 error 객체를 돌려준다. 이걸 "응답 형식 오류"로 뭉뚱그리면
+    사용자는 무엇을 고쳐야 할지 알 수 없다.
+    """
+
+    # 실측 응답(qwen3:8b, num_ctx=2048에서 6000자 그룹 투입)
+    REAL_OVERFLOW = (
+        "Input is too long or contains excessive repetition. "
+        "Please provide a concise and clear question or statement for assistance."
+    )
+
+    def test_truncated_prompt_error_is_reported_as_context_overflow(self):
+        provider, _ = _provider(_chat_response(json.dumps({"error": self.REAL_OVERFLOW})))
+
+        with pytest.raises(SummaryNetworkError) as caught:
+            provider.summarize_group(_group_request())
+
+        assert caught.value.category == "context_overflow"
+        assert caught.value.reason == "map_context_overflow"
+
+    def test_context_overflow_maps_to_actionable_failure_category(self):
+        code, category = _classify_pipeline_failure(
+            SummaryNetworkError("context_overflow", "map_context_overflow")
+        )
+        assert code == "SUMMARY_CONTEXT_OVERFLOW"
+        assert category == "context_overflow"
+
+    def test_unrelated_error_object_is_not_mislabelled_as_overflow(self):
+        """모든 error 응답을 컨텍스트 초과로 몰아가면 진짜 원인을 가린다."""
+        provider, _ = _provider(_chat_response(json.dumps({"error": "model not loaded"})))
+
+        with pytest.raises(SummaryNetworkError) as caught:
+            provider.summarize_group(_group_request())
+
+        assert caught.value.category == "bad_response"
+        assert caught.value.reason == "map_summary_missing"
+
+    def test_overflow_message_is_not_echoed_to_user(self):
+        """모델이 낸 영문 원문을 사용자 메시지로 그대로 쓰지 않는다."""
+        err = SummaryNetworkError("context_overflow", "map_context_overflow")
+        assert self.REAL_OVERFLOW not in err.user_message
+        assert "컨텍스트" in err.user_message
+
+
+def test_group_size_fits_common_local_context_window():
+    """그룹 상한이 흔한 기본 컨텍스트(4096)에 출력 여유까지 포함해 들어가야 한다.
+
+    실측(qwen3:8b, 한국어): 프롬프트 토큰 ≈ 문자수 x 0.79. 이 여유가 무너지면 대형
+    문서에서 프롬프트가 잘려 요약이 통째로 실패한다.
+    """
+    from app.services.summary.settings import GROUP_MAX_CHARS
+
+    korean_tokens_per_char = 0.79
+    instruction_overhead_tokens = 150
+    estimated = (
+        GROUP_MAX_CHARS * korean_tokens_per_char
+        + instruction_overhead_tokens
+        + SUMMARY_MAP_MAX_TOKENS
+    )
+    assert estimated < 4096, f"추정 {estimated:.0f}토큰 — 기본 컨텍스트 4096을 넘는다"
+
+
 def test_reduce_prompt_pins_object_shape_so_overview_is_not_dropped():
     """실측에서 qwen3:8b가 overview를 문자열로 돌려줘 개요가 통째로 사라졌다.
 

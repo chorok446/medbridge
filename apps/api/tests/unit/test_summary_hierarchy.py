@@ -78,12 +78,23 @@ class TestBoundedPacking:
         assert [c.chunk_id for g in groups for c in g.chunks] == ["c0"]
 
     def test_real_device_scale_shrinks_group_count(self):
-        """실측 규모(4,265,890자)에서 그룹 수가 3,074개보다 크게 줄어든다."""
+        """실측 규모(4,265,890자)에서 그룹 수가 3,074개보다 크게 줄어든다.
+
+        상한은 모델 컨텍스트(4096)에 맞춰 4,000자로 정해져 있다. 그 제약 안에서 packing이
+        제 몫을 하는지 본다 — 제목마다 끊던 3,074그룹보다 크게 적어야 한다.
+        """
         # 평균 536자 청크 7,965개 ≈ 4.27M자. 제목은 자주 바뀐다.
         chunks = [_chunk(i, title=f"제목 {i // 3}", chars=536) for i in range(7965)]
         groups = build_groups(chunks)
-        assert len(groups) < 900
+        assert len(groups) < 1300
         assert sum(len(g.chunks) for g in groups) == 7965
+
+    def test_groups_are_packed_close_to_the_limit(self):
+        """그룹이 절반만 차면 호출 수가 불필요하게 늘어난다 — 상한의 80% 이상을 채운다."""
+        chunks = [_chunk(i, title=f"제목 {i // 3}", chars=536) for i in range(3000)]
+        groups = build_groups(chunks)
+        average = sum(g.char_count for g in groups) / len(groups)
+        assert average >= GROUP_MAX_CHARS * 0.8, f"평균 {average:.0f}자 / 상한 {GROUP_MAX_CHARS}"
 
 
 class TestLevelPlanning:

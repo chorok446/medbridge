@@ -37,6 +37,10 @@ NET_ERROR_MESSAGES = {
     "model_not_found": "모델을 찾을 수 없습니다. 모델 이름을 확인해 주세요.",
     "server_error": "모델 서비스에서 오류가 발생했습니다.",
     "bad_response": "모델 응답 형식이 올바르지 않습니다.",
+    "context_overflow": (
+        "문서 한 조각이 모델이 한 번에 볼 수 있는 크기를 넘었습니다. "
+        "모델의 컨텍스트 크기를 늘리거나 더 작은 모델 설정을 사용해 주세요."
+    ),
     "response_too_large": "모델 응답이 너무 큽니다.",
     "redirect_blocked": "안전하지 않은 리디렉션이 차단되었습니다.",
     "timeout": "모델 응답 시간이 초과되었습니다.",

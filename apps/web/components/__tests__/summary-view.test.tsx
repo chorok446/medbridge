@@ -86,6 +86,18 @@ describe("SummaryView", () => {
     expect(await screen.findByText(/요약을 만드는 중이에요/)).toBeInTheDocument();
   });
 
+  it("컨텍스트 초과는 무엇을 바꿔야 하는지 알려준다", async () => {
+    // 대형 문서에서 실제로 발생한 실패 — "응답 형식 오류"로 뭉뚱그리면 사용자가
+    // 손쓸 방법을 알 수 없다.
+    apiMock.getSummaryStatus.mockResolvedValue(
+      status({ status: "failed", failureCategory: "context_overflow", canRetry: true }),
+    );
+    renderView();
+
+    expect(await screen.findByText(/컨텍스트 크기를 늘린 뒤/)).toBeInTheDocument();
+    expect(screen.queryByText(/응답 형식이 올바르지 않아/)).toBeNull();
+  });
+
   it("시간 초과 실패는 안전한 안내와 재시도 가능한 생성 버튼을 보여준다", async () => {
     apiMock.getSummaryStatus.mockResolvedValue(
       status({ status: "failed", failureCategory: "timeout", canRetry: true }),

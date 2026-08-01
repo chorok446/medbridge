@@ -18,6 +18,24 @@ from app.services.summary.settings import (
 # finish_reason 값을 로그에 남길 때 모델이 준 임의 문자열을 그대로 쓰지 않는다.
 _KNOWN_FINISH_REASONS = frozenset({"length", "content_filter", "tool_calls", "function_call"})
 
+# 프롬프트가 컨텍스트 창을 넘어 잘렸을 때 모델이 내놓는 응답의 표지.
+_OVERFLOW_HINTS = ("too long", "too large", "context", "excessive repetition")
+
+
+def _looks_like_context_overflow(parsed: dict) -> bool:
+    """계약 필드 대신 error 객체가 온 경우 — 입력 초과인지 판별한다.
+
+    Ollama는 프롬프트를 조용히 자르므로 HTTP는 200이고 usage도 잘린 값이 온다. 유일한
+    단서가 모델이 낸 error 문구뿐이라 여기서만 본문을 들여다본다(로그에는 남기지 않는다).
+    """
+    if "summary" in parsed:
+        return False
+    error = parsed.get("error")
+    if not isinstance(error, str):
+        return False
+    lowered = error.lower()
+    return any(hint in lowered for hint in _OVERFLOW_HINTS)
+
 
 @dataclass
 class ChunkInput:
@@ -280,6 +298,10 @@ class OpenAICompatibleSummaryProvider:
         parsed = self._parse_json_object(raw, stage="map")
         summary = parsed.get("summary")
         if not isinstance(summary, str):
+            # 컨텍스트 창을 넘으면 Ollama가 프롬프트를 잘라 모델이 error 객체를 돌려준다.
+            # "응답 형식 오류"로 뭉뚱그리면 사용자가 손쓸 방법을 알 수 없으므로 구분한다.
+            if _looks_like_context_overflow(parsed):
+                raise SummaryNetworkError("context_overflow", "map_context_overflow")
             raise SummaryNetworkError("bad_response", "map_summary_missing")
         if not summary.strip():
             raise SummaryNetworkError("bad_response", "map_summary_empty")

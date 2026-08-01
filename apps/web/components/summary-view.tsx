@@ -46,6 +46,10 @@ function summaryFailureGuide(category: SummaryFailureCategory | null): string {
   if (category === "invalid_response") {
     return "요약 모델의 응답 형식이 올바르지 않아 완료하지 못했어요. 모델 상태를 확인한 뒤 다시 시도해 주세요.";
   }
+  if (category === "context_overflow") {
+    // 사용자가 직접 조치할 수 있는 실패 — 무엇을 바꿔야 하는지 알려준다.
+    return "문서 한 조각이 AI가 한 번에 볼 수 있는 크기를 넘었어요. 로컬 AI의 컨텍스트 크기를 늘린 뒤 다시 시도해 주세요.";
+  }
   return "요약을 만들지 못했어요. 다시 시도해 주세요.";
 }
 

@@ -31,7 +31,10 @@ export interface SummaryList {
   artifacts: SummaryArtifact[];
 }
 
-export type SummaryFailureCategory = "timeout" | "invalid_response";
+export type SummaryFailureCategory =
+  | "timeout"
+  | "invalid_response"
+  | "context_overflow";
 
 export interface SummaryStatus {
   providerAvailable: boolean;
