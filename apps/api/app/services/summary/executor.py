@@ -225,11 +225,11 @@ async def execute_hierarchical_summary(
                 context_key, level, [(n.input_hash, n.summary_text) for n in batch]
             )
             # 출처는 자식 출처의 합집합 — 서버가 계산하고 모델 출력은 쓰지 않는다.
-            source_ids: list[str] = []
+            merged_source_ids: list[str] = []
             for child in batch:
                 for cid in child.source_chunk_ids:
-                    if cid not in source_ids:
-                        source_ids.append(cid)
+                    if cid not in merged_source_ids:
+                        merged_source_ids.append(cid)
             request = GroupRequest(
                 group_id=f"L{level}n{position}",
                 section_title=batch[0].section_title,
@@ -255,7 +255,7 @@ async def execute_hierarchical_summary(
                 position=position,
                 input_hash=input_hash,
                 request=request,
-                source_ids=source_ids,
+                source_ids=merged_source_ids,
                 section_title=batch[0].section_title,
                 counter=counter,
                 guard_args=guard_args,
