@@ -142,6 +142,14 @@ class TestOpenAIStreaming:
         # 자유 텍스트 줄은 무시, final만
         assert [e["type"] for e in events] == ["final"]
 
+    def test_malformed_output_yields_no_claim_safely(self):
+        # 사고 과정·자유 텍스트·깨진 JSON만 오면 예외 없이 claim을 전혀 내지 않는다(안전).
+        lines = _sse('이건 사고 과정 텍스트\n', '<think>추론</think>\n',
+                     '{"type":"claim","text":"미완결', '  깨진 JSON\n')
+        p = self._provider(lines)
+        events = list(p.stream_answer(QaRequest(question="q", chunks=[]), _Token()))
+        assert all(e["type"] != "claim" for e in events)
+
     def test_available_flag(self):
         p = self._provider([])
         assert p.available is True
@@ -160,3 +168,53 @@ class TestOpenAIStreaming:
             is_local=False,
         )
         assert p.available is False
+
+
+class TestFinalStatusSafety:
+    """스트림 종료 시 서버 최종 상태 확정 — 미검증/상반 근거를 안전하게 처리한다."""
+
+    @staticmethod
+    def _sc(text):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(text=text)
+
+    def test_no_supported_with_results_is_insufficient(self):
+        from app.models.enums import QaMessageStatus
+        from app.services.qa.stream_service import _final_status
+
+        st, _ = _final_status([], "", had_results=True)
+        assert st == QaMessageStatus.INSUFFICIENT_EVIDENCE
+
+    def test_no_supported_no_results_is_not_found(self):
+        from app.models.enums import QaMessageStatus
+        from app.services.qa.stream_service import _final_status
+
+        st, _ = _final_status([], "", had_results=False)
+        assert st == QaMessageStatus.NOT_FOUND
+
+    def test_single_supported_is_completed(self):
+        from app.models.enums import QaMessageStatus
+        from app.services.qa.stream_service import _final_status
+
+        st, _ = _final_status([self._sc("심장은 혈액을 보낸다")], "", had_results=True)
+        assert st == QaMessageStatus.COMPLETED
+
+    def test_contradiction_without_final_hint_is_conflicting(self):
+        from app.models.enums import QaMessageStatus
+        from app.services.qa.stream_service import _final_status
+
+        c1 = "초기 연구에서는 이 요법이 사망 위험을 감소시킨다고 보고하였다"
+        c2 = "후속 연구에서는 이 요법이 사망 위험에 영향을 주지 않았다고 보고하였다"
+        st, _ = _final_status([self._sc(c1), self._sc(c2)], "", had_results=True)
+        assert st == QaMessageStatus.CONFLICTING_EVIDENCE
+
+    def test_unrelated_two_claims_stay_completed(self):
+        from app.models.enums import QaMessageStatus
+        from app.services.qa.stream_service import _final_status
+
+        st, _ = _final_status(
+            [self._sc("심장은 혈액을 보낸다"), self._sc("심박수는 분당 범위에 있다")],
+            "", had_results=True,
+        )
+        assert st == QaMessageStatus.COMPLETED

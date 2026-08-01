@@ -27,6 +27,10 @@ _WORD_RE = re.compile(r"[0-9A-Za-z가-힣]{2,}")
 # 것을 막는다(의료 안전상 극성 뒤집힘이 가장 위험). 한국어 부정소 + 영어 부정어.
 _NEGATION_MARKERS = ("않", "없", "아니", "못", " 안 ", " no ", " not ", "n't", "없이")
 
+# 지원 claim 간 상충 감지에 필요한 최소 공유 주제 토큰 수. 서로 다른 근거 청크의 두
+# 주장이 같은 대상을 다루면서(주제 어휘 충분히 겹침) 부정 극성만 반대일 때 상충으로 본다.
+_CONFLICT_MIN_SHARED = 3
+
 
 @dataclass
 class VerifiedClaim:
@@ -45,29 +49,47 @@ class VerifiedAnswer:
     followups: list[str] = field(default_factory=list)
 
 
-def verify_claim_event(
+# 스트리밍 claim 거부 사유 코드 — 진단용(원문 비노출, 안전 코드만).
+REJECT_EMPTY = "empty_text"
+REJECT_NO_SOURCE = "no_valid_source"
+REJECT_NUMBER_ABSENT = "number_not_in_source"
+REJECT_NOT_GROUNDED = "not_lexically_grounded"
+
+
+def classify_claim_event(
     event: dict, lookup: dict[str, QaChunkRef], *, claim_index: int
-) -> VerifiedClaim | None:
-    """스트리밍 claim 이벤트 하나를 검증한다. 지원(supported)일 때만 반환, 아니면 None.
+) -> tuple[VerifiedClaim | None, str | None]:
+    """claim 이벤트를 검증한다. 반환: (지원 claim | None, 거부 사유 코드 | None).
 
     4A와 동일한 검증(현재 검색 청크 부분집합·문서 소속·어휘 연결·수치 원문 존재)을 쓴다.
-    출처(page/bbox)는 저장된 source_refs에서 재구성한다.
+    지원이면 (claim, None), 거부면 (None, 사유코드). 사유코드는 안전한 분류값이며 모델
+    응답 원문을 담지 않는다.
     """
     text = str(event.get("text") or "").strip()[:CLAIM_TEXT_MAX_CHARS]
     if not text:
-        return None
+        return None, REJECT_EMPTY
     ids = _valid_ids(event.get("sourceChunkIds"), lookup)
-    if not ids or not _numbers_present(text, ids, lookup) or not _lexically_grounded(
-        text, ids, lookup
-    ):
-        return None  # unsupported → 스트림으로 내보내지 않는다
+    if not ids:
+        return None, REJECT_NO_SOURCE
+    if not _numbers_present(text, ids, lookup):
+        return None, REJECT_NUMBER_ABSENT
+    if not _lexically_grounded(text, ids, lookup):
+        return None, REJECT_NOT_GROUNDED
     return VerifiedClaim(
         claim_index=claim_index,
         text=text,
         verification_status=QaClaimVerification.SUPPORTED,
         source_chunk_ids=ids,
         source_refs=_refs_for(ids, lookup),
-    )
+    ), None
+
+
+def verify_claim_event(
+    event: dict, lookup: dict[str, QaChunkRef], *, claim_index: int
+) -> VerifiedClaim | None:
+    """스트리밍 claim 이벤트 하나를 검증한다. 지원(supported)일 때만 반환, 아니면 None."""
+    vc, _reason = classify_claim_event(event, lookup, claim_index=claim_index)
+    return vc  # unsupported → 스트림으로 내보내지 않는다
 
 
 def _valid_ids(raw_ids, lookup: dict[str, QaChunkRef]) -> list[str]:
@@ -147,6 +169,40 @@ def _polarity_consistent(claim_text: str, haystack: str) -> bool:
     return True
 
 
+def _has_negation(text: str) -> bool:
+    padded = " " + re.sub(r"\s+", " ", text.lower()) + " "
+    return any(m in padded for m in _NEGATION_MARKERS)
+
+
+def _subject_tokens(text: str) -> set[str]:
+    """상충 비교용 주제 토큰 — 부정 표지를 담은 토큰은 제외한다(주제가 아니라 극성)."""
+    tokens = {t.lower() for t in _WORD_RE.findall(text)}
+    return {t for t in tokens if not any(m.strip() and m.strip() in t for m in _NEGATION_MARKERS)}
+
+
+def claims_conflict(claim_texts: list[str]) -> bool:
+    """서로 다른 근거의 두 주장이 같은 대상에 상반된 극성을 보이면 True(보수적).
+
+    조건: 두 주장이 충분한 주제 어휘(_CONFLICT_MIN_SHARED개 이상)를 공유하면서, 한쪽만
+    부정 극성을 담는 경우. 명시적 부정소 기반이라 증가↔감소 같은 반의어 뒤집힘은 잡지
+    못하지만(알려진 상한), 무관한 다중 주장을 상충으로 오탐하지 않도록 보수적으로 잡는다.
+    상충을 못 잡으면 오히려 상반 근거가 통일된 답처럼 노출되므로, 안전상 conflicting_evidence
+    쪽으로 기운다(거짓 상충은 사용자에게 '출처 확인'을 유도할 뿐 사실을 날조하지 않는다).
+    """
+    n = len(claim_texts)
+    if n < 2:
+        return False
+    negs = [_has_negation(t) for t in claim_texts]
+    subjects = [_subject_tokens(t) for t in claim_texts]
+    for i in range(n):
+        for j in range(i + 1, n):
+            if negs[i] == negs[j]:
+                continue  # 극성 차이가 없으면 상충으로 보지 않는다
+            if len(subjects[i] & subjects[j]) >= _CONFLICT_MIN_SHARED:
+                return True
+    return False
+
+
 def verify(
     model_output: dict, lookup: dict[str, QaChunkRef], *, had_results: bool
 ) -> VerifiedAnswer:
@@ -190,15 +246,20 @@ def verify(
     supported = [c for c in verified if c.verification_status == QaClaimVerification.SUPPORTED]
 
     # 최종 상태 결정 (모델 상태를 신뢰하지 않고 서버가 확정)
+    model_flags_conflict = model_status == "conflicting_evidence"
     if not had_results:
         status = "not_found"
-    elif model_status == "conflicting_evidence" and len(supported) >= 2:
-        # 모델이 상충을 명시하고 양쪽 출처가 유효할 때만 conflicting으로 인정
+    elif not supported:
+        status = "insufficient_evidence"
+    elif len(supported) >= 2 and (
+        model_flags_conflict or claims_conflict([c.text for c in supported])
+    ):
+        # 모델이 상충을 명시했거나, 양쪽 지원 주장이 같은 대상에 상반된 극성을 보이면
+        # 상충으로 확정한다. 모델이 final 힌트를 빠뜨려도 상반 근거가 completed로
+        # 노출되지 않게 한다(계약 강화).
         status = "conflicting_evidence"
         for c in supported:
             c.verification_status = QaClaimVerification.CONFLICTING
-    elif not supported:
-        status = "insufficient_evidence"
     else:
         status = "completed"
 

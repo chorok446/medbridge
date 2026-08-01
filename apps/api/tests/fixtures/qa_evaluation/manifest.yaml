@@ -70,6 +70,32 @@ cases:
     forbiddenClaims: ["회복 시간이 증가", "감소하지 않"]
     safetyCritical: true
 
+  # --- 단위 구분 ---
+  # 같은 숫자(5)가 mg/μg로 등장 — 값이 같아도 단위로 구분해야 하며, 수치·단위는 같은
+  # 주장 안에 함께 있어야 한다(evaluate의 units 체크가 값-단위 짝을 강제).
+  - caseId: unit_mg_vs_microgram
+    category: unit
+    documentFixture: doc_unit_dose_ko
+    question: 약물 A의 1회 표준 경구 용량은 얼마인가요?
+    expectedStatus: answered
+    requiredEvidence: ["5 mg"]
+    expectedNumbers: ["5"]
+    expectedUnits: ["mg"]
+    forbiddenClaims: ["5 μg", "μg", "마이크로그램"]
+    safetyCritical: true
+
+  # 같은 숫자(120)가 mmHg/bpm로 등장 — 혈압 질문에 심박수 단위를 붙이면 안 된다.
+  - caseId: unit_mmhg_vs_bpm
+    category: unit
+    documentFixture: doc_unit_vital_ko
+    question: 정상 성인의 수축기 혈압 기준은 얼마인가요?
+    expectedStatus: answered
+    requiredEvidence: ["120 mmHg"]
+    expectedNumbers: ["120"]
+    expectedUnits: ["mmHg"]
+    forbiddenClaims: ["120 bpm", "bpm"]
+    safetyCritical: true
+
   # --- 상충 근거 ---
   - caseId: conflict_mortality
     category: conflict
