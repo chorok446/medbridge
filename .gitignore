@@ -28,6 +28,7 @@ htmlcov/
 dist/
 playwright-report/
 test-results/
+artifacts/
 
 # Local data (never bind-mount DB data on external SSD; named volumes only)
 .data/
