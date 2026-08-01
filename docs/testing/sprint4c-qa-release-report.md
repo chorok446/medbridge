@@ -66,20 +66,28 @@ uv run python scripts/evaluate_local_qa.py --model qwen3:14b --repeat 3
 ## 5. 출시 게이트 강제 (fail-closed)
 
 main 배포 워크플로(`.github/workflows/release.yml`)는 `scripts/check_release_gate.py`를
-**필수 단계**로 실행한다. 이 검사는 `docs/testing/release-approval.json`이 없거나, 현재
-커밋 SHA에 바인딩되지 않았거나, qwen3:8b 판정이 `default_recommended`가 아니거나,
-Windows 검증이 `passed`가 아니면 **비정상 종료해 발행을 차단**한다. 문서의 "HOLD"만으로는
+**필수 단계**로 실행한다. 승인 파일(`docs/testing/release-approval.json`)이 없거나, 판정이
+미완이거나, **평가·검증한 코드 커밋(testedCommit) 이후 애플리케이션 코드가 바뀌었거나**,
+평가 artifact 해시가 어긋나면 **비정상 종료해 발행을 차단**한다. 문서의 "HOLD"만으로는
 막지 못하므로 워크플로 레벨에서 강제한다.
 
 현재 승인 파일은 존재하지 않는다 → main 배포는 자동으로 차단된다(의도된 상태).
 
-실제 평가·검증 완료 후 아래 형식으로 승인 파일을 현재 커밋 SHA에 맞춰 커밋한다:
+**자기참조 회피**: 승인 파일을 커밋하면 커밋 SHA가 바뀌므로 "승인.commit == 현재 SHA"는
+정상 커밋으로 충족할 수 없다. 대신 승인은 실제로 평가·검증한 코드 커밋 `testedCommit`을
+가리키고, 게이트는 (1) testedCommit이 현재 HEAD의 조상인지, (2) 그 이후 변경이 승인·보고·
+artifact 파일로만 한정되는지(앱 코드·프롬프트·검색·출처 검증·평가기·release 워크플로가
+바뀌면 거부), (3) artifact SHA-256 일치를 확인한다.
+
+실제 평가·검증 완료 후 아래 형식으로 승인 파일을 작성하고, 이후에는 승인·보고·artifact
+파일만 커밋한다:
 
 ```json
 {
-  "commit": "<릴리스 커밋 전체 SHA>",
+  "testedCommit": "<평가·검증을 수행한 코드 커밋 전체 SHA>",
   "qwen3_8b": {"verdict": "default_recommended", "evalArtifact": "qa-eval-qwen3-8b.json"},
-  "windowsValidation": {"status": "passed", "date": "YYYY-MM-DD", "by": "검증자"}
+  "windowsValidation": {"status": "passed", "date": "YYYY-MM-DD", "by": "검증자"},
+  "artifacts": [{"path": "docs/testing/qa-eval-qwen3-8b.json", "sha256": "<hex>"}]
 }
 ```
 
