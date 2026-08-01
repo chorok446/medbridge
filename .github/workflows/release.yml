@@ -26,6 +26,12 @@ jobs:
         shell: bash
         run: python3 scripts/check-versions.py
 
+      - name: 출시 게이트 — Q&A 평가·Windows 검증 승인 확인 (fail-closed)
+        shell: bash
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+        run: python3 scripts/check_release_gate.py
+
       - name: Read app version
         id: version
         shell: bash

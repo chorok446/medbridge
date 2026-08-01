@@ -36,6 +36,11 @@ asyncio_mode = "auto"
 asyncio_default_test_loop_scope = "session"
 asyncio_default_fixture_loop_scope = "session"
 testpaths = ["tests"]
+filterwarnings = [
+    # SWIG 바인딩(C 확장)이 내부 타입에 __module__을 안 붙여 나는 서드파티 경고 — 무해.
+    "ignore:builtin type SwigPy.* has no __module__ attribute:DeprecationWarning",
+    "ignore:builtin type swigvarlink has no __module__ attribute:DeprecationWarning",
+]
 
 [tool.ruff]
 line-length = 100
