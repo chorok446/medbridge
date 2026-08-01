@@ -3,6 +3,8 @@
 별도의 API 키 저장소·endpoint 설정을 만들지 않는다.
 """
 
+import asyncio
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -26,7 +28,8 @@ async def _resolved_config(session: AsyncSession) -> ResolvedProviderConfig | No
         endpoint=row.endpoint,
         model_name=row.model_name,
         is_local=row.is_local,
-        api_key=secrets.get_api_key(),
+        # keyring 읽기는 OS 자격증명 저장소를 치는 동기 I/O — 이벤트 루프를 막지 않게 위임.
+        api_key=await asyncio.to_thread(secrets.get_api_key),
     )
 
 

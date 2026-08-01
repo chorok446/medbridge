@@ -104,7 +104,8 @@ def _numbers_present(claim_text: str, ids: list[str], lookup: dict[str, QaChunkR
         core = raw.replace(",", "")
         # 자릿수 경계로 매치 — 50이 150·250에 매치되지 않게 한다(% 포함 형태도 처리)
         digits = core.rstrip("%")
-        tail = r"%?" if core.endswith("%") else r"(?!\d)"
+        # 뒤에 숫자가 이어지면 매치 금지 — "50%"가 "500명"의 "50"에 매치되지 않게 한다.
+        tail = r"%?(?!\d)" if core.endswith("%") else r"(?!\d)"
         pattern = r"(?<!\d)" + re.escape(digits) + tail
         if not re.search(pattern, haystack):
             return False

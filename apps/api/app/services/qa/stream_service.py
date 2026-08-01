@@ -354,7 +354,7 @@ async def run_stream(
         request_obj = QaRequest(
             question=user_content,
             chunks=retrieval.chunks,
-            history=await _recent_history_safe(factory, thread_id),
+            history=await _recent_history_safe(factory, thread_id, assistant_id),
         )
 
         # 공급자 스트리밍을 스레드에서 실행하고 큐로 넘긴다(네트워크 I/O 격리·취소 가능)
@@ -565,6 +565,14 @@ async def _checkpoint_draft(factory, assistant_id: uuid.UUID, supported: list) -
         await s.commit()
 
 
-async def _recent_history_safe(factory, thread_id: uuid.UUID) -> list:
+async def _recent_history_safe(factory, thread_id: uuid.UUID, assistant_id: uuid.UUID) -> list:
     async with factory() as s:
-        return await _recent_history(s, thread_id)
+        # 현재 (user, assistant) 쌍은 seq(U), seq(U+1)로 삽입된다. before_seq=U로 두어
+        # 지금 답변 중인 질문이 문맥에 중복으로 들어가지 않게 한다.
+        aseq = (
+            await s.execute(
+                select(QaMessage.sequence_number).where(QaMessage.id == assistant_id)
+            )
+        ).scalar_one_or_none()
+        before = aseq - 1 if aseq is not None else None
+        return await _recent_history(s, thread_id, before_seq=before)

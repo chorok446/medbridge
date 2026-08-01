@@ -102,6 +102,17 @@ class TestVerify:
         )
         assert out.answer_status == "insufficient_evidence"
 
+    def test_percent_number_boundary_not_substring(self):
+        # "50%" 주장이 원문의 "500명" 안 "50"에 substring으로 매치되면 안 된다
+        lookup = _lookup(("c1", "대상 500명을 관찰했다"))
+        out = verify(
+            {"answer": "x", "answerStatus": "answered",
+             "claims": [{"text": "대상의 50%가 개선되었다", "sourceChunkIds": ["c1"]}]},
+            lookup,
+            had_results=True,
+        )
+        assert out.answer_status == "insufficient_evidence"
+
     def test_comma_formatted_number_matches(self):
         lookup = _lookup(("c1", "대상은 1000명이다"))
         out = verify(
