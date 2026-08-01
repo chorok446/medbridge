@@ -16,7 +16,7 @@ import { openExternalUrl } from "@/lib/tauri";
 const OLLAMA_INSTALL_URL = "https://ollama.com/download/windows";
 const GIB = 1024 ** 3;
 
-function failureCategory(error: ApiError): string | null {
+function errorDetails(error: ApiError): Record<string, unknown> | null {
   if (
     typeof error.details !== "object" ||
     error.details === null ||
@@ -24,8 +24,17 @@ function failureCategory(error: ApiError): string | null {
   ) {
     return null;
   }
-  const value = (error.details as Record<string, unknown>).failureCategory;
+  return error.details as Record<string, unknown>;
+}
+
+function failureCategory(error: ApiError): string | null {
+  const value = errorDetails(error)?.failureCategory;
   return typeof value === "string" ? value : null;
+}
+
+/** 서버가 commit까지는 성공했다고 알린 실패인지 — "저장 실패"로 안내하면 안 된다. */
+function isCommitted(error: ApiError): boolean {
+  return errorDetails(error)?.committed === true;
 }
 
 function formatSize(bytes: number): string {
@@ -201,6 +210,15 @@ function ReadyPanel({ onRecheck }: { onRecheck: () => void }) {
           ok: false,
           text: "다른 작업이 저장 중이라 지금은 설정을 바꿀 수 없어요. 잠시 후 다시 시도해 주세요.",
         });
+      } else if (err instanceof ApiError && isCommitted(err)) {
+        // 서버가 commit까지는 끝냈다고 알린 경우 — 저장은 됐으므로 "저장 실패"로
+        // 안내하지 않는다. 캐시도 무효화해 설정 화면이 실제 저장된 값을 보이게 한다.
+        setConfirmOverwrite(null);
+        setTestMessage({
+          ok: false,
+          text: "설정은 저장했지만 상태를 다시 확인하지 못했어요. 설정 화면을 다시 열어 주세요.",
+        });
+        void queryClient.invalidateQueries({ queryKey: ["summary-settings"] });
       } else if (err instanceof ApiError && err.retryable) {
         setTestMessage({
           ok: false,

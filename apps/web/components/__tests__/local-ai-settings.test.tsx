@@ -200,6 +200,34 @@ describe("LocalAiSection", () => {
     expect(container.textContent).not.toContain("raw SQL and private path");
   });
 
+  it("commit 후 조회 실패는 저장 실패로 안내하지 않고 캐시를 무효화한다", async () => {
+    // 서버가 details.committed=true로 "저장은 됐다"고 알린 경우 — 실제로 행이 저장된
+    // 상태라 "저장하지 못했어요"라고 말하면 사용자에게 거짓을 알리게 된다.
+    apiMock.getLocalAiStatus.mockResolvedValue({ status: "ready" });
+    apiMock.getLocalModels.mockResolvedValue({
+      models: THREE.map((m) => (m.model === "qwen3:8b" ? { ...m, installed: true } : m)),
+      defaultModel: "qwen3:8b", totalRamBytes: 32 * 1024 ** 3,
+      freeDiskBytes: 200 * 1024 ** 3,
+    });
+    apiMock.activateLocalModel.mockRejectedValue(
+      new ApiError(500, "POST_COMMIT_VIEW_FAILED", "설정은 저장했지만", false, {
+        details: {
+          failureCategory: "post_commit_view_failed",
+          stage: "reload_settings_view",
+          committed: true,
+        },
+      }),
+    );
+
+    const { client } = renderSection();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    await userEvent.click(await screen.findByRole("button", { name: "기본 모델로 사용" }));
+
+    expect(await screen.findByText(/설정은 저장했지만/)).toBeInTheDocument();
+    expect(screen.queryByText("설정을 저장하지 못했어요. 다시 시도해 주세요.")).toBeNull();
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["summary-settings"] });
+  });
+
   it("활성화 성공 후 summary settings를 무효화한다", async () => {
     apiMock.getLocalAiStatus.mockResolvedValue({ status: "ready" });
     apiMock.getLocalModels.mockResolvedValue({

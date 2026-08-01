@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.errors import AppError, ErrorCode
@@ -220,6 +221,42 @@ class TestActivate:
         )
         assert res.json()["error"]["details"]["conflictType"] == (
             "external_ai_overwrite_required"
+        )
+
+    async def test_external_conflict_survives_rollback_failure(self, client, monkeypatch):
+        """rollback이 실패해도 409 덮어쓰기 안내가 500으로 바뀌지 않는다.
+
+        409가 500이 되면 프런트가 덮어쓰기 확인 대화상자를 띄우지 못해, 사용자는
+        외부 AI를 로컬로 바꿀 방법을 잃는다.
+        """
+        monkeypatch.setattr(ollama_client, "list_models", _installed("qwen3:8b"))
+        async with get_session_factory()() as session:
+            session.add(
+                SummarySettings(
+                    enabled=True,
+                    provider_type="openai_compatible",
+                    endpoint="https://api.example.com/v1",
+                    model_name="gpt-x",
+                    is_local=False,
+                )
+            )
+            await session.commit()
+
+        original_rollback = AsyncSession.rollback
+
+        async def failing_rollback(self):
+            raise RuntimeError("rollback 실패 모의")
+
+        monkeypatch.setattr(AsyncSession, "rollback", failing_rollback)
+        try:
+            res = await client.post("/api/local-ai/activate", json={"model": "qwen3:8b"})
+        finally:
+            monkeypatch.setattr(AsyncSession, "rollback", original_rollback)
+
+        assert res.status_code == 409
+        assert res.json()["error"]["code"] == ErrorCode.EXTERNAL_AI_OVERWRITE_REQUIRED
+        assert res.json()["error"]["details"]["failureCategory"] == (
+            "external_settings_conflict"
         )
 
     async def test_lock_released_before_retry_succeeds(

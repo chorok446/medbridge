@@ -262,7 +262,20 @@ async def _persist_activation_with_retry(
             await db.commit()
             return
         except AppError:
-            await db.rollback()
+            # rollback이 실패해도 원래 AppError를 그대로 올린다. 여기서 새 예외가 나면
+            # 409 EXTERNAL_AI_OVERWRITE_REQUIRED가 전역 핸들러의 500으로 바뀌어
+            # 덮어쓰기 확인 대화상자가 뜨지 않는다(이 분기는 쓰기 전이라 되돌릴 것도 없다).
+            try:
+                await db.rollback()
+            except Exception as rollback_exc:  # noqa: BLE001 — 원래 오류를 가리지 않는다
+                logger.warning(
+                    "local_ai_activate_rollback_after_app_error_failed",
+                    operation=_OPERATION,
+                    stage=stage,
+                    attempt=attempt,
+                    exceptionType=type(rollback_exc).__name__,
+                    correlationId=correlation_id_var.get(),
+                )
             raise
         except Exception as exc:
             failure = classify_persistence_failure(exc)
