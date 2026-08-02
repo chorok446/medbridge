@@ -47,6 +47,9 @@ function summaryFailureGuide(category: SummaryFailureCategory | null): string {
   if (category === "invalid_response") {
     return "요약 모델의 응답 형식이 올바르지 않아 완료하지 못했어요. 모델 상태를 확인한 뒤 다시 시도해 주세요.";
   }
+  if (category === "empty_result") {
+    return "요약 모델이 저장할 만한 내용을 만들지 못했어요. 다시 시도해 주세요.";
+  }
   if (category === "context_overflow") {
     // 앱이 모델 컨텍스트를 직접 지정하므로 "설정을 늘리라"는 안내는 효과가 없다.
     // 실제로 결과가 달라지는 조치만 안내한다.
@@ -152,7 +155,7 @@ export function SummaryView({ doc, fileUrl }: Props) {
 
             {/* 성공했지만 내용이 빠진 요약 — 표시하지 않으면 사용자는 특정 절이 통째로
                 사라진 요약을 완결된 요약으로 신뢰하게 된다. */}
-            {status.failureCategory === "partial_content" && artifacts.length > 0 && (
+            {status.partial && artifacts.length > 0 && (
               <div
                 role="status"
                 className="mb-3 rounded bg-amber-50 px-3 py-2 text-sm text-amber-800"

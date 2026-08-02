@@ -42,6 +42,7 @@ function status(overrides: Record<string, unknown> = {}) {
     progress: 100,
     canRetry: false,
     failureCategory: null,
+    partial: false,
     ...overrides,
   };
 }
@@ -156,11 +157,23 @@ describe("SummaryView", () => {
     expect(await screen.findByText("저장했어요")).toBeInTheDocument();
   });
 
+  it("이후 재시도가 실패해도 부분 요약 경고는 남는다", async () => {
+    // 경고를 최신 run 기준으로 계산하면, 재시도가 실패하는 순간 경고만 사라지고
+    // 불완전한 요약은 그대로 남아 사용자가 그것을 완결된 요약으로 신뢰한다.
+    apiMock.getSummaryStatus.mockResolvedValue(
+      status({ status: "failed", failureCategory: "timeout", partial: true, canRetry: true }),
+    );
+    apiMock.getSummaries.mockResolvedValue({ stale: false, artifacts: [overviewArtifact] });
+    renderView();
+
+    expect(await screen.findByText(/요약에\s*담기지 못했어요/)).toBeInTheDocument();
+  });
+
   it("내용이 빠진 요약은 완결된 요약처럼 보이지 않는다", async () => {
     // 컨텍스트 초과로 일부 조각이 요약에 담기지 못한 run. 표시하지 않으면 사용자는
     // 특정 절이 통째로 사라진 요약을 완료된 요약으로 신뢰하게 된다.
     apiMock.getSummaryStatus.mockResolvedValue(
-      status({ failureCategory: "partial_content", canRetry: true }),
+      status({ partial: true, canRetry: true }),
     );
     apiMock.getSummaries.mockResolvedValue({ stale: false, artifacts: [overviewArtifact] });
     renderView();

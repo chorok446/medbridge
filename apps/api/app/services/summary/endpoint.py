@@ -26,24 +26,37 @@ from urllib.parse import urlsplit
 # 안전 로컬 호스트명 (정확히 일치해야 함 — localhost.evil.example 등은 제외)
 _LOCAL_HOSTNAMES = frozenset({"localhost", "localhost.localdomain"})
 
-# 프롬프트가 컨텍스트 창을 넘었을 때 모델·서버가 내놓는 표지.
+# 컨텍스트 초과 표지는 **경로마다 다르다**. 하나로 합치면 한쪽에서 오분류가 난다.
 #
-# 두 경로에서 함께 쓴다: (1) Ollama처럼 프롬프트를 조용히 자르고 HTTP 200으로 error
-# 객체를 돌려주는 경우(provider가 본문을 본다), (2) OpenAI 호환 서버가 HTTP 400 +
-# context_length_exceeded로 명시적으로 거부하는 경우(아래 _classify_http_error).
-# 목록이 갈라지면 한쪽 경로만 초과를 인지해 적응 분할이 발동하지 않는다.
-#
-# 맨 "context"는 넣지 않는다 — 외부 모델의 평범한 거절("I cannot summarize this without
-# more context")까지 초과로 오분류해, 유료 API를 분할 재시도로 낭비한다.
-CONTEXT_OVERFLOW_HINTS = (
-    "too long",
-    "too large",
+# (1) HTTP 400 본문: 서버가 기계적으로 만든 문구다. 컨텍스트를 명시적으로 가리키는
+#     것만 인정한다. "too long"·"too large" 같은 일반 문구는 컨텍스트와 무관한 400에도
+#     흔해서(예: string_above_max_length, Request payload too large), 그것까지 초과로
+#     보면 외부 유료 API를 분할 재시도로 20배 낭비하고 "메모리를 확보하라"는 무의미한
+#     안내를 띄운다.
+HTTP_CONTEXT_OVERFLOW_HINTS = (
+    "context_length_exceeded",
     "context length",
     "context window",
-    "context_length_exceeded",
     "exceeds the context",
-    "excessive repetition",
     "maximum context",
+    "available context",
+)
+
+# (2) 모델이 HTTP 200으로 돌려준 error 객체: Ollama는 프롬프트를 조용히 자르므로 유일한
+#     단서가 모델의 자연어 문구다. 실측된 영어 표현에 더해, 한국어로 답하도록 지시된
+#     모델이 내는 한국어 표현도 함께 본다 — 영어만 보면 한국어 응답에서 적응 분할이
+#     한 번도 발동하지 않는다.
+#     맨 "context"는 넣지 않는다("I cannot summarize this without more context").
+MODEL_CONTEXT_OVERFLOW_HINTS = (
+    *HTTP_CONTEXT_OVERFLOW_HINTS,
+    "too long",
+    "too large",
+    "excessive repetition",
+    "너무 깁니다",
+    "너무 길어",
+    "너무 많습니다",
+    "입력이 길",
+    "컨텍스트",
 )
 
 # HTTP 오류 본문에서 초과 여부만 판별하려고 읽는 최대 바이트. 본문은 분류에만 쓰고
@@ -437,7 +450,7 @@ def _classify_http_error(exc: urllib.error.HTTPError) -> SummaryNetworkError:
             body = exc.read(_ERROR_BODY_SNIFF_BYTES).decode("utf-8", "replace").lower()
         except Exception:  # noqa: BLE001 — 본문을 못 읽으면 코드만으로 분류한다
             body = ""
-        if any(hint in body for hint in CONTEXT_OVERFLOW_HINTS):
+        if any(hint in body for hint in HTTP_CONTEXT_OVERFLOW_HINTS):
             return SummaryNetworkError("context_overflow", "http_400_context_length")
     return _classify_http_status(exc.code)
 

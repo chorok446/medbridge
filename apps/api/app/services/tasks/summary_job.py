@@ -198,6 +198,15 @@ async def run_summary_job(
             await _fail_run(session, run_id, job_id, "REVISION_CHANGED")
             return
 
+        if not drafts:
+            # artifact가 하나도 없으면 '요약 완료'가 아니다. SUCCEEDED로 두면 사용자는
+            # '아직 요약을 만들지 않았어요'가 적힌 빈 화면을 완료 상태로 받고, 재시도
+            # 안내조차 뜨지 않는다. 공급자 쪽 게이트를 통과한 응답도 저장 단계에서
+            # 전부 버려질 수 있으므로(출처 없는 항목) 여기서 한 번 더 막는다.
+            logger.warning("summary_no_artifacts", document_id=str(document_id))
+            await _fail_run(session, run_id, job_id, "SUMMARY_EMPTY")
+            return
+
         for draft in drafts:
             session.add(
                 SummaryArtifact(

@@ -243,6 +243,8 @@ class SummaryStatus:
     progress: int
     can_retry: bool
     failure_category: str | None
+    # 화면에 보이는 요약에 내용이 빠졌는지(성공했지만 일부가 담기지 못함).
+    partial: bool = False
 
 
 def _run_progress(run: SummaryRun | None) -> int:
@@ -280,17 +282,22 @@ async def get_summary_status(db: AsyncSession, doc: Document) -> SummaryStatus:
             "SUMMARY_TIMEOUT": "timeout",
             "SUMMARY_INVALID_RESPONSE": "invalid_response",
             "SUMMARY_CONTEXT_OVERFLOW": "context_overflow",
+            "SUMMARY_EMPTY": "empty_result",
             # 성공했지만 컨텍스트 초과로 일부 내용이 빠진 요약. 표시하지 않으면 사용자는
             # 특정 절이 통째로 사라진 요약을 완료된 요약으로 신뢰하게 된다.
             "SUMMARY_PARTIAL": "partial_content",
         }.get(run.error_code)
+    # 부분 요약 경고는 **화면에 보이는 artifact를 만든 run** 기준이어야 한다. 최신 run으로
+    # 계산하면 이후 재시도가 실패하는 순간 경고만 사라지고(failureCategory가 그 실패로
+    # 덮인다) 불완전한 요약은 그대로 남아, 사용자가 그것을 완결된 요약으로 신뢰한다.
+    partial = bool(succeeded is not None and succeeded.error_code == "SUMMARY_PARTIAL")
     can_retry = bool(
         provider.available
         and (
             run is None
             or run.status in (SummaryRunStatus.FAILED, SummaryRunStatus.CANCELLED)
             # 내용이 빠진 요약은 메모리 여유가 생기면 더 나은 결과가 나올 수 있다.
-            or failure_category == "partial_content"
+            or partial
         )
     )
     return SummaryStatus(
@@ -302,6 +309,7 @@ async def get_summary_status(db: AsyncSession, doc: Document) -> SummaryStatus:
         progress=progress,
         can_retry=can_retry,
         failure_category=failure_category,
+        partial=partial,
     )
 
 

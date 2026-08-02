@@ -65,6 +65,14 @@ FULL_HASH_CHECK_INTERVAL = 25
 # 입력을 줄여 적응한다. 깊이 3이면 그룹을 1/8까지 쪼갠다.
 MAX_SPLIT_DEPTH = 3
 
+# 구조화 reduce가 컨텍스트를 넘을 때 그룹 요약을 한 단계 더 묶어 다시 시도하는 횟수.
+# 2회면 마지막 레벨을 1/4 이하로 줄인다 — 그래도 안 되면 입력이 아니라 다른 문제다.
+MAX_REDUCE_ADAPT = 2
+
+# 청크 하나가 통째로 컨텍스트를 넘을 때 그 텍스트를 더 나눌지 판단하는 하한.
+# 이보다 짧으면 나눠도 의미 있는 요약이 나오지 않는다.
+MIN_TEXT_SPLIT_CHARS = 200
+
 
 class SummaryCancelled(Exception):
     """잡이 취소·교체됨 — 실패로 기록하지 않고 조용히 종료한다."""
@@ -234,9 +242,11 @@ async def execute_hierarchical_summary(
 
     # --- 레벨 1+: bounded fan-in reduce ---
     level = 1
-    while len(level_nodes) > REDUCE_FAN_IN:
+
+    async def reduce_round(nodes: list[_NodeResult], fan_in: int, level: int):
+        """한 레벨을 fan_in개씩 묶어 상위 노드로 줄인다."""
         next_nodes: list[_NodeResult] = []
-        for position, batch in enumerate(fan_in_batches(level_nodes, REDUCE_FAN_IN)):
+        for position, batch in enumerate(fan_in_batches(nodes, fan_in)):
             input_hash = reduce_node_input_hash(
                 context_key, level, [(n.input_hash, n.summary_text) for n in batch]
             )
@@ -281,32 +291,73 @@ async def execute_hierarchical_summary(
                 guard_args=guard_args,
             )
             next_nodes.append(node)
-        level_nodes = next_nodes
+        return next_nodes
+
+    while len(level_nodes) > REDUCE_FAN_IN:
+        level_nodes = await reduce_round(level_nodes, REDUCE_FAN_IN, level)
         level += 1
 
     # --- 구조화 reduce: 마지막 레벨(≤ fan-in)을 한 번에 문서 요약으로 ---
     async with factory() as session:
         await _assert_runnable(session, check_full_hash=True, **guard_args)
 
-    group_summaries = [
-        GroupSummary(
-            group_id=f"g{i}",
-            section_title=n.section_title,
-            summary_text=n.summary_text,
-            source_chunk_ids=n.source_chunk_ids,
-        )
-        for i, n in enumerate(level_nodes)
-    ]
-    structured = await asyncio.to_thread(
-        provider.summarize_document,
-        DocumentRequest(
-            group_summaries=group_summaries,
-            learner_level=learner_level,
-            language=language,
-            include_sections=include_sections,
-            include_prerequisites=include_prerequisites,
-        ),
-    )
+    def as_group_summaries(nodes: list[_NodeResult]) -> list[GroupSummary]:
+        return [
+            GroupSummary(
+                group_id=f"g{i}",
+                section_title=n.section_title,
+                summary_text=n.summary_text,
+                source_chunk_ids=n.source_chunk_ids,
+            )
+            for i, n in enumerate(nodes)
+        ]
+
+    # 구조화 reduce도 입력이 컨텍스트를 넘을 수 있다. 여기서 적응하지 않으면 수백 개
+    # map 노드를 몇 시간에 걸쳐 다 만든 뒤 마지막 한 번에 실패해 artifact가 0개로 끝나고,
+    # 재시도해도 map은 재사용돼 곧바로 같은 호출로 돌아가 영구 실패한다.
+    structured: dict | None = None
+    for attempt in range(MAX_REDUCE_ADAPT + 1):
+        try:
+            structured = await asyncio.to_thread(
+                provider.summarize_document,
+                DocumentRequest(
+                    group_summaries=as_group_summaries(level_nodes),
+                    learner_level=learner_level,
+                    language=language,
+                    include_sections=include_sections,
+                    include_prerequisites=include_prerequisites,
+                ),
+            )
+            break
+        except Exception as exc:
+            too_large = _is_input_too_large(exc)
+            logger.warning(
+                "summary_node_failed",
+                document_id=str(document_id),
+                node_level=-1,  # -1 = 구조화 reduce(계층 레벨이 아니다)
+                position=0,
+                completed_before=counter.processed,
+                input_chunks=len(level_nodes),
+                input_chars=sum(len(n.summary_text) for n in level_nodes),
+                error_type=type(exc).__name__,
+                failure_category=getattr(exc, "category", None) or "unexpected",
+                failure_reason=getattr(exc, "reason", None) or "none",
+            )
+            if not too_large or attempt >= MAX_REDUCE_ADAPT or len(level_nodes) < 2:
+                raise
+            # 입력을 더 줄인다 — 한 단계 더 묶어 그룹 요약 개수를 절반 이하로 만든다.
+            logger.info(
+                "summary_reduce_collapse_retry",
+                document_id=str(document_id),
+                groups=len(level_nodes),
+                failure_reason=getattr(exc, "reason", None) or "none",
+            )
+            level_nodes = await reduce_round(
+                level_nodes, max(2, (len(level_nodes) + 1) // 2), level
+            )
+            level += 1
+    if structured is None:  # 위 루프는 성공하거나 raise한다 — 도달하면 계약이 깨진 것이다
+        raise SummaryNetworkError("bad_response", "reduce_no_result")
     return finalize_artifacts(
         structured,
         lookup,
@@ -400,7 +451,10 @@ async def _process_node(
         logger.warning(
             "summary_node_failed",
             document_id=str(document_id),
-            level=level,
+            # `level`은 structlog의 add_log_level 프로세서가 무조건 "warning"으로 덮어써
+            # 계층 레벨이 사라진다. 노드의 유일키가 (level, position)이라 그 값이 없으면
+            # 어느 노드가 죽었는지 특정할 수 없다 — 이 로그를 넣은 목적 자체가 무효화된다.
+            node_level=level,
             position=position,
             completed_before=counter.processed,
             input_chunks=len(request.chunks),
@@ -534,18 +588,23 @@ async def _summarize_adaptively(
         # 취소·문서 변경 후에도 수십 분간 모델을 계속 돌린다.
         await guard()
     all_ids = [c.chunk_id for c in request.chunks]
+    chunks = request.chunks
     try:
         summary = await asyncio.to_thread(provider.summarize_group, request)
         return _AdaptiveResult(
             text=summary.summary_text, degraded=False, covered_ids=all_ids
         )
     except Exception as exc:
-        if (
-            not _is_input_too_large(exc)
-            or depth >= MAX_SPLIT_DEPTH
-            or len(request.chunks) < 2
-        ):
+        if not _is_input_too_large(exc) or depth >= MAX_SPLIT_DEPTH:
             raise
+        if len(chunks) < 2:
+            # 청크 하나가 통째로 상한을 넘는다(build_groups는 긴 청크를 쪼개지 않는다).
+            # 여기서 포기하면 그 청크 하나 때문에 문서 전체 요약이 실패한다 — 나머지
+            # 99%가 요약 가능한데도. 텍스트를 나눈다(출처는 같은 chunk_id라 그대로다).
+            halves = _split_chunk_text(chunks[0]) if chunks else None
+            if halves is None:
+                raise
+            chunks = halves
         logger.info(
             "summary_group_split_retry",
             document_id=str(document_id),
@@ -556,11 +615,11 @@ async def _summarize_adaptively(
             failure_reason=getattr(exc, "reason", None) or "none",
         )
 
-    mid = _split_point(request.chunks)
+    mid = _split_point(chunks)
     parts: list[_AdaptiveResult] = []
     degraded = False
     last_failure: Exception | None = None
-    for index, half in enumerate((request.chunks[:mid], request.chunks[mid:])):
+    for index, half in enumerate((chunks[:mid], chunks[mid:])):
         # 자식 실패를 여기서 잡지 않으면 아래 병합 폴백에 도달하지 못하고, 이미 비용을
         # 지불한 형제 부분 요약까지 함께 버려진다.
         try:
@@ -598,8 +657,14 @@ async def _summarize_adaptively(
         # failure_reason도 사라진다.
         raise last_failure or SummaryNetworkError("context_overflow", "map_context_overflow")
 
-    # 나눈 요약을 다시 하나로 — 입력이 훨씬 짧아 같은 계약으로 통과한다.
     covered = _merge_ids(parts)
+    if len(parts) == 1:
+        # 합칠 대상이 하나뿐이다. 이미 400자로 압축된 요약을 다시 압축하는 순손실
+        # 호출이고, 그 호출이 초과가 아닌 이유로 실패하면 살아남은 유일한 조각까지
+        # 버려 노드가 통째로 실패한다.
+        return _AdaptiveResult(text=parts[0].text, degraded=degraded, covered_ids=covered)
+
+    # 나눈 요약을 다시 하나로 — 입력이 훨씬 짧아 같은 계약으로 통과한다.
     merged = replace(
         request,
         chunks=[
@@ -649,6 +714,24 @@ async def _summarize_adaptively(
             degraded=True,
             covered_ids=_merge_ids(kept),
         )
+
+
+def _split_chunk_text(chunk: ChunkInput) -> list[ChunkInput] | None:
+    """청크 하나의 텍스트를 둘로 나눈다. 더 나눌 수 없으면 None.
+
+    chunk_id를 그대로 물려주므로 출처는 변하지 않는다 — 두 조각 모두 같은 청크를
+    가리키고, covered_ids 합집합에서 자연히 하나로 합쳐진다.
+    """
+    text = chunk.text
+    if len(text) < 2 * MIN_TEXT_SPLIT_CHARS:
+        return None
+    mid = len(text) // 2
+    space = text.rfind(" ", 0, mid)
+    cut = space if space > mid // 2 else mid  # 경계에서 자르되 너무 앞으로 가지 않는다
+    first, second = text[:cut].strip(), text[cut:].strip()
+    if not first or not second:
+        return None
+    return [replace(chunk, text=first), replace(chunk, text=second)]
 
 
 def _merge_ids(parts: list[_AdaptiveResult]) -> list[str]:

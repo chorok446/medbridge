@@ -29,18 +29,23 @@ _ERROR_ALTERNATIVE = {
 }
 
 
-def _map_schema() -> dict:
-    """map 응답 구조 — 정상 요약 또는 모델이 낸 오류 객체만 허용한다."""
-    return {
-        "anyOf": [
-            {
-                "type": "object",
-                "properties": {"summary": _text()},
-                "required": ["summary"],
-            },
-            _ERROR_ALTERNATIVE,
-        ]
+def _map_schema(*, allow_error: bool = True) -> dict:
+    """map 응답 구조 — 정상 요약 또는 모델이 낸 오류 객체.
+
+    `allow_error=False`는 오류 형태를 문법에서 빼 모델이 요약을 **반드시** 쓰게 한다.
+    error 대안은 잘린 프롬프트를 감지하려고 둔 것인데, 초과와 무관한 청크에서도
+    모델이 가장 쉬운 경로로 그것을 골라 버리면(스키마 이전에는 어떻게든 요약을 만들었다)
+    그 노드가 즉시 실패해 문서 전체가 영구 실패한다. 초과 징후가 없는 error에는 이
+    엄격한 문법으로 한 번 더 물어본다.
+    """
+    success = {
+        "type": "object",
+        "properties": {"summary": _text()},
+        "required": ["summary"],
     }
+    if not allow_error:
+        return success
+    return {"anyOf": [success, _ERROR_ALTERNATIVE]}
 
 
 def _sourced(properties: dict, required: list[str]) -> dict:
@@ -140,6 +145,25 @@ def _document_schema(*, include_sections: bool, include_prerequisites: bool) -> 
 _CONTENT_LISTS = ("sections", "keyConcepts", "prerequisites", "learnerExplanations")
 
 
+def _is_storable(item) -> bool:
+    """저장 계층이 실제로 남길 항목인가 — 내용과 출처가 **둘 다** 있어야 한다.
+
+    build_artifacts는 출처 없는 항목을 통째로 버린다. 여기서 "dict가 하나라도 있으면
+    쓸 만하다"고 세면, 출처 없는 항목만 담긴 응답이 게이트를 통과해 artifact가 0개인
+    요약이 SUCCEEDED로 저장된다(사용자에게는 '아직 요약을 만들지 않았어요'만 보인다).
+    """
+    if not isinstance(item, dict):
+        return False
+    sources = item.get("sourceGroupIds")
+    if not isinstance(sources, list) or not sources:
+        return False
+    return any(
+        isinstance(value, str) and value.strip()
+        for key, value in item.items()
+        if key != "sourceGroupIds"
+    )
+
+
 def _has_usable_content(parsed: dict) -> bool:
     """이 응답으로 artifact를 하나라도 만들 수 있는가.
 
@@ -147,13 +171,10 @@ def _has_usable_content(parsed: dict) -> bool:
     통째로 버리므로 "있다"고 세면 안 된다. overview가 없어도 다른 항목이 있으면 그것으로
     요약을 만든다(부분 응답을 버리지 않는다).
     """
-    overview = parsed.get("overview")
-    if isinstance(overview, dict) and isinstance(overview.get("text"), str):
-        if overview["text"].strip():
-            return True
+    if _is_storable(parsed.get("overview")):
+        return True
     return any(
-        isinstance(parsed.get(key), list)
-        and any(isinstance(item, dict) for item in parsed[key])
+        isinstance(parsed.get(key), list) and any(_is_storable(i) for i in parsed[key])
         for key in _CONTENT_LISTS
     )
 
@@ -164,13 +185,13 @@ def _looks_like_context_overflow(parsed: dict) -> bool:
     Ollama는 프롬프트를 조용히 자르므로 HTTP는 200이고 usage도 잘린 값이 온다. 유일한
     단서가 모델이 낸 error 문구뿐이라 여기서만 본문을 들여다본다(로그에는 남기지 않는다).
     """
-    from app.services.summary.endpoint import CONTEXT_OVERFLOW_HINTS
+    from app.services.summary.endpoint import MODEL_CONTEXT_OVERFLOW_HINTS
 
     error = parsed.get("error")
     if not isinstance(error, str):
         return False
     lowered = error.lower()
-    return any(hint in lowered for hint in CONTEXT_OVERFLOW_HINTS)
+    return any(hint in lowered for hint in MODEL_CONTEXT_OVERFLOW_HINTS)
 
 
 @dataclass
@@ -570,12 +591,12 @@ class OpenAICompatibleSummaryProvider:
         )
         from app.services.summary.endpoint import SummaryNetworkError
 
-        def call(max_tokens: int) -> str:
+        def call(max_tokens: int, *, allow_error: bool = True) -> str:
             return self._chat_for(
                 system,
                 user,
                 max_tokens=max_tokens,
-                schema=_map_schema(),
+                schema=_map_schema(allow_error=allow_error),
                 external_max_tokens=max_tokens,
             )
 
@@ -603,6 +624,14 @@ class OpenAICompatibleSummaryProvider:
             # "응답 형식 오류"로 뭉뚱그리면 사용자가 손쓸 방법을 알 수 없으므로 구분한다.
             if _looks_like_context_overflow(parsed):
                 raise SummaryNetworkError("context_overflow", "map_context_overflow")
+            # 초과 징후가 없는 error다 — 스키마가 열어 준 탈출구를 모델이 고른 것이므로
+            # 오류 형태를 뺀 문법으로 한 번 더 물어본다. 이게 없으면 그 청크는 영구히
+            # 요약되지 않고 문서 전체가 실패한다.
+            parsed = self._parse_json_object(
+                call(SUMMARY_MAP_MAX_TOKENS, allow_error=False), stage="map"
+            )
+            summary = parsed.get("summary")
+        if not isinstance(summary, str):
             raise SummaryNetworkError("bad_response", "map_summary_missing")
         if not summary.strip():
             raise SummaryNetworkError("bad_response", "map_summary_empty")
@@ -689,8 +718,20 @@ class OpenAICompatibleSummaryProvider:
 
     @staticmethod
     def _resolve_group_sources(structured: dict, request: DocumentRequest) -> dict:
-        """모델 group token을 서버 소유 원본 chunk id로 바꾸고 모델 chunk id는 버린다."""
+        """모델 group token을 서버 소유 원본 chunk id로 바꾸고 모델 chunk id는 버린다.
+
+        **저장 대상 하위 트리만** 검증한다. 모델이 덧붙인 항목이나 사용자가 끈 항목까지
+        훑으면, 어차피 버려질 곳의 sourceGroupIds 하나가 형식을 어겼다고 문서 전체가
+        영구 실패한다(temperature 0이라 재시도해도 같은 응답이 나온다).
+        """
         from app.services.summary.endpoint import SummaryNetworkError
+
+        keep = {"overview", "keyConcepts", "learnerExplanations"}
+        if request.include_sections:
+            keep.add("sections")
+        if request.include_prerequisites:
+            keep.add("prerequisites")
+        structured = {k: v for k, v in structured.items() if k in keep}
 
         group_sources = {
             group.group_id: list(dict.fromkeys(group.source_chunk_ids))

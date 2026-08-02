@@ -565,6 +565,60 @@ class TestAdaptiveSplitOnContextOverflow:
         assert provider.group_calls == 1, "분할 재시도가 일어나면 안 된다"
 
 
+class TestSingleOversizedChunk:
+    """build_groups는 긴 청크를 쪼개지 않는다 — 청크 하나가 상한을 넘으면 그 그룹은
+    청크 1개짜리다. 거기서 분할을 포기하면 그 청크 하나 때문에 문서 전체가 실패한다.
+    """
+
+    async def test_single_chunk_group_splits_its_text(self, client, monkeypatch):
+        # 청크를 하나씩 그룹으로 만들어 "청크 1개짜리 그룹"을 강제한다
+        monkeypatch.setattr(grouping_mod, "GROUP_MAX_CHARS", 1)
+        monkeypatch.setattr(grouping_mod, "GROUP_MIN_CHARS", 1)
+        doc_id = await _upload_chunked(client, fx.single_column_korean(pages=3))
+
+        class RejectsLongText(CountingProvider):
+            """긴 텍스트는 거부한다 — 청크를 나눌 수 없으니 텍스트를 나눠야 통과한다."""
+
+            def summarize_group(self, request):
+                self.group_calls += 1
+                if sum(len(c.text) for c in request.chunks) > 500:
+                    raise SummaryNetworkError("context_overflow", "map_context_overflow")
+                return super().summarize_group(request)
+
+        provider = RejectsLongText()
+        run_id, job_id, rev, chash = await _make_run(doc_id, provider)
+
+        drafts = await _run_executor(doc_id, run_id, job_id, rev, chash, provider)
+
+        assert drafts, "청크 하나 때문에 문서 전체가 실패했다"
+        async with get_session_factory()() as s:
+            nodes = (
+                await s.execute(
+                    select(SummaryNode).where(SummaryNode.summary_run_id == run_id)
+                )
+            ).scalars().all()
+        for node in nodes:
+            # 텍스트를 나눠도 출처는 원래 청크 그대로여야 한다
+            assert node.source_chunk_ids_json
+
+    def test_text_split_keeps_the_chunk_id(self):
+        from app.services.summary.executor import _split_chunk_text
+        from app.services.summary.provider import ChunkInput
+
+        chunk = ChunkInput("c1", "제목", "가나다 " * 200, 1, 1)
+        halves = _split_chunk_text(chunk)
+
+        assert halves is not None
+        assert [c.chunk_id for c in halves] == ["c1", "c1"]
+        assert all(c.text.strip() for c in halves)
+
+    def test_short_text_is_not_split(self):
+        from app.services.summary.executor import _split_chunk_text
+        from app.services.summary.provider import ChunkInput
+
+        assert _split_chunk_text(ChunkInput("c1", None, "짧다", 1, 1)) is None
+
+
 class TestSplitPoint:
     """분할은 문자 수 기준이어야 한다 — 개수로 나누면 입력이 줄지 않는 절반이 생긴다."""
 

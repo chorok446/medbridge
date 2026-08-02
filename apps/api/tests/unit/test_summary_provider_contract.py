@@ -702,6 +702,131 @@ class TestReduceContract:
         assert result["sections"][0]["sourceChunkIds"] == ["c0"]
 
 
+class TestEmptySummaryGate:
+    """게이트가 저장 계층과 어긋나면 artifact 0개인 요약이 SUCCEEDED로 저장된다."""
+
+    def test_items_without_sources_do_not_count_as_content(self):
+        """build_artifacts는 출처 없는 항목을 버린다 — 게이트도 같은 기준이어야 한다."""
+        content = json.dumps(
+            {"keyConcepts": [{"term": "심부전", "explanation": "설명"}]}  # sourceGroupIds 없음
+        )
+        provider, _ = _provider(_chat_response(content))
+
+        with pytest.raises(SummaryNetworkError) as caught:
+            provider.summarize_document(
+                DocumentRequest(
+                    group_summaries=[GroupSummary("g0", "구역", "요약", ["c0"])],
+                    learner_level="nursing_student",
+                    language="ko",
+                )
+            )
+
+        assert caught.value.reason == "reduce_empty_summary"
+
+    def test_items_without_text_do_not_count_as_content(self):
+        content = json.dumps({"keyConcepts": [{"term": "  ", "sourceGroupIds": ["g0"]}]})
+        provider, _ = _provider(_chat_response(content))
+
+        with pytest.raises(SummaryNetworkError) as caught:
+            provider.summarize_document(
+                DocumentRequest(
+                    group_summaries=[GroupSummary("g0", "구역", "요약", ["c0"])],
+                    learner_level="nursing_student",
+                    language="ko",
+                )
+            )
+
+        assert caught.value.reason == "reduce_empty_summary"
+
+
+def test_discarded_subtrees_do_not_fail_the_whole_document():
+    """저장조차 하지 않는 하위 트리의 형식 위반으로 문서 전체를 죽이면 안 된다.
+
+    사용자가 끈 sections를 모델이 굳이 채워 보내고 그 안의 sourceGroupIds 하나가
+    배열이 아니면, 멀쩡한 overview가 있는데도 문서가 영구 실패했다.
+    """
+    content = json.dumps(
+        {
+            "overview": {"text": "개요", "sourceGroupIds": ["g0"]},
+            "sections": [{"title": "구역", "summary": "내용", "sourceGroupIds": "g0"}],
+        }
+    )
+    provider, _ = _provider(_chat_response(content))
+
+    result = provider.summarize_document(
+        DocumentRequest(
+            group_summaries=[GroupSummary("g0", "구역", "요약", ["c0"])],
+            learner_level="nursing_student",
+            language="ko",
+            include_sections=False,
+        )
+    )
+
+    assert result["overview"]["sourceChunkIds"] == ["c0"]
+    assert "sections" not in result
+
+
+def test_model_error_without_overflow_signs_is_retried_with_a_strict_schema():
+    """스키마가 열어 준 error 탈출구를 모델이 고르면 그 청크는 영구히 요약되지 않는다.
+
+    error 대안은 잘린 프롬프트를 감지하려고 둔 것이다 — 초과 징후가 없으면 오류 형태를
+    뺀 문법으로 한 번 더 물어본다.
+    """
+    # native 경로만 스키마를 실제로 보낸다 — 응답도 native 형태여야 한다.
+    def native(content: str) -> dict:
+        return {"message": {"content": content}, "done_reason": "stop"}
+
+    responses = [
+        native(json.dumps({"error": "내용을 요약할 수 없습니다"})),
+        native(json.dumps({"summary": "정상 요약"})),
+    ]
+
+    class _Seq(_Capture):
+        def __call__(self, url, payload, api_key):
+            self.calls.append((url, payload, api_key))
+            self.payloads.append(payload)
+            return responses[min(len(self.calls) - 1, len(responses) - 1)]
+
+    capture = _Seq({})
+    provider = OpenAICompatibleSummaryProvider(
+        endpoint="http://127.0.0.1:11434/v1",
+        model_name="qwen3:8b",
+        api_key="",
+        is_local=True,
+        http_client=capture,
+    )
+
+    result = provider.summarize_group(_group_request())
+
+    assert result.summary_text == "정상 요약"
+    assert len(capture.calls) == 2
+    # 두 번째 호출은 error 형태가 빠진 엄격한 문법이어야 한다
+    assert "anyOf" not in capture.calls[1][1]["format"]
+    assert capture.calls[1][1]["format"]["required"] == ["summary"]
+
+
+def test_context_overflow_hints_are_split_per_path():
+    """경로마다 표지가 다르다 — 합치면 한쪽에서 오분류가 난다."""
+    from app.services.summary.endpoint import (
+        HTTP_CONTEXT_OVERFLOW_HINTS,
+        MODEL_CONTEXT_OVERFLOW_HINTS,
+    )
+
+    # HTTP 400 본문에는 컨텍스트를 명시적으로 가리키는 것만 인정한다. 'too long'은
+    # 컨텍스트와 무관한 400(string_above_max_length 등)에도 흔해 분할을 낭비시킨다.
+    assert "too long" not in HTTP_CONTEXT_OVERFLOW_HINTS
+    assert "context_length_exceeded" in HTTP_CONTEXT_OVERFLOW_HINTS
+    # 모델 자연어 응답은 한국어로도 온다(한국어로 답하라고 지시했다).
+    assert "너무 깁니다" in MODEL_CONTEXT_OVERFLOW_HINTS
+
+
+def test_korean_overflow_message_triggers_adaptation():
+    from app.services.summary.provider import _looks_like_context_overflow
+
+    assert _looks_like_context_overflow({"error": "입력이 너무 깁니다. 요약할 수 없습니다."})
+    assert not _looks_like_context_overflow({"error": "이 내용은 요약하지 않겠습니다."})
+
+
 def test_common_refusal_is_not_misread_as_context_overflow():
     """외부 모델의 평범한 거절을 컨텍스트 초과로 몰면 유료 API를 분할로 낭비한다."""
     from app.services.summary.provider import _looks_like_context_overflow
