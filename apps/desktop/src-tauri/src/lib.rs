@@ -326,10 +326,22 @@ fn spawn_sidecar(
     };
 
     // 번들된 OCR 리소스 경로 전달 (없으면 sidecar가 PATH fallback)
+    //
+    // resource_dir()는 Windows에서 확장 길이 접두사(\\?\)가 붙은 경로를 돌려준다. 그대로
+    // 넘기면 sidecar가 TESSDATA_PREFIX로 쓰고, tesseract는 거기에 "/eng.traineddata"를
+    // 이어 붙인다. Win32는 \\?\ 경로를 정규화하지 않아 섞인 슬래시 때문에 파일을 못 열고,
+    // 결과적으로 OCR 페이지가 전량 "Failed loading language" 로 실패한다(실기기 45/45).
+    // sidecar도 방어적으로 벗기지만, 애초에 붙여 보내지 않는다.
     if let Ok(resource_dir) = app.path().resource_dir() {
         let ocr_dir = resource_dir.join("resources").join("ocr");
         if ocr_dir.is_dir() {
-            cmd.env("MEDBRIDGE_OCR_DIR", &ocr_dir);
+            let value = ocr_dir.to_string_lossy();
+            let plain = value
+                .strip_prefix(r"\\?\UNC\")
+                .map(|rest| format!(r"\\{rest}"))
+                .or_else(|| value.strip_prefix(r"\\?\").map(str::to_string))
+                .unwrap_or_else(|| value.to_string());
+            cmd.env("MEDBRIDGE_OCR_DIR", plain);
         }
     }
     cmd.env("MEDBRIDGE_APP_DATA_DIR", &app_data_dir)

@@ -39,6 +39,31 @@ class TsvWord:
     word_index: int
 
 
+def strip_extended_prefix(path: str | None) -> str | None:
+    r"""Windows 확장 길이 경로 접두사(`\\?\`)를 제거한다.
+
+    Tauri의 resource_dir()는 Windows에서 `\\?\C:\...` 형태를 돌려주고, 그 값이 그대로
+    MEDBRIDGE_OCR_DIR → TESSDATA_PREFIX로 흘러간다. Python은 이 형태를 문제없이 다루므로
+    바이너리 탐지도 `tesseract --version`도 성공하지만, tesseract(leptonica)는
+    `TESSDATA_PREFIX + "/" + lang + ".traineddata"`를 이어 붙여
+    `\\?\C:\...\tessdata/eng.traineddata`를 만든다. Win32는 `\\?\` 경로를 **정규화하지
+    않으므로** 섞여 들어간 슬래시 때문에 파일을 열지 못한다.
+
+    실기기 증상: 45페이지 전량이 `tesseract exited 1: ... Failed loading language 'eng'
+    ... Tesseract couldn't load any languages!`로 실패. 같은 바이너리·같은 tessdata를
+    평범한 경로로 부르면 정상 동작한다.
+
+    UNC(`\\?\UNC\server\share`)는 `\\server\share`로 되돌린다.
+    """
+    if not path:
+        return path
+    if path.startswith("\\\\?\\UNC\\"):
+        return "\\\\" + path[len("\\\\?\\UNC\\") :]
+    if path.startswith("\\\\?\\"):
+        return path[len("\\\\?\\") :]
+    return path
+
+
 def _tail(text: str, limit: int = 300) -> str:
     """오류 문구 꼬리만 한 줄로. 원문 길이가 로그를 잡아먹지 않게 자른다."""
     flat = " ".join(text.split())
@@ -105,7 +130,7 @@ class TesseractEngine:
         self._locate()
 
     def _locate(self) -> None:
-        ocr_dir = os.environ.get("MEDBRIDGE_OCR_DIR")
+        ocr_dir = strip_extended_prefix(os.environ.get("MEDBRIDGE_OCR_DIR"))
         if ocr_dir:
             candidate = Path(ocr_dir) / (
                 "tesseract.exe" if os.name == "nt" else "tesseract"

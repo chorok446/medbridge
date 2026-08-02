@@ -1,5 +1,7 @@
 """OCR 단위 테스트 — TSV 파싱·좌표 변환·품질 분류·렌더링 보호장치."""
 
+import os
+
 import pytest
 
 from app.models.enums import OcrRunStatus
@@ -108,3 +110,58 @@ class TestRenderGuards:
         assert rendered.path.is_file()
         rendered.path.unlink()
         assert not rendered.path.exists()
+
+
+class TestExtendedLengthPrefix:
+    r"""Tauri resource_dir()는 Windows에서 `\\?\C:\...`를 돌려준다.
+
+    Python은 이 형태를 문제없이 다뤄 바이너리 탐지도 `--version`도 성공하지만,
+    tesseract는 TESSDATA_PREFIX에 "/eng.traineddata"를 이어 붙이고 Win32는 `\\?\`
+    경로를 정규화하지 않아 파일을 못 연다. 실기기에서 45페이지가 전량 이 이유로 실패했다.
+    """
+
+    def test_drive_prefix_is_stripped(self):
+        from app.services.ocr.tesseract import strip_extended_prefix
+
+        assert (
+            strip_extended_prefix(r"\\?\C:\Users\u\MedBridge Study\resources\ocr")
+            == r"C:\Users\u\MedBridge Study\resources\ocr"
+        )
+
+    def test_unc_prefix_becomes_a_plain_unc_path(self):
+        from app.services.ocr.tesseract import strip_extended_prefix
+
+        assert strip_extended_prefix(r"\\?\UNC\server\share\ocr") == r"\\server\share\ocr"
+
+    def test_plain_paths_and_none_are_untouched(self):
+        from app.services.ocr.tesseract import strip_extended_prefix
+
+        assert strip_extended_prefix(r"C:\ocr") == r"C:\ocr"
+        assert strip_extended_prefix("/usr/share/ocr") == "/usr/share/ocr"
+        assert strip_extended_prefix(None) is None
+        assert strip_extended_prefix("") == ""
+
+    def test_engine_resolves_binary_through_a_prefixed_dir(self, tmp_path, monkeypatch):
+        """접두사가 붙은 채로 오면 벗겨서 쓴다 — tessdata 경로가 tesseract에 그대로 간다."""
+        from app.services.ocr import tesseract as mod
+
+        ocr = tmp_path / "ocr"
+        (ocr / "tessdata").mkdir(parents=True)
+        binary = ocr / ("tesseract.exe" if os.name == "nt" else "tesseract")
+        binary.write_text("", encoding="utf-8")
+
+        monkeypatch.setenv(
+            "MEDBRIDGE_OCR_DIR", rf"\\?\{ocr}" if os.name == "nt" else str(ocr)
+        )
+        monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _FakeVersion())
+
+        engine = mod.TesseractEngine()
+
+        assert engine.available
+        assert "\\?\\" not in (engine._tessdata or "")
+        assert engine._tessdata == str(ocr / "tessdata")
+
+
+class _FakeVersion:
+    stdout = "tesseract v5.4.0\n"
+    stderr = ""
