@@ -24,7 +24,20 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: 버전 일치 검증
-        run: python3 scripts/check-versions.py
+        id: check
+        run: |
+          set +e
+          python3 scripts/check-versions.py | tee versions.log
+          status=${PIPESTATUS[0]}
+          echo "result=$(tail -1 versions.log)" >> "$GITHUB_OUTPUT"
+          exit $status
+      - name: 실행 요약
+        if: always()
+        env:
+          CI_SUMMARY_TITLE: 버전 일치
+          CI_SUMMARY_ROWS: |
+            구성요소 버전 일치|${{ steps.check.outcome }}|${{ steps.check.outputs.result }}
+        run: python3 scripts/ci_summary.py
 
   backend:
     runs-on: ubuntu-latest
@@ -43,18 +56,41 @@ jobs:
       - name: Install dependencies
         run: uv sync
       - name: Lint
+        id: lint
         run: uv run ruff check .
       - name: Typecheck
+        id: typecheck
         run: uv run mypy app
       - name: Tests (외부 인프라 불필요)
-        run: uv run pytest -q
+        id: tests
+        run: |
+          set +e
+          uv run pytest -q | tee pytest.log
+          status=${PIPESTATUS[0]}
+          # 실패해도 요약에 숫자를 남긴다 — 몇 개가 깨졌는지가 첫 단서다.
+          echo "result=$(grep -E 'passed|failed|error|no tests ran' pytest.log | tail -1)" \
+            >> "$GITHUB_OUTPUT"
+          exit $status
       - name: SQLite migration cycle
+        id: migration
         env:
           MEDBRIDGE_APP_DATA_DIR: /tmp/medbridge-ci
         run: |
           uv run alembic upgrade head
           uv run alembic downgrade base
           uv run alembic upgrade head
+      - name: 실행 요약
+        if: always()
+        # 값은 env로만 넘긴다. 테스트 출력을 셸 인자로 보간하면 그 안의 문자가 명령으로
+        # 해석될 수 있다(fork PR이 테스트 이름으로 주입할 수 있는 실제 경로다).
+        env:
+          CI_SUMMARY_TITLE: 백엔드 (ubuntu-latest)
+          CI_SUMMARY_ROWS: |
+            Lint (ruff)|${{ steps.lint.outcome }}|
+            Typecheck (mypy)|${{ steps.typecheck.outcome }}|
+            테스트 (pytest)|${{ steps.tests.outcome }}|${{ steps.tests.outputs.result }}
+            SQLite 마이그레이션 왕복|${{ steps.migration.outcome }}|
+        run: python3 "$GITHUB_WORKSPACE/scripts/ci_summary.py"
 
   frontend:
     runs-on: ubuntu-latest
@@ -75,13 +111,33 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
       - name: Lint
+        id: lint
         run: pnpm lint
       - name: Typecheck
+        id: typecheck
         run: pnpm typecheck
       - name: Tests
-        run: pnpm test
+        id: tests
+        run: |
+          set +e
+          pnpm test 2>&1 | sed -r 's/\x1b\[[0-9;]*m//g' | tee vitest.log
+          status=${PIPESTATUS[0]}
+          echo "result=$(grep -E '^\s*Tests +[0-9]' vitest.log | tail -1 | xargs)" \
+            >> "$GITHUB_OUTPUT"
+          exit $status
       - name: Static export build
+        id: build
         run: pnpm build
+      - name: 실행 요약
+        if: always()
+        env:
+          CI_SUMMARY_TITLE: 프런트엔드 (ubuntu-latest)
+          CI_SUMMARY_ROWS: |
+            Lint (eslint)|${{ steps.lint.outcome }}|
+            Typecheck (tsc)|${{ steps.typecheck.outcome }}|
+            테스트 (vitest)|${{ steps.tests.outcome }}|${{ steps.tests.outputs.result }}
+            정적 export 빌드|${{ steps.build.outcome }}|
+        run: python3 "$GITHUB_WORKSPACE/scripts/ci_summary.py"
 
   # Windows 빌드 검증 — Release는 생성하지 않고 artifact만 업로드한다
   windows-build:
@@ -112,21 +168,26 @@ jobs:
           enable-cache: true
           cache-dependency-glob: apps/api/uv.lock
       - name: Frontend build (static export)
+        id: fe
         working-directory: apps/web
         run: |
           pnpm install --frozen-lockfile
           pnpm build
       - name: Backend tests (Windows)
+        id: betests
         working-directory: apps/api
         run: |
           uv sync
           uv run pytest -q
       - name: OCR 리소스 준비 (버전·checksum 고정)
+        id: ocrfetch
         run: python scripts/fetch-ocr-resources.py
       - name: Sidecar exe build
+        id: sidecar
         working-directory: apps/api
         run: uv run pyinstaller sidecar.spec
       - name: Sidecar smoke test (Windows 실행 확인)
+        id: smoke
         shell: bash
         working-directory: apps/api
         run: |
@@ -139,6 +200,7 @@ jobs:
           curl -sf http://127.0.0.1:18900/health
           kill $SIDECAR_PID || true
       - name: OCR 스모크 테스트 (번들 리소스로 한국어·영어 인식)
+        id: ocrsmoke
         shell: bash
         working-directory: apps/api
         env:
@@ -151,6 +213,7 @@ jobs:
           cp apps/api/dist/medbridge-sidecar.exe \
             apps/desktop/src-tauri/binaries/medbridge-sidecar-x86_64-pc-windows-msvc.exe
       - name: Tauri Windows build (NSIS, 서명 없음 — CI 전용 임시 키로 발급 통과)
+        id: tauri
         shell: bash
         working-directory: apps/desktop
         run: |
@@ -173,9 +236,73 @@ jobs:
           pnpm tauri build
           rm -f ci-signing-key ci-signing-key.pub
       - name: Upload installer artifact
+        id: upload
         uses: actions/upload-artifact@v7
         with:
           name: medbridge-windows-setup
           path: |
             apps/desktop/src-tauri/target/release/bundle/nsis/*.exe
           retention-days: 14
+
+      - name: 실행 요약
+        if: always()
+        shell: bash
+        env:
+          FE: ${{ steps.fe.outcome }}
+          BETESTS: ${{ steps.betests.outcome }}
+          OCRFETCH: ${{ steps.ocrfetch.outcome }}
+          SIDECAR: ${{ steps.sidecar.outcome }}
+          SMOKE: ${{ steps.smoke.outcome }}
+          OCRSMOKE: ${{ steps.ocrsmoke.outcome }}
+          TAURI: ${{ steps.tauri.outcome }}
+          UPLOAD: ${{ steps.upload.outcome }}
+          CI_SUMMARY_TITLE: Windows 빌드 (windows-latest)
+        run: |
+          # 산출물 크기까지 남긴다 — 빌드가 "성공"인데 설치 파일이 비어 있는 경우를
+          # 로그를 열지 않고도 알아채기 위한 것이다.
+          describe() {
+            local f
+            f=$(ls $1 2>/dev/null | head -1) || true
+            if [ -n "$f" ] && [ -f "$f" ]; then
+              echo "$(basename "$f") ($(du -h "$f" | cut -f1))"
+            else
+              echo ""
+            fi
+          }
+          SIDECAR_INFO=$(describe "apps/api/dist/medbridge-sidecar.exe")
+          INSTALLER_INFO=$(describe "apps/desktop/src-tauri/target/release/bundle/nsis/*.exe")
+          export CI_SUMMARY_ROWS="프런트엔드 정적 빌드|$FE|
+          백엔드 테스트 (Windows)|$BETESTS|
+          OCR 리소스 준비|$OCRFETCH|
+          Sidecar exe 빌드|$SIDECAR|$SIDECAR_INFO
+          Sidecar 기동 확인|$SMOKE|
+          OCR 스모크 (한국어·영어)|$OCRSMOKE|
+          Tauri NSIS 빌드|$TAURI|$INSTALLER_INFO
+          설치 파일 업로드|$UPLOAD|"
+          python "$GITHUB_WORKSPACE/scripts/ci_summary.py"
+
+  # 잡 4개의 결과를 한 표로 모은다. 개별 잡 요약은 각자의 섹션에 흩어져 있어, 실행을
+  # 열자마자 "무엇이 깨졌나"를 보려면 종합이 하나 필요하다.
+  summary:
+    if: always()
+    needs: [versions, backend, frontend, windows-build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: 전체 결과
+        env:
+          CI_SUMMARY_TITLE: 전체 결과
+          CI_SUMMARY_COLUMN: 잡
+          CI_SUMMARY_ROWS: |
+            버전 일치|${{ needs.versions.result }}|
+            백엔드 (ubuntu)|${{ needs.backend.result }}|
+            프런트엔드 (ubuntu)|${{ needs.frontend.result }}|
+            Windows 빌드|${{ needs['windows-build'].result }}|
+        run: python3 scripts/ci_summary.py
+      - name: 실패한 잡이 있으면 이 잡도 실패시킨다
+        # 종합이 초록인데 아래 잡이 빨간 상태는 훑어보는 사람을 오도한다.
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')
+        run: |
+          echo "::error::하나 이상의 잡이 실패·취소되었습니다. 위 '전체 결과' 표를 확인하세요."
+          exit 1
