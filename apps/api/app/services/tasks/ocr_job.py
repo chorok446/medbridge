@@ -20,6 +20,11 @@ from app.services.ocr.settings import QUALITY_DPI
 logger = get_logger(__name__)
 
 
+def _detail(exc: Exception, limit: int = 300) -> str:
+    """예외 메시지를 한 줄로 줄여 로그에 남긴다(원문 길이 제한)."""
+    return " ".join(str(exc).split())[:limit]
+
+
 async def _job_is_current(session, document_id: uuid.UUID, job_id: uuid.UUID) -> bool:
     latest = (
         await session.execute(
@@ -75,6 +80,13 @@ async def run_ocr_job(
         pdf_path = str(storage.get_storage().resolve_path(doc.storage_key))
 
     eng = ocr_service.engine()
+    # 엔진 상태를 잡마다 한 번 남긴다. 페이지가 전부 실패했을 때 "무엇이 없어서"인지를
+    # 로그만으로 좁힐 수 있어야 한다(실기기에서 45페이지가 전부 같은 예외 이름으로만
+    # 기록돼 원인 후보를 하나도 배제할 수 없었다).
+    describe = getattr(eng, "describe", None)
+    if callable(describe):
+        logger.info("ocr_engine_ready", document_id=str(document_id), **describe())
+
     processed = failed = 0
     while True:
         async with factory() as session:
@@ -149,6 +161,11 @@ async def run_ocr_job(
                 document_id=str(document_id),
                 page=page_number,
                 error=type(exc).__name__,
+                # 타입 이름만으로는 원인을 좁힐 수 없다. RuntimeError 하나에 바이너리
+                # 미탐지·언어 로드 실패·이미지 읽기 실패·렌더 실패가 전부 뭉쳐 있어,
+                # 실기기 전량 실패에서 후보를 하나도 배제하지 못했다.
+                # 메시지에는 문서 본문이 들어가지 않는다(엔진 오류 문구·경로뿐).
+                error_detail=_detail(exc),
             )
             async with factory() as session:
                 if not await _job_is_current(session, document_id, job_id):

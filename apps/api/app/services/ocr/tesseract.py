@@ -39,6 +39,12 @@ class TsvWord:
     word_index: int
 
 
+def _tail(text: str, limit: int = 300) -> str:
+    """오류 문구 꼬리만 한 줄로. 원문 길이가 로그를 잡아먹지 않게 자른다."""
+    flat = " ".join(text.split())
+    return flat[-limit:] if len(flat) > limit else flat
+
+
 def parse_tsv(tsv: str) -> list[TsvWord]:
     """Tesseract TSV(level 5 = word) 파싱. 신뢰도가 없는(-1) 행과 공백 텍스트는 제외."""
     words: list[TsvWord] = []
@@ -132,6 +138,21 @@ class TesseractEngine:
     def version(self) -> str:
         return self._version
 
+    def describe(self) -> dict:
+        """엔진 상태 스냅샷 — 잡 시작 시 한 번 남겨 '무엇이 없어서' 실패했는지 좁힌다."""
+        tessdata = Path(self._tessdata) if self._tessdata else None
+        langs = (
+            sorted(p.stem for p in tessdata.glob("*.traineddata")) if tessdata else []
+        )
+        return {
+            "binary": self._binary or "",
+            "version": self._version,
+            "tessdata": self._tessdata or "",
+            "tessdata_langs": ",".join(langs),
+            "tsv_config": bool(tessdata and (tessdata / "configs" / "tsv").is_file()),
+            "ocr_dir_env": bool(os.environ.get("MEDBRIDGE_OCR_DIR")),
+        }
+
     def recognize_page(
         self,
         pdf_path: str,
@@ -144,7 +165,14 @@ class TesseractEngine:
             raise RuntimeError("tesseract binary not found")
         dpi = dpi or OCR_DEFAULT_DPI
         started = time.monotonic()
-        rendered = render_page(pdf_path, page_number, dpi)
+        try:
+            rendered = render_page(pdf_path, page_number, dpi)
+        except Exception as exc:
+            # 렌더 실패와 인식 실패는 대응이 완전히 다르다(파일 손상 vs 엔진 문제).
+            # 둘 다 RuntimeError로 뭉뚱그려지면 로그만으로 구분할 수 없다.
+            raise RuntimeError(
+                f"page render failed ({type(exc).__name__}): {_tail(str(exc))}"
+            ) from exc
         try:
             env = dict(os.environ)
             if self._tessdata:
@@ -170,12 +198,18 @@ class TesseractEngine:
                 except subprocess.TimeoutExpired as exc:
                     # subprocess.run이 timeout 시 하위 프로세스를 강제 종료한다
                     raise TimeoutError(f"ocr timeout ({OCR_TIMEOUT_SECONDS}s)") from exc
-                if proc.returncode != 0:
-                    raise RuntimeError(f"tesseract exited {proc.returncode}")
                 stderr = proc.stderr.decode("utf-8", errors="replace")
+                if proc.returncode != 0:
+                    # stderr를 함께 담는다. 종료 코드만으로는 언어 로드 실패·이미지 읽기
+                    # 실패·DLL 문제를 구분할 수 없어, 실기기에서 45페이지가 전부 같은
+                    # "RuntimeError"로만 기록되고 원인을 좁힐 단서가 0이었다.
+                    # tesseract stderr에는 문서 본문이 들어가지 않는다(경고·오류 문구뿐).
+                    raise RuntimeError(
+                        f"tesseract exited {proc.returncode}: {_tail(stderr)}"
+                    )
                 if "Can't open tsv" in stderr:
                     # tessdata/configs/tsv 누락 — 조용한 빈 결과 대신 명시적 실패
-                    raise RuntimeError("tesseract tsv config missing")
+                    raise RuntimeError(f"tesseract tsv config missing: {_tail(stderr)}")
                 stdout = proc.stdout.decode("utf-8", errors="replace")
                 return [
                     w for w in parse_tsv(stdout) if w.confidence >= OCR_MIN_WORD_CONFIDENCE
