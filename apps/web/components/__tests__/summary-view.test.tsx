@@ -15,6 +15,14 @@ const apiMock = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/api/summary", () => apiMock);
 
+// 데스크톱 앱에서만 진단 파일을 저장할 수 있다 — 오류 안내의 저장 버튼을 검증하려면
+// 데스크톱으로 가정해야 한다.
+const tauriMock = vi.hoisted(() => ({
+  useIsTauri: () => true,
+  saveErrorReport: vi.fn().mockResolvedValue(true),
+}));
+vi.mock("@/lib/tauri", () => tauriMock);
+
 // PdfViewer는 무거운 pdf.js 렌더러라 목으로 대체 (요약 UI만 검증)
 vi.mock("@/components/pdf-viewer", () => ({
   PdfViewer: (props: { page: number; highlights: unknown[] }) => (
@@ -131,6 +139,21 @@ describe("SummaryView", () => {
       await screen.findByText("요약을 만들지 못했어요. 다시 시도해 주세요."),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "요약 만들기" })).toBeInTheDocument();
+  });
+
+  it("요약이 실패하면 그 자리에서 오류 정보를 저장할 수 있다", async () => {
+    // 설정 화면까지 찾아 들어가야 하면 사용자는 대개 그냥 포기하고, 지원 요청에는
+    // "안 돼요"만 남아 원인을 좁힐 수 없다.
+    apiMock.getSummaryStatus.mockResolvedValue(
+      status({ status: "failed", failureCategory: "invalid_response", canRetry: true }),
+    );
+    renderView();
+
+    const button = await screen.findByRole("button", { name: "오류 정보 저장" });
+    await userEvent.click(button);
+
+    expect(tauriMock.saveErrorReport).toHaveBeenCalled();
+    expect(await screen.findByText("저장했어요")).toBeInTheDocument();
   });
 
   it("내용이 빠진 요약은 완결된 요약처럼 보이지 않는다", async () => {

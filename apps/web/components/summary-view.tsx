@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { ErrorReportButton } from "@/components/error-report-button";
 import { PdfViewer } from "@/components/pdf-viewer";
 import { createSummary, getSummaries, getSummaryStatus, retrySummary } from "@/lib/api/summary";
 import type { DocumentSummary } from "@/types/api";
@@ -206,6 +207,9 @@ export function SummaryView({ doc, fileUrl }: Props) {
                     외부 요약 모델을 쓰려면 앱 설정과 이 문서에서 외부 전송을 먼저 허용해 주세요.
                   </p>
                 )}
+                {status.status === "failed" && (
+                  <ErrorReportButton variant="inline" className="mt-2 block text-xs" />
+                )}
               </div>
             )}
 
@@ -221,16 +225,19 @@ export function SummaryView({ doc, fileUrl }: Props) {
                     {summaryFailureGuide(status.failureCategory)}
                   </p>
                 )}
-                {status.canRetry && (
-                  <button
-                    type="button"
-                    onClick={() => retryMutation.mutate()}
-                    disabled={retryMutation.isPending}
-                    className="mt-1 text-blue-700 hover:underline disabled:opacity-50"
-                  >
-                    다시 시도
-                  </button>
-                )}
+                <div className="mt-1 flex items-center gap-3">
+                  {status.canRetry && (
+                    <button
+                      type="button"
+                      onClick={() => retryMutation.mutate()}
+                      disabled={retryMutation.isPending}
+                      className="text-blue-700 hover:underline disabled:opacity-50"
+                    >
+                      다시 시도
+                    </button>
+                  )}
+                  {status.status === "failed" && <ErrorReportButton variant="inline" />}
+                </div>
               </div>
             )}
 
