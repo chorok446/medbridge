@@ -86,6 +86,17 @@ class TestRender:
         out = ci.render("백엔드", [])
         assert "기록된 항목이 없습니다" in out
 
+    def test_job_icon_precedes_the_verdict_icon(self):
+        """실행 화면은 섹션이 세로로 이어 붙는다 — 제목이 전부 같은 판정 아이콘으로
+        시작하면 어느 잡인지 훑어서 구분되지 않는다.
+        """
+        out = ci.render("백엔드", [("Lint", "success", "")], icon="🐍")
+        assert out.splitlines()[0] == "### 🐍 ✅ 백엔드"
+
+    def test_without_job_icon_the_heading_has_no_stray_space(self):
+        out = ci.render("백엔드", [("Lint", "success", "")])
+        assert out.splitlines()[0] == "### ✅ 백엔드"
+
     def test_first_column_can_be_renamed(self):
         """종합 표는 단계가 아니라 잡을 나열한다 — 머리글이 맞아야 한다."""
         out = ci.render("전체 결과", [("백엔드", "success", "")], column="잡")

@@ -12,6 +12,7 @@
   CI_SUMMARY_TITLE    섹션 제목
   CI_SUMMARY_ROWS     줄마다 "이름|결과|비고" (비고는 생략 가능)
   CI_SUMMARY_COLUMN   첫 열 이름(기본 "단계"; 종합 표에서는 "잡")
+  CI_SUMMARY_ICON     잡을 가리키는 고유 기호(선택). 판정 아이콘 앞에 붙는다
   GITHUB_STEP_SUMMARY 출력 파일 경로(없으면 표준출력)
 
 결과 값은 Actions의 outcome/result 어휘를 그대로 쓴다(success/failure/cancelled/skipped).
@@ -83,13 +84,24 @@ def overall(outcomes: list[str]) -> str:
     return "success"
 
 
-def render(title: str, rows: list[tuple[str, str, str]], *, column: str = "단계") -> str:
+def render(
+    title: str,
+    rows: list[tuple[str, str, str]],
+    *,
+    column: str = "단계",
+    icon: str = "",
+) -> str:
     """마크다운 섹션 문자열. 순수 함수 — 테스트가 파일·환경 없이 검증한다.
 
     `column`은 첫 열 이름이다 — 잡 안에서는 '단계', 종합 표에서는 '잡'을 가리킨다.
+    `icon`은 잡을 가리키는 고유 기호다. 실행 화면에서는 섹션이 세로로 이어 붙는데
+    제목이 전부 같은 판정 아이콘으로 시작하면 어느 잡인지 훑어서 구분되지 않는다.
     """
     verdict = overall([outcome for _name, outcome, _detail in rows])
-    lines = [f"### {icon_for(verdict)} {_cell(title) or '(제목 없음)'}", ""]
+    heading = " ".join(
+        part for part in (_cell(icon), icon_for(verdict), _cell(title) or "(제목 없음)") if part
+    )
+    lines = [f"### {heading}", ""]
     if not rows:
         lines.append("_기록된 항목이 없습니다._")
         return "\n".join(lines) + "\n"
@@ -103,7 +115,8 @@ def main() -> int:
     title = os.environ.get("CI_SUMMARY_TITLE", "").strip()
     rows = parse_rows(os.environ.get("CI_SUMMARY_ROWS", ""))
     column = os.environ.get("CI_SUMMARY_COLUMN", "단계").strip() or "단계"
-    section = render(title, rows, column=column)
+    icon = os.environ.get("CI_SUMMARY_ICON", "").strip()
+    section = render(title, rows, column=column, icon=icon)
     target = os.environ.get("GITHUB_STEP_SUMMARY")
     if target:
         with open(target, "a", encoding="utf-8") as f:

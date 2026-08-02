@@ -34,6 +34,7 @@ jobs:
       - name: 실행 요약
         if: always()
         env:
+          CI_SUMMARY_ICON: 🔖
           CI_SUMMARY_TITLE: 버전 일치
           CI_SUMMARY_ROWS: |
             구성요소 버전 일치|${{ steps.check.outcome }}|${{ steps.check.outputs.result }}
@@ -84,6 +85,7 @@ jobs:
         # 값은 env로만 넘긴다. 테스트 출력을 셸 인자로 보간하면 그 안의 문자가 명령으로
         # 해석될 수 있다(fork PR이 테스트 이름으로 주입할 수 있는 실제 경로다).
         env:
+          CI_SUMMARY_ICON: 🐍
           CI_SUMMARY_TITLE: 백엔드 (ubuntu-latest)
           CI_SUMMARY_ROWS: |
             Lint (ruff)|${{ steps.lint.outcome }}|
@@ -131,6 +133,7 @@ jobs:
       - name: 실행 요약
         if: always()
         env:
+          CI_SUMMARY_ICON: 🌐
           CI_SUMMARY_TITLE: 프런트엔드 (ubuntu-latest)
           CI_SUMMARY_ROWS: |
             Lint (eslint)|${{ steps.lint.outcome }}|
@@ -256,6 +259,7 @@ jobs:
           OCRSMOKE: ${{ steps.ocrsmoke.outcome }}
           TAURI: ${{ steps.tauri.outcome }}
           UPLOAD: ${{ steps.upload.outcome }}
+          CI_SUMMARY_ICON: 🪟
           CI_SUMMARY_TITLE: Windows 빌드 (windows-latest)
         run: |
           # 산출물 크기까지 남긴다 — 빌드가 "성공"인데 설치 파일이 비어 있는 경우를
@@ -292,6 +296,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: 전체 결과
         env:
+          CI_SUMMARY_ICON: 📋
           CI_SUMMARY_TITLE: 전체 결과
           CI_SUMMARY_COLUMN: 잡
           CI_SUMMARY_ROWS: |
