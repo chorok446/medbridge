@@ -224,6 +224,8 @@ async def execute_hierarchical_summary(
             input_hash=input_hash,
             request=request,
             source_ids=source_ids,
+            # 레벨 0의 요청 청크는 원본 청크 그 자체다.
+            chunk_sources={c.chunk_id: [c.chunk_id] for c in group.chunks},
             section_title=group.section_title,
             counter=counter,
             guard_args=guard_args,
@@ -270,6 +272,10 @@ async def execute_hierarchical_summary(
                 input_hash=input_hash,
                 request=request,
                 source_ids=merged_source_ids,
+                # 레벨 1+의 요청 청크는 자식 노드다 — 그 노드의 출처가 원본 chunk id다.
+                chunk_sources={
+                    str(child.node_id): list(child.source_chunk_ids) for child in batch
+                },
                 section_title=batch[0].section_title,
                 counter=counter,
                 guard_args=guard_args,
@@ -301,7 +307,13 @@ async def execute_hierarchical_summary(
             include_prerequisites=include_prerequisites,
         ),
     )
-    return finalize_artifacts(structured, lookup, learner_level=learner_level)
+    return finalize_artifacts(
+        structured,
+        lookup,
+        learner_level=learner_level,
+        include_sections=include_sections,
+        include_prerequisites=include_prerequisites,
+    )
 
 
 class _Counter:
@@ -325,11 +337,17 @@ async def _process_node(
     input_hash: str,
     request: GroupRequest,
     source_ids: list[str],
+    chunk_sources: dict[str, list[str]],
     section_title: str | None,
     counter: _Counter,
     guard_args: dict,
 ) -> _NodeResult:
-    """노드 하나: 가드 → 재사용 확인 → (필요 시) 모델 호출 → 체크포인트 저장."""
+    """노드 하나: 가드 → 재사용 확인 → (필요 시) 모델 호출 → 체크포인트 저장.
+
+    `chunk_sources`는 요청 청크 id → 서버 소유 원본 chunk id 목록이다. 레벨 0은 자기
+    자신, 레벨 1+는 자식 노드의 출처다. 분할·열화로 일부 조각이 버려지면 그 조각의
+    출처는 저장하지 않는다.
+    """
     async with factory() as session:
         await _assert_runnable(
             session, check_full_hash=counter.next_needs_full_check(), **guard_args
@@ -372,6 +390,10 @@ async def _process_node(
         result = await _summarize_adaptively(
             provider, request, document_id=document_id, guard=_guard
         )
+    except (SummaryCancelled, SummaryRevisionChanged):
+        # 취소·문서 변경은 정상 제어 흐름이다. 여기서 경고로 남기면 취소 한 건마다
+        # "미분류 노드 실패" 경고가 쌓여, 실제 모델 실패를 찾을 때 구분되지 않는다.
+        raise
     except Exception as exc:
         # 어느 노드에서 죽었는지 남긴다. 이게 없으면 "요약 실패"만 보이고 첫 호출에서
         # 실패했는지 수백 번째에서 실패했는지 구분할 수 없다(원인 범위가 완전히 다르다).
@@ -390,6 +412,10 @@ async def _process_node(
         raise
 
     text = result.text
+    # 출처는 요약문에 실제로 반영된 조각으로 한정한다. 그룹 전체를 그대로 달면 분할·열화
+    # 경로에서 요약에 들어가지도 않은 청크가 근거로 남아, 사용자가 '근거 보기'를 눌렀을 때
+    # 요약문과 무관한 페이지로 이동하고 그 문장이 거기에 근거한 것으로 오인한다.
+    covered_ids = _resolve_covered(result.covered_ids, chunk_sources) or list(source_ids)
     async with factory() as session:
         node = SummaryNode(
             document_id=document_id,
@@ -403,7 +429,7 @@ async def _process_node(
             input_hash=input_hash,
             output_hash=_output_hash(text),
             summary_text=text,
-            source_chunk_ids_json=list(source_ids),
+            source_chunk_ids_json=list(covered_ids),
             attempt_count=1,
             reused=False,
         )
@@ -416,9 +442,21 @@ async def _process_node(
         node_id=node.id,
         input_hash=input_hash,
         summary_text=text,
-        source_chunk_ids=list(source_ids),
+        source_chunk_ids=list(covered_ids),
         section_title=section_title,
     )
+
+
+def _resolve_covered(
+    covered_request_ids: list[str], chunk_sources: dict[str, list[str]]
+) -> list[str]:
+    """요약에 반영된 요청 청크 id → 서버 소유 원본 chunk id(순서 유지·중복 제거)."""
+    out: list[str] = []
+    for cid in covered_request_ids:
+        for sid in chunk_sources.get(cid, ()):
+            if sid not in out:
+                out.append(sid)
+    return out
 
 
 def _is_input_too_large(exc: Exception) -> bool:
@@ -439,10 +477,33 @@ def _is_input_too_large(exc: Exception) -> bool:
 
 @dataclass
 class _AdaptiveResult:
-    """적응 요약 결과. `degraded`면 모델이 만든 완결 요약이 아니라 이어붙인 축약본이다."""
+    """적응 요약 결과.
+
+    `degraded`면 모델이 만든 완결 요약이 아니라 이어붙인 축약본이다.
+    `covered_ids`는 이 요약문에 **실제로 반영된** 입력 청크 id다. 분할·열화 경로에서는
+    일부 조각이 버려지므로 요청한 청크 전부가 아니다 — 호출자는 이 값으로 출처를
+    계산해야 "요약문은 인용된 청크에서 나온다"는 불변식이 유지된다.
+    """
 
     text: str
     degraded: bool
+    covered_ids: list[str]
+
+
+def _split_point(chunks: list[ChunkInput]) -> int:
+    """문자 수가 절반이 되는 지점. 개수로 나누면 큰 청크가 몰린 절반이 안 줄어든다.
+
+    build_groups는 문자 수로 패킹하므로 한 그룹에 5,000자 청크 1개 + 100자 청크 10개가
+    들어갈 수 있다. 개수 기준(`len//2`)으로 나누면 앞 절반이 5,400자로 거의 그대로라
+    다시 초과하고, 재귀 끝에 그 거대 청크만 남아 통째로 버려진다.
+    """
+    total = sum(len(c.text) for c in chunks)
+    running = 0
+    for index, chunk in enumerate(chunks):
+        running += len(chunk.text)
+        if running * 2 >= total:
+            return min(index + 1, len(chunks) - 1)
+    return len(chunks) - 1
 
 
 async def _summarize_adaptively(
@@ -457,15 +518,19 @@ async def _summarize_adaptively(
 
     Ollama가 기기마다 다른 컨텍스트로 모델을 올리고 서버는 그 값을 알 수 없으므로,
     상한을 추측하는 대신 실패했을 때 적응한다. 나눈 요약들은 다시 한 번 합쳐 노드
-    하나당 요약 하나라는 계약을 유지한다(출처는 호출자가 서버 소유로 계산한다).
+    하나당 요약 하나라는 계약을 유지한다(출처는 호출자가 서버 소유로 계산하되,
+    여기서 돌려주는 covered_ids 범위로 한정한다).
     """
     if guard is not None:
         # 재귀 한 번에 최대 22회 호출이 나갈 수 있다. 가드가 노드 진입 시 1회뿐이면
         # 취소·문서 변경 후에도 수십 분간 모델을 계속 돌린다.
         await guard()
+    all_ids = [c.chunk_id for c in request.chunks]
     try:
         summary = await asyncio.to_thread(provider.summarize_group, request)
-        return _AdaptiveResult(text=summary.summary_text, degraded=False)
+        return _AdaptiveResult(
+            text=summary.summary_text, degraded=False, covered_ids=all_ids
+        )
     except Exception as exc:
         if (
             not _is_input_too_large(exc)
@@ -483,9 +548,10 @@ async def _summarize_adaptively(
             failure_reason=getattr(exc, "reason", None) or "none",
         )
 
-    mid = len(request.chunks) // 2
-    parts: list[str] = []
+    mid = _split_point(request.chunks)
+    parts: list[_AdaptiveResult] = []
     degraded = False
+    last_failure: Exception | None = None
     for index, half in enumerate((request.chunks[:mid], request.chunks[mid:])):
         # 자식 실패를 여기서 잡지 않으면 아래 병합 폴백에 도달하지 못하고, 이미 비용을
         # 지불한 형제 부분 요약까지 함께 버려진다.
@@ -512,48 +578,95 @@ async def _summarize_adaptively(
                 failure_reason=getattr(exc, "reason", None) or "none",
             )
             degraded = True
+            last_failure = exc
             continue
-        parts.append(child.text)
+        parts.append(child)
         degraded = degraded or child.degraded
 
     if not parts:
-        # 어느 조각도 요약하지 못했다 — 지어내지 않고 실패로 올린다.
-        raise SummaryNetworkError("context_overflow", "map_context_overflow")
+        # 어느 조각도 요약하지 못했다 — 지어내지 않고 실패로 올린다. 원래 예외를 그대로
+        # 올린다: 범주를 context_overflow로 덮으면 출력 길이 계약 위반 같은 메모리와
+        # 무관한 실패에 "메모리를 확보하라"는 실행 불가 안내가 뜨고, 로그의 실제
+        # failure_reason도 사라진다.
+        raise last_failure or SummaryNetworkError("context_overflow", "map_context_overflow")
 
     # 나눈 요약을 다시 하나로 — 입력이 훨씬 짧아 같은 계약으로 통과한다.
+    covered = _merge_ids(parts)
     merged = replace(
         request,
         chunks=[
             ChunkInput(
                 chunk_id=f"{request.group_id}p{i}",
                 section_title=request.section_title,
-                text=text,
+                text=part.text,
                 page_start=0,
                 page_end=0,
             )
-            for i, text in enumerate(parts)
+            for i, part in enumerate(parts)
         ],
     )
     try:
         summary = await asyncio.to_thread(provider.summarize_group, merged)
-        return _AdaptiveResult(text=summary.summary_text, degraded=degraded)
+        return _AdaptiveResult(
+            text=summary.summary_text, degraded=degraded, covered_ids=covered
+        )
     except Exception as exc:
         if not _is_input_too_large(exc):
             raise
-        # 병합마저 거부되면 더 부를수록 손해다. 이미 만든 부분 요약을 이어 붙여
-        # 계약 길이로 자른다 — 문서 전체 요약을 잃는 것보다 낫고, 출처는 그대로다.
-        # 단어 경계에서 끊어 문장 중간 절단으로 의미가 뒤집히는 것을 줄인다.
+        # 병합마저 거부되면 더 부를수록 손해다. 이미 만든 부분 요약을 이어 붙인다 —
+        # 문서 전체 요약을 잃는 것보다 낫다. 단, 계약 길이에 **들어가는 조각만** 담고
+        # 출처도 그 조각으로 한정한다. 이어붙인 뒤 잘라내면 잘려나간 조각의 청크가
+        # 요약에 없는데도 근거로 남아, 사용자가 '근거 보기'에서 요약문과 무관한
+        # 페이지로 이동하게 된다.
+        kept = _pack_within_contract(parts)
         logger.info(
             "summary_group_merge_fallback",
             document_id=str(document_id),
             group_id=request.group_id,
             parts=len(parts),
+            kept_parts=len(kept),
             failure_reason=getattr(exc, "reason", None) or "none",
         )
+        if not kept:
+            # 첫 조각조차 상한을 넘는다(모델이 계약을 어긴 경우) — 그 조각만 경계에서
+            # 자르고 출처도 그 조각으로 한정한다.
+            first = parts[0]
+            return _AdaptiveResult(
+                text=_truncate_on_boundary(first.text.strip()),
+                degraded=True,
+                covered_ids=list(first.covered_ids),
+            )
         return _AdaptiveResult(
-            text=_truncate_on_boundary(" ".join(p.strip() for p in parts if p.strip())),
+            text=" ".join(p.text.strip() for p in kept),
             degraded=True,
+            covered_ids=_merge_ids(kept),
         )
+
+
+def _merge_ids(parts: list[_AdaptiveResult]) -> list[str]:
+    """부분 결과들의 covered_ids 합집합(순서 유지)."""
+    out: list[str] = []
+    for part in parts:
+        for cid in part.covered_ids:
+            if cid not in out:
+                out.append(cid)
+    return out
+
+
+def _pack_within_contract(parts: list[_AdaptiveResult]) -> list[_AdaptiveResult]:
+    """계약 길이 안에 온전히 들어가는 앞쪽 조각들만 남긴다(중간 절단 없음)."""
+    kept: list[_AdaptiveResult] = []
+    used = 0
+    for part in parts:
+        text = part.text.strip()
+        if not text:
+            continue
+        extra = len(text) + (1 if kept else 0)  # 조각 사이 공백 1자
+        if used + extra > GROUP_SUMMARY_MAX_CHARS:
+            break
+        kept.append(part)
+        used += extra
+    return kept
 
 
 def _truncate_on_boundary(text: str) -> str:

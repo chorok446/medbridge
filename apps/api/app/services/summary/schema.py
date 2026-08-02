@@ -95,9 +95,19 @@ def _clean_text(value, limit: int, *, field_name: str = "?") -> str:
 
 
 def build_artifacts(
-    structured: dict, lookup: dict[str, ChunkRef], *, learner_level: str
+    structured: dict,
+    lookup: dict[str, ChunkRef],
+    *,
+    learner_level: str,
+    include_sections: bool = True,
+    include_prerequisites: bool = True,
 ) -> list[ArtifactDraft]:
-    """구조화 dict → 검증된 artifact 초안 목록. 출처 없는/빈 항목은 제외한다."""
+    """구조화 dict → 검증된 artifact 초안 목록. 출처 없는/빈 항목은 제외한다.
+
+    `include_*`는 사용자가 요청에서 끈 항목이다. 스키마·프롬프트로 막더라도 모델이
+    보내오면 저장돼 화면에 뜨므로, 저장 직전에도 게이트를 둔다(스키마가 강제되지 않는
+    외부·비-Ollama 경로에서는 프롬프트가 유일한 방어라 실제로 새어 들어왔다).
+    """
     drafts: list[ArtifactDraft] = []
     position = 0
 
@@ -134,7 +144,7 @@ def build_artifacts(
 
     # sections
     seen_sections: set[tuple[str, str]] = set()
-    for sec in structured.get("sections") or []:
+    for sec in (structured.get("sections") or []) if include_sections else []:
         if not isinstance(sec, dict):
             continue
         title = _clean_text(sec.get("title"), 300) or None
@@ -176,7 +186,7 @@ def build_artifacts(
         )
 
     # prerequisites — 기본 저장 대상은 document 근거 항목만
-    for pr in structured.get("prerequisites") or []:
+    for pr in (structured.get("prerequisites") or []) if include_prerequisites else []:
         if not isinstance(pr, dict):
             continue
         concept = _clean_text(pr.get("concept"), 200)

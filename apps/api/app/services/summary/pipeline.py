@@ -58,10 +58,21 @@ def build_chunk_inputs(chunks: list[ChunkSnapshot]) -> list[ChunkInput]:
 
 
 def finalize_artifacts(
-    structured: dict, lookup: dict[str, ChunkRef], *, learner_level: str
+    structured: dict,
+    lookup: dict[str, ChunkRef],
+    *,
+    learner_level: str,
+    include_sections: bool = True,
+    include_prerequisites: bool = True,
 ) -> list[ArtifactDraft]:
     """구조화 요약 → 검증된 artifact 초안. 출처 없는 항목은 절대 남기지 않는다."""
-    drafts = build_artifacts(structured, lookup, learner_level=learner_level)
+    drafts = build_artifacts(
+        structured,
+        lookup,
+        learner_level=learner_level,
+        include_sections=include_sections,
+        include_prerequisites=include_prerequisites,
+    )
 
     # 수치·대상 집단은 결정론적 추출(원문 검증 포함) — 모델 출력을 쓰지 않는다.
     next_pos = len(drafts)

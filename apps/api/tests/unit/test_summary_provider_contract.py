@@ -288,8 +288,6 @@ class TestLocalNativePath:
         success = next(s for s in schema["anyOf"] if "summary" in s["properties"])
         assert success["required"] == ["summary"]
         assert success["properties"]["summary"]["type"] == "string"
-        # 서버가 400자 초과를 계약 위반으로 보므로 스키마도 같은 상한을 걸어야 한다
-        assert success["properties"]["summary"]["maxLength"] == GROUP_SUMMARY_MAX_CHARS
 
     def test_document_schema_requires_object_overview_with_sources(self):
         """overview를 문자열로 돌려주던 실측 문제를 스키마로 막는다."""
@@ -315,22 +313,103 @@ class TestLocalNativePath:
         # 빈 배열을 허용하면 서버가 문서 전체를 실패시킨다 — 스키마가 먼저 막아야 한다
         assert overview["properties"]["sourceGroupIds"]["minItems"] == 1
 
-    def test_large_length_limits_stay_out_of_the_grammar(self):
-        """Ollama의 GBNF 변환은 큰 maxLength를 처리하지 못한다(실측: 2000 → HTTP 400).
+    def test_no_length_limit_reaches_the_grammar(self):
+        """maxLength는 위반을 거부하지 않고 그 지점에서 문자열을 강제로 닫는다.
 
-        문법으로 강제할 수 있는 상한만 넣고, 큰 필드는 서버가 검증한다.
+        GBNF는 maxLength를 `char{0,N}` + 닫는 따옴표로 만들므로, 모델이 상한보다 길게
+        쓰려 하면 문장 중간에서 잘린 채 문법상 유효한 JSON이 되어 서버 길이 검증까지
+        통과한다("…투여 금기다" → "…투여 금"). map 요약에서는 그 때문에
+        map_summary_too_long이 영영 발생하지 않아 적응 분할이 도달 불가능해진다.
+        길이는 서버가 검증한다.
         """
         from app.services.summary.provider import _document_schema, _map_schema
 
-        doc = next(
-            s
-            for s in _document_schema(include_sections=True, include_prerequisites=True)["anyOf"]
-            if "overview" in s.get("properties", {})
+        def has_max_length(node) -> bool:
+            if isinstance(node, dict):
+                return "maxLength" in node or any(has_max_length(v) for v in node.values())
+            if isinstance(node, list):
+                return any(has_max_length(v) for v in node)
+            return False
+
+        assert not has_max_length(_map_schema())
+        assert not has_max_length(
+            _document_schema(include_sections=True, include_prerequisites=True)
         )
-        assert "maxLength" not in doc["properties"]["overview"]["properties"]["text"]
-        # 작은 상한(map summary 400자)은 문법으로 강제 가능하므로 유지한다
-        success = next(s for s in _map_schema()["anyOf"] if "summary" in s["properties"])
-        assert success["properties"]["summary"]["maxLength"] == GROUP_SUMMARY_MAX_CHARS
+
+    def test_over_long_map_summary_still_fails_the_contract(self):
+        """문법이 자르지 않으므로 계약 위반이 서버까지 도달해 분할 신호가 된다."""
+        provider, _ = self._local(
+            self._native_response(json.dumps({"summary": "가" * (GROUP_SUMMARY_MAX_CHARS + 1)}))
+        )
+
+        with pytest.raises(SummaryNetworkError) as caught:
+            provider.summarize_group(_group_request())
+
+        assert caught.value.reason == "map_summary_too_long"
+
+    def test_truncated_native_prompt_is_detected_without_model_confession(self):
+        """Ollama는 프롬프트를 조용히 자르고 모델은 대개 그럴듯한 요약을 만들어 낸다.
+
+        문구 매칭에만 의존하면 잘린 입력의 부분 요약이 그룹 전체 출처를 달고 성공으로
+        저장된다. 서버가 num_ctx를 지정했으므로 prompt_eval_count로 확정할 수 있다.
+        """
+        from app.services.summary.settings import LOCAL_NUM_CTX
+
+        response = self._native_response(json.dumps({"summary": "그럴듯한 요약"}))
+        response["prompt_eval_count"] = LOCAL_NUM_CTX
+        provider, _ = self._local(response)
+
+        with pytest.raises(SummaryNetworkError) as caught:
+            provider.summarize_group(_group_request())
+
+        assert caught.value.category == "context_overflow"
+        assert caught.value.reason == "native_prompt_truncated"
+
+    def test_loopback_hostname_still_takes_the_native_path(self):
+        """localhost:11434도 같은 Ollama다 — 문자열 일치로 걸러지면 이번 수정이 통째로
+        적용되지 않는다(num_ctx 지정·schema 강제 모두).
+        """
+        capture = _Capture(self._native_response(json.dumps({"summary": "요약"})))
+        provider = OpenAICompatibleSummaryProvider(
+            endpoint="http://localhost:11434/v1",
+            model_name="qwen3:8b",
+            api_key="",
+            is_local=True,
+            http_client=capture,
+        )
+
+        assert provider.uses_ollama_native is True
+        provider.summarize_group(_group_request())
+        assert capture.calls[0][0] == "http://localhost:11434/api/chat"
+
+    def test_reduce_budget_reaches_local_non_ollama_servers(self):
+        """LM Studio 등 로컬 OpenAI 호환 서버도 reduce 출력 예산을 받아야 한다.
+
+        기본값(2048)으로 나가면 실측 completion 1,500에서 조금만 길어져도
+        finish_length로 문서 전체가 영구 실패한다(temperature 0이라 재시도도 무의미).
+        """
+        from app.services.summary.settings import SUMMARY_REDUCE_MAX_TOKENS
+
+        capture = _Capture(
+            _chat_response(json.dumps({"overview": {"text": "개요", "sourceGroupIds": ["g0"]}}))
+        )
+        provider = OpenAICompatibleSummaryProvider(
+            endpoint="http://localhost:1234/v1",  # LM Studio
+            model_name="local-model",
+            api_key="",
+            is_local=True,
+            http_client=capture,
+        )
+
+        provider.summarize_document(
+            DocumentRequest(
+                group_summaries=[GroupSummary("g0", "구역", "요약", ["c0"])],
+                learner_level="nursing_student",
+                language="ko",
+            )
+        )
+
+        assert capture.calls[0][1]["max_tokens"] == SUMMARY_REDUCE_MAX_TOKENS
 
     def test_schema_omits_sections_when_not_requested(self):
         provider, capture = self._local(
@@ -467,7 +546,7 @@ class TestReduceContract:
         assert caught.value.category == "context_overflow"
         assert caught.value.reason == "reduce_context_overflow"
 
-    def test_reduce_without_overview_is_rejected_not_silently_empty(self):
+    def test_reduce_without_any_content_is_rejected_not_silently_empty(self):
         provider, _ = _provider(_chat_response(json.dumps({"sections": []})))
         groups = [GroupSummary("g0", "구역", "요약", ["c0"])]
 
@@ -478,7 +557,45 @@ class TestReduceContract:
                 )
             )
 
-        assert caught.value.reason == "reduce_overview_missing"
+        assert caught.value.reason == "reduce_empty_summary"
+
+    def test_string_overview_does_not_pass_the_empty_summary_guard(self):
+        """키 존재만 보면 '실측에서 반복된' 문자열 overview가 그대로 통과한다.
+
+        build_artifacts는 dict가 아닌 overview를 통째로 버리므로, 통과시키면 artifact
+        0건인 요약이 SUCCEEDED·100%로 저장돼 사용자는 '완료'라 적힌 빈 패널을 본다.
+        """
+        provider, _ = _provider(_chat_response(json.dumps({"overview": "그냥 문자열 개요"})))
+        groups = [GroupSummary("g0", "구역", "요약", ["c0"])]
+
+        with pytest.raises(SummaryNetworkError) as caught:
+            provider.summarize_document(
+                DocumentRequest(
+                    group_summaries=groups, learner_level="nursing_student", language="ko"
+                )
+            )
+
+        assert caught.value.reason == "reduce_empty_summary"
+
+    def test_missing_overview_does_not_discard_valid_sections(self):
+        """overview만 빠졌다고 문서 전체를 실패시키면 쓸 수 있는 요약까지 버린다.
+
+        로컬은 temperature 0 그리디 디코딩이라 재시도해도 같은 응답이 나와, 수백 회
+        map 호출로 만든 중간 결과가 있어도 그 문서는 영구히 요약을 얻지 못한다.
+        """
+        content = json.dumps(
+            {"sections": [{"title": "구역", "summary": "내용", "sourceGroupIds": ["g0"]}]}
+        )
+        provider, _ = _provider(_chat_response(content))
+        groups = [GroupSummary("g0", "구역", "요약", ["c0"])]
+
+        result = provider.summarize_document(
+            DocumentRequest(
+                group_summaries=groups, learner_level="nursing_student", language="ko"
+            )
+        )
+
+        assert result["sections"][0]["sourceChunkIds"] == ["c0"]
 
 
 def test_common_refusal_is_not_misread_as_context_overflow():
@@ -512,6 +629,32 @@ def test_reduce_prompt_pins_object_shape_so_overview_is_not_dropped():
     assert '"sourceGroupIds"' in prompt
     assert "g0" in prompt  # 고를 수 있는 group id 목록을 알려준다
     assert "c0" not in prompt  # 실제 chunk id는 모델에 보내지 않는다
+
+
+def test_reduce_prompt_omits_items_the_user_turned_off():
+    """예시는 스키마가 강제되지 않는 경로에서 유일한 계약이다.
+
+    끈 항목을 예시로 남기면 모델이 그대로 채워 보내고, 사용자가 명시적으로 끈 구역
+    요약·선수지식이 화면에 그대로 뜬다.
+    """
+    content = json.dumps({"overview": {"text": "개요", "sourceGroupIds": ["g0"]}})
+    provider, capture = _provider(_chat_response(content))
+    groups = [GroupSummary("g0", "구역", "요약", ["c0"])]
+
+    provider.summarize_document(
+        DocumentRequest(
+            group_summaries=groups,
+            learner_level="nursing_student",
+            language="ko",
+            include_sections=False,
+            include_prerequisites=False,
+        )
+    )
+
+    prompt = "\n".join(m["content"] for m in capture.payloads[0]["messages"])
+    assert '"sections"' not in prompt
+    assert '"prerequisites"' not in prompt
+    assert '"keyConcepts"' in prompt  # 끄지 않은 항목은 그대로 남는다
 
 
 def test_reduce_resolves_only_server_group_tokens_to_real_chunk_ids():

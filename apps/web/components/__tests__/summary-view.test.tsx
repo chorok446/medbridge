@@ -133,6 +133,21 @@ describe("SummaryView", () => {
     expect(screen.getByRole("button", { name: "요약 만들기" })).toBeInTheDocument();
   });
 
+  it("내용이 빠진 요약은 완결된 요약처럼 보이지 않는다", async () => {
+    // 컨텍스트 초과로 일부 조각이 요약에 담기지 못한 run. 표시하지 않으면 사용자는
+    // 특정 절이 통째로 사라진 요약을 완료된 요약으로 신뢰하게 된다.
+    apiMock.getSummaryStatus.mockResolvedValue(
+      status({ failureCategory: "partial_content", canRetry: true }),
+    );
+    apiMock.getSummaries.mockResolvedValue({ stale: false, artifacts: [overviewArtifact] });
+    renderView();
+
+    expect(await screen.findByText(/요약에\s*담기지 못했어요/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "다시 요약하기" })).toBeInTheDocument();
+    // 있는 요약은 그대로 보여준다 — 부분 결과를 버리지 않는다
+    expect(screen.getByText("이 문서는 심부전을 다룹니다.")).toBeInTheDocument();
+  });
+
   it("완료 상태면 요약 항목과 비의료 고지를 보여준다", async () => {
     apiMock.getSummaryStatus.mockResolvedValue(status());
     apiMock.getSummaries.mockResolvedValue({ stale: false, artifacts: [overviewArtifact] });

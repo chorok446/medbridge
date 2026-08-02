@@ -149,6 +149,28 @@ export function SummaryView({ doc, fileUrl }: Props) {
               </div>
             )}
 
+            {/* 성공했지만 내용이 빠진 요약 — 표시하지 않으면 사용자는 특정 절이 통째로
+                사라진 요약을 완결된 요약으로 신뢰하게 된다. */}
+            {status.failureCategory === "partial_content" && artifacts.length > 0 && (
+              <div
+                role="status"
+                className="mb-3 rounded bg-amber-50 px-3 py-2 text-sm text-amber-800"
+              >
+                <p>
+                  문서 일부가 AI가 한 번에 볼 수 있는 크기를 넘어, 그 부분은 요약에
+                  담기지 못했어요.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => retryMutation.mutate()}
+                  disabled={retryMutation.isPending || isActiveStatus(status.status)}
+                  className="mt-1.5 rounded bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+                >
+                  다시 요약하기
+                </button>
+              </div>
+            )}
+
             {isActiveStatus(status.status) && (
               <p role="status" aria-live="polite" className="text-sm text-slate-500">
                 요약을 만드는 중이에요… ({status.progress}%)

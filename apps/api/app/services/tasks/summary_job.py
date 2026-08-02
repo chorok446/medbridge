@@ -7,13 +7,13 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.logging import correlation_id_var, get_logger
 from app.db.session import get_session_factory
 from app.models.document import Document, DocumentJob
 from app.models.enums import JobStatus, JobType, SummaryRunStatus
-from app.models.summary import SummaryArtifact, SummaryRun
+from app.models.summary import SummaryArtifact, SummaryNode, SummaryRun
 from app.models.user import User
 from app.services.summary import service as summary_service
 from app.services.summary.endpoint import SummaryNetworkError
@@ -26,6 +26,10 @@ from app.services.summary.executor import (
 from app.services.summary.factory import get_summary_provider
 
 logger = get_logger(__name__)
+
+# 성공했지만 컨텍스트 초과로 일부 내용이 요약에서 빠진 run. status는 SUCCEEDED이고
+# 이 코드는 "무엇이 부족한지"를 나타낸다(실패 코드가 아니다).
+SUMMARY_PARTIAL_CODE = "SUMMARY_PARTIAL"
 
 
 async def _job_is_current(session, document_id: uuid.UUID, job_id: uuid.UUID) -> bool:
@@ -207,9 +211,23 @@ async def run_summary_job(
                     source_refs_json=draft.source_refs,
                 )
             )
+        # 컨텍스트 초과로 일부 조각을 요약하지 못한 노드가 있으면 내용이 빠진 요약이다.
+        # 표시하지 않으면 사용자는 특정 절이 통째로 사라진 요약을 '완료 100%'로 받는다.
+        degraded_nodes = (
+            await session.execute(
+                select(func.count())
+                .select_from(SummaryNode)
+                .where(
+                    SummaryNode.summary_run_id == run_id,
+                    SummaryNode.status == "degraded",
+                )
+            )
+        ).scalar_one()
         run = await session.get(SummaryRun, run_id)
         if run is not None:
             run.status = SummaryRunStatus.SUCCEEDED
+            # 성공이되 내용이 빠졌다는 표시 — 사용자에게 안내하고 재시도를 열어준다.
+            run.error_code = SUMMARY_PARTIAL_CODE if degraded_nodes else None
             run.completed_at = datetime.now(UTC)
         job = await session.get(DocumentJob, job_id)
         if job is not None:
@@ -217,7 +235,10 @@ async def run_summary_job(
             job.completed_at = datetime.now(UTC)
         await session.commit()
     logger.info(
-        "summary_job_done", document_id=str(document_id), artifacts=len(drafts)
+        "summary_job_done",
+        document_id=str(document_id),
+        artifacts=len(drafts),
+        degraded_nodes=degraded_nodes,
     )
 
 

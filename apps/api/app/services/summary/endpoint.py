@@ -26,6 +26,30 @@ from urllib.parse import urlsplit
 # 안전 로컬 호스트명 (정확히 일치해야 함 — localhost.evil.example 등은 제외)
 _LOCAL_HOSTNAMES = frozenset({"localhost", "localhost.localdomain"})
 
+# 프롬프트가 컨텍스트 창을 넘었을 때 모델·서버가 내놓는 표지.
+#
+# 두 경로에서 함께 쓴다: (1) Ollama처럼 프롬프트를 조용히 자르고 HTTP 200으로 error
+# 객체를 돌려주는 경우(provider가 본문을 본다), (2) OpenAI 호환 서버가 HTTP 400 +
+# context_length_exceeded로 명시적으로 거부하는 경우(아래 _classify_http_error).
+# 목록이 갈라지면 한쪽 경로만 초과를 인지해 적응 분할이 발동하지 않는다.
+#
+# 맨 "context"는 넣지 않는다 — 외부 모델의 평범한 거절("I cannot summarize this without
+# more context")까지 초과로 오분류해, 유료 API를 분할 재시도로 낭비한다.
+CONTEXT_OVERFLOW_HINTS = (
+    "too long",
+    "too large",
+    "context length",
+    "context window",
+    "context_length_exceeded",
+    "exceeds the context",
+    "excessive repetition",
+    "maximum context",
+)
+
+# HTTP 오류 본문에서 초과 여부만 판별하려고 읽는 최대 바이트. 본문은 분류에만 쓰고
+# 로그·사용자 메시지에는 절대 남기지 않는다(모델이 원문을 되비출 수 있다).
+_ERROR_BODY_SNIFF_BYTES = 8 * 1024
+
 # 오류 범주 — 사용자에게는 이 범주에 대응하는 안전한 메시지만 보여준다.
 NET_ERROR_MESSAGES = {
     "invalid_address": "주소가 올바르지 않습니다.",
@@ -72,7 +96,7 @@ def _has_control_chars(value: str) -> bool:
     return any(ord(c) < 0x20 or ord(c) == 0x7F for c in value)
 
 
-def _is_loopback_hostname(host: str) -> bool:
+def is_loopback_hostname(host: str) -> bool:
     h = host.lower().rstrip(".")
     if h in _LOCAL_HOSTNAMES:
         return True
@@ -140,13 +164,13 @@ def validate_endpoint(raw: str | None, *, is_local: bool) -> str:
 
     if is_local:
         # 로컬: http/https 모두 허용하되 loopback 호스트만
-        if not _is_loopback_hostname(hostname):
+        if not is_loopback_hostname(hostname):
             raise SummaryNetworkError("unsafe_address")
     else:
         # 외부: HTTPS만. 명백한 loopback 호스트명은 즉시 거부(해석은 요청 시 재검증).
         if parts.scheme != "https":
             raise SummaryNetworkError("unsafe_address")
-        if _is_loopback_hostname(hostname):
+        if is_loopback_hostname(hostname):
             raise SummaryNetworkError("unsafe_address")
 
     host_norm = hostname.lower()
@@ -269,7 +293,7 @@ def _read_capped(
     except SummaryNetworkError:
         raise
     except urllib.error.HTTPError as exc:
-        raise _classify_http_status(exc.code) from None
+        raise _classify_http_error(exc) from None
     except TimeoutError as exc:
         raise SummaryNetworkError("timeout") from exc
     except OSError as exc:
@@ -398,6 +422,24 @@ def stream_lines(
                 resp.close()
             except Exception:
                 pass
+
+
+def _classify_http_error(exc: urllib.error.HTTPError) -> SummaryNetworkError:
+    """HTTP 오류 → 범주. 400은 본문을 훑어 컨텍스트 초과인지 먼저 가른다.
+
+    OpenAI 호환 서버(LM Studio·llama.cpp server·vLLM·OpenAI)가 컨텍스트 초과를 알리는
+    유일한 명시적 신호는 400 + `context_length_exceeded` 본문이다. 이걸 bad_response로
+    뭉뚱그리면 executor의 적응 분할이 발동하지 않아 문서 전체가 즉시 실패한다.
+    본문은 이 판별에만 쓰고 어디에도 저장하지 않는다.
+    """
+    if exc.code == 400:
+        try:
+            body = exc.read(_ERROR_BODY_SNIFF_BYTES).decode("utf-8", "replace").lower()
+        except Exception:  # noqa: BLE001 — 본문을 못 읽으면 코드만으로 분류한다
+            body = ""
+        if any(hint in body for hint in CONTEXT_OVERFLOW_HINTS):
+            return SummaryNetworkError("context_overflow", "http_400_context_length")
+    return _classify_http_status(exc.code)
 
 
 def _classify_http_status(code: int) -> SummaryNetworkError:

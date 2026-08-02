@@ -80,13 +80,16 @@ class TestBoundedPacking:
     def test_real_device_scale_shrinks_group_count(self):
         """실측 규모(4,265,890자)에서 그룹 수가 3,074개보다 크게 줄어든다.
 
-        상한은 모델 컨텍스트(4096)에 맞춰 4,000자로 정해져 있다. 그 제약 안에서 packing이
-        제 몫을 하는지 본다 — 제목마다 끊던 3,074그룹보다 크게 적어야 한다.
+        상한은 서버가 지정하는 num_ctx(8192)에 맞춰 GROUP_MAX_CHARS=6,000자다. 그 제약
+        안에서 packing이 제 몫을 하는지 본다 — 제목마다 끊던 3,074그룹보다 크게 적어야
+        한다. 현재 코드의 실측값은 797그룹(평균 5,357자)이므로 900을 넘으면 packing이
+        60% 이상 잘게 쪼개지는 회귀다. 여유를 크게 두면(예: 1300) 그 회귀가 CI를 통과해
+        대형 문서의 map 호출이 797회 → 1,290회로 늘고 요약 시간이 배로 늘어난다.
         """
         # 평균 536자 청크 7,965개 ≈ 4.27M자. 제목은 자주 바뀐다.
         chunks = [_chunk(i, title=f"제목 {i // 3}", chars=536) for i in range(7965)]
         groups = build_groups(chunks)
-        assert len(groups) < 1300
+        assert len(groups) < 900, f"{len(groups)}그룹 — packing이 잘게 쪼개지고 있다"
         assert sum(len(g.chunks) for g in groups) == 7965
 
     def test_groups_are_packed_close_to_the_limit(self):

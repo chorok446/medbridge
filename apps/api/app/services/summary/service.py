@@ -280,10 +280,18 @@ async def get_summary_status(db: AsyncSession, doc: Document) -> SummaryStatus:
             "SUMMARY_TIMEOUT": "timeout",
             "SUMMARY_INVALID_RESPONSE": "invalid_response",
             "SUMMARY_CONTEXT_OVERFLOW": "context_overflow",
+            # 성공했지만 컨텍스트 초과로 일부 내용이 빠진 요약. 표시하지 않으면 사용자는
+            # 특정 절이 통째로 사라진 요약을 완료된 요약으로 신뢰하게 된다.
+            "SUMMARY_PARTIAL": "partial_content",
         }.get(run.error_code)
     can_retry = bool(
         provider.available
-        and (run is None or run.status in (SummaryRunStatus.FAILED, SummaryRunStatus.CANCELLED))
+        and (
+            run is None
+            or run.status in (SummaryRunStatus.FAILED, SummaryRunStatus.CANCELLED)
+            # 내용이 빠진 요약은 메모리 여유가 생기면 더 나은 결과가 나올 수 있다.
+            or failure_category == "partial_content"
+        )
     )
     return SummaryStatus(
         provider_available=provider.available,

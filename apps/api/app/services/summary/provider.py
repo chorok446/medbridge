@@ -10,32 +10,13 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from app.services.summary.settings import (
-    CONCEPT_EXPLANATION_MAX_CHARS,
-    GENERIC_TEXT_MAX_CHARS,
     GROUP_SUMMARY_MAX_CHARS,
-    OVERVIEW_MAX_CHARS,
-    SECTION_SUMMARY_MAX_CHARS,
     SUMMARY_MAP_MAX_TOKENS,
     SUMMARY_REDUCE_MAX_TOKENS,
 )
 
 # finish_reason 값을 로그에 남길 때 모델이 준 임의 문자열을 그대로 쓰지 않는다.
 _KNOWN_FINISH_REASONS = frozenset({"length", "content_filter", "tool_calls", "function_call"})
-
-# 프롬프트가 컨텍스트 창을 넘어 잘렸을 때 모델이 내놓는 응답의 표지.
-#
-# 맨 "context"는 쓰지 않는다 — 외부 모델의 평범한 거절("I cannot summarize this without
-# more context")까지 컨텍스트 초과로 오분류해, 유료 API를 분할 재시도로 낭비하고
-# 클라우드 사용자에게 "로컬 AI 컨텍스트를 늘리라"는 실행 불가 안내를 띄운다.
-_OVERFLOW_HINTS = (
-    "too long",
-    "too large",
-    "context length",
-    "context window",
-    "exceeds the context",
-    "excessive repetition",
-)
-
 
 # 프롬프트가 잘렸을 때 모델이 낼 수 있어야 하는 대안 형태. 이걸 스키마에서 배제하면
 # 잘린 프롬프트가 "정상 요약"으로 통과해 버린다(실측: strict 스키마 + num_ctx 부족 →
@@ -53,9 +34,7 @@ def _map_schema() -> dict:
         "anyOf": [
             {
                 "type": "object",
-                "properties": {
-                    "summary": {"type": "string", "maxLength": GROUP_SUMMARY_MAX_CHARS}
-                },
+                "properties": {"summary": _text()},
                 "required": ["summary"],
             },
             _ERROR_ALTERNATIVE,
@@ -83,18 +62,22 @@ def _sourced(properties: dict, required: list[str]) -> dict:
     }
 
 
-# Ollama(llama.cpp)의 JSON schema → GBNF 변환은 큰 maxLength를 처리하지 못한다.
-# 실측: maxLength=400은 통과, 2000은 "Failed to initialize samplers: failed to parse
-# grammar"로 400을 받는다. 문법으로 강제할 수 있는 상한만 스키마에 넣고, 그보다 큰
-# 필드는 프롬프트로 알리고 서버가 검증한다(길이 초과 항목은 build_artifacts가 로그를
-# 남기고 버린다 — 조용히 사라지지 않는다).
-_SCHEMA_MAX_LENGTH_LIMIT = 500
+def _text() -> dict:
+    """문자열 필드 — 길이 상한은 **문법에 넣지 않는다**.
 
+    Ollama(llama.cpp)의 JSON schema → GBNF 변환은 maxLength를 "N자까지 쓰고 나면 닫는
+    따옴표만 허용"하는 문법으로 만든다. 즉 계약 위반을 **거부**하는 게 아니라 정확히
+    N번째 글자에서 문자열을 **강제로 닫는다**. 모델이 상한보다 길게 쓰려 하면
+    `"…투여 금기다"`가 `"…투여 금"`으로 문장 중간에서 잘린 채 문법상 유효한 JSON이
+    되어 서버 길이 검증도 통과하고 그대로 사용자에게 노출된다(의미가 뒤집힐 수 있다).
 
-def _text(limit: int) -> dict:
-    """길이 상한이 문법으로 표현 가능한 범위면 스키마에도 넣는다."""
-    if limit <= _SCHEMA_MAX_LENGTH_LIMIT:
-        return {"type": "string", "maxLength": limit}
+    게다가 map 요약에서는 그 절단 때문에 `map_summary_too_long`이 영영 발생하지 않아,
+    executor가 그것을 근거로 삼는 적응 분할이 native 경로에서 도달 불가능해진다.
+
+    길이는 서버가 검증한다 — 초과 항목은 build_artifacts가 로그를 남기고 버리고,
+    map 요약 초과는 분할 재시도의 신호가 된다. 큰 maxLength가 GBNF 변환 자체를
+    깨뜨리는 문제(실측 2000 → "failed to parse grammar" 400)도 함께 사라진다.
+    """
     return {"type": "string"}
 
 
@@ -106,21 +89,18 @@ def _document_schema(*, include_sections: bool, include_prerequisites: bool) -> 
     신호까지 막지 않도록 오류 객체 형태는 대안으로 남긴다.
     """
     props: dict = {
-        "overview": _sourced({"text": _text(OVERVIEW_MAX_CHARS)}, ["text"]),
+        "overview": _sourced({"text": _text()}, ["text"]),
         "keyConcepts": {
             "type": "array",
             "items": _sourced(
-                {
-                    "term": _text(200),
-                    "explanation": _text(CONCEPT_EXPLANATION_MAX_CHARS),
-                },
+                {"term": _text(), "explanation": _text()},
                 ["term", "explanation"],
             ),
         },
         "learnerExplanations": {
             "type": "array",
             "items": _sourced(
-                {"level": _text(50), "text": _text(GENERIC_TEXT_MAX_CHARS)},
+                {"level": _text(), "text": _text()},
                 ["level", "text"],
             ),
         },
@@ -130,10 +110,7 @@ def _document_schema(*, include_sections: bool, include_prerequisites: bool) -> 
         props["sections"] = {
             "type": "array",
             "items": _sourced(
-                {
-                    "title": _text(300),
-                    "summary": _text(SECTION_SUMMARY_MAX_CHARS),
-                },
+                {"title": _text(), "summary": _text()},
                 ["title", "summary"],
             ),
         }
@@ -143,8 +120,8 @@ def _document_schema(*, include_sections: bool, include_prerequisites: bool) -> 
             "type": "array",
             "items": _sourced(
                 {
-                    "concept": _text(200),
-                    "whyNeeded": _text(GENERIC_TEXT_MAX_CHARS),
+                    "concept": _text(),
+                    "whyNeeded": _text(),
                     "sourceType": {"type": "string"},
                 },
                 ["concept", "whyNeeded"],
@@ -158,17 +135,41 @@ def _document_schema(*, include_sections: bool, include_prerequisites: bool) -> 
     }
 
 
+# 저장 가능한 내용을 담을 수 있는 reduce 응답의 배열 필드.
+_CONTENT_LISTS = ("sections", "keyConcepts", "prerequisites", "learnerExplanations")
+
+
+def _has_usable_content(parsed: dict) -> bool:
+    """이 응답으로 artifact를 하나라도 만들 수 있는가.
+
+    overview는 `{"text": ...}` 객체여야 한다 — 문자열로 온 overview는 build_artifacts가
+    통째로 버리므로 "있다"고 세면 안 된다. overview가 없어도 다른 항목이 있으면 그것으로
+    요약을 만든다(부분 응답을 버리지 않는다).
+    """
+    overview = parsed.get("overview")
+    if isinstance(overview, dict) and isinstance(overview.get("text"), str):
+        if overview["text"].strip():
+            return True
+    return any(
+        isinstance(parsed.get(key), list)
+        and any(isinstance(item, dict) for item in parsed[key])
+        for key in _CONTENT_LISTS
+    )
+
+
 def _looks_like_context_overflow(parsed: dict) -> bool:
     """계약 필드 대신 error 객체가 온 경우 — 입력 초과인지 판별한다.
 
     Ollama는 프롬프트를 조용히 자르므로 HTTP는 200이고 usage도 잘린 값이 온다. 유일한
     단서가 모델이 낸 error 문구뿐이라 여기서만 본문을 들여다본다(로그에는 남기지 않는다).
     """
+    from app.services.summary.endpoint import CONTEXT_OVERFLOW_HINTS
+
     error = parsed.get("error")
     if not isinstance(error, str):
         return False
     lowered = error.lower()
-    return any(hint in lowered for hint in _OVERFLOW_HINTS)
+    return any(hint in lowered for hint in CONTEXT_OVERFLOW_HINTS)
 
 
 @dataclass
@@ -339,7 +340,14 @@ class OpenAICompatibleSummaryProvider:
             self._endpoint and self.model_name and (self.is_local or self._api_key)
         )
 
-    def _chat(self, system: str, user: str, *, max_tokens: int | None = None) -> str:
+    def _chat(
+        self,
+        system: str,
+        user: str,
+        *,
+        max_tokens: int | None = None,
+        local_max_tokens: int | None = None,
+    ) -> str:
         from app.services.model_output import strip_thinking
         from app.services.summary.endpoint import SummaryNetworkError, post_json
         from app.services.summary.settings import (
@@ -365,7 +373,11 @@ class OpenAICompatibleSummaryProvider:
             payload["temperature"] = 0
             payload["reasoning_effort"] = LOCAL_REASONING_EFFORT
             if max_tokens is None:
-                payload["max_tokens"] = LOCAL_MAX_TOKENS
+                # 호출자가 의도한 출력 예산이 있으면 그걸 쓴다. 기본값(LOCAL_MAX_TOKENS)만
+                # 쓰면 reduce처럼 예산이 큰 호출이 로컬 비-Ollama 서버(LM Studio 등)에서만
+                # 2048로 잘려 finish_length로 문서 전체가 실패한다 — native 경로에만
+                # 적용된 이번 수정이 같은 로컬 사용자에게 닿지 않는 공백이었다.
+                payload["max_tokens"] = local_max_tokens or LOCAL_MAX_TOKENS
         url = f"{self._endpoint}/chat/completions"
         # 테스트에서 http_client(콜러블)를 주입하면 그것을 쓴다 — 실제 네트워크 없이 검증.
         try:
@@ -464,6 +476,13 @@ class OpenAICompatibleSummaryProvider:
         if done_reason not in (None, "stop"):
             safe = done_reason if done_reason in _KNOWN_FINISH_REASONS else "other"
             raise SummaryNetworkError("bad_response", f"finish_{safe}")
+        # 프롬프트가 창을 가득 채웠다면 Ollama가 앞부분을 잘라낸 것이다. 모델이 자백하지
+        # 않으면(대개 잘린 뒷부분만 보고도 그럴듯한 요약을 만들어낸다) 잘린 입력의 부분
+        # 요약이 그룹 전체의 출처를 주장하며 성공으로 저장된다. 문구 매칭에만 의존하지
+        # 않고, 서버가 num_ctx를 지정했으므로 직접 셀 수 있는 이 값으로 확정한다.
+        prompt_tokens = data.get("prompt_eval_count")
+        if isinstance(prompt_tokens, int) and prompt_tokens >= LOCAL_NUM_CTX:
+            raise SummaryNetworkError("context_overflow", "native_prompt_truncated")
         if not isinstance(content, str):
             raise SummaryNetworkError("bad_response", "content_not_text")
         return strip_thinking(content)
@@ -475,12 +494,30 @@ class OpenAICompatibleSummaryProvider:
         `is_local`은 "loopback이다"라는 뜻이지 "Ollama다"가 아니다. LM Studio·llama.cpp
         server·vLLM 같은 로컬 OpenAI 호환 서버는 /api/chat을 제공하지 않으므로, 앱이
         직접 붙인 Ollama endpoint일 때만 native로 보낸다.
-        """
-        from app.services.local_ai.settings import OLLAMA_BASE, OLLAMA_OPENAI_BASE
 
-        return self.is_local and self._endpoint in (
-            OLLAMA_OPENAI_BASE.rstrip("/"),
-            OLLAMA_BASE.rstrip("/"),
+        비교는 문자열이 아니라 **정규화된 (loopback, 포트, 경로)**로 한다.
+        `validate_endpoint`는 호스트명을 IP로 바꾸지 않으므로, 같은 Ollama를 가리키는
+        `http://localhost:11434/v1`이 저장돼 있으면 문자열 일치로는 걸러지지 않아
+        num_ctx 지정·JSON schema 강제가 통째로 적용되지 않았다.
+        """
+        from urllib.parse import urlsplit
+
+        from app.services.local_ai.settings import OLLAMA_BASE
+        from app.services.summary.endpoint import is_loopback_hostname
+
+        if not self.is_local:
+            return False
+        try:
+            parts = urlsplit(self._endpoint)
+            ollama = urlsplit(OLLAMA_BASE)
+            port = parts.port
+            host = parts.hostname or ""
+        except ValueError:
+            return False
+        return (
+            is_loopback_hostname(host)
+            and port == ollama.port
+            and (parts.path or "").rstrip("/") in ("", "/v1")
         )
 
     def _chat_for(
@@ -500,7 +537,9 @@ class OpenAICompatibleSummaryProvider:
         """
         if self.uses_ollama_native:
             return self._chat_native(system, user, max_tokens=max_tokens, schema=schema)
-        return self._chat(system, user, max_tokens=external_max_tokens)
+        return self._chat(
+            system, user, max_tokens=external_max_tokens, local_max_tokens=max_tokens
+        )
 
     @staticmethod
     def _parse_json_object(raw: str, *, stage: str) -> dict:
@@ -571,18 +610,33 @@ class OpenAICompatibleSummaryProvider:
         # 문자열로 돌려줘 서버가 조용히 버리는 일이 실측에서 반복됐다(출처 없는 항목은
         # 저장하지 않는 계약이라 개요가 통째로 사라진다).
         valid_ids = ", ".join(g.group_id for g in request.group_summaries)
+        # 예시도 요청된 항목만 보여준다. 끈 항목을 예시로 남기면 모델이 그대로 채워
+        # 보내고(스키마가 강제되지 않는 외부·비-Ollama 경로에서는 예시가 유일한 계약이다)
+        # 사용자가 명시적으로 끈 구역 요약·선수지식이 그대로 저장된다.
+        shape = ['"overview":{"text":"...","sourceGroupIds":["g0"]}']
+        if request.include_sections:
+            shape.append(
+                '"sections":[{"title":"...","summary":"...","sourceGroupIds":["g0"]}]'
+            )
+        shape.append(
+            '"keyConcepts":[{"term":"...","explanation":"...","sourceGroupIds":["g0"]}]'
+        )
+        if request.include_prerequisites:
+            shape.append(
+                '"prerequisites":[{"concept":"...","whyNeeded":"...",'
+                '"sourceType":"document","sourceGroupIds":["g0"]}]'
+            )
+        shape.append(
+            '"learnerExplanations":[{"level":"'
+            + request.learner_level
+            + '","text":"...","sourceGroupIds":["g0"]}]'
+        )
         user = (
             f"학습자 수준: {request.learner_level}, 언어: {request.language}. "
             "다음 그룹 요약으로 구조화 요약을 만들어라. 아래 형태를 정확히 지켜라. "
             "모든 객체는 sourceGroupIds 배열을 가져야 하며 그 값은 "
             f"[{valid_ids}] 중에서만 고른다.\n"
-            '{"overview":{"text":"...","sourceGroupIds":["g0"]},'
-            '"sections":[{"title":"...","summary":"...","sourceGroupIds":["g0"]}],'
-            '"keyConcepts":[{"term":"...","explanation":"...","sourceGroupIds":["g0"]}],'
-            '"prerequisites":[{"concept":"...","whyNeeded":"...","sourceType":"document",'
-            '"sourceGroupIds":["g0"]}],'
-            '"learnerExplanations":[{"level":"'
-            f'{request.learner_level}","text":"...","sourceGroupIds":["g0"]}}]}}'
+            "{" + ",".join(shape) + "}"
             f"\n\n{group_block}"
         )
         from app.services.summary.endpoint import SummaryNetworkError
@@ -601,10 +655,16 @@ class OpenAICompatibleSummaryProvider:
         parsed = self._parse_json_object(raw, stage="reduce")
         # reduce에도 초과 감지가 필요하다. 없으면 잘린 응답이 예외 없이 통과해
         # artifact가 하나도 없는 '빈 요약'이 SUCCEEDED로 저장된다.
-        if "overview" not in parsed:
+        #
+        # 판정 기준은 "overview 키가 있는가"가 아니라 "저장할 내용이 하나라도 있는가"다.
+        # 키만 보면 양쪽으로 어긋난다 — overview를 문자열로 돌려준 응답(실측에서 반복된
+        # 형태)은 통과시켜 빈 요약이 SUCCEEDED가 되고, 반대로 sections·keyConcepts가
+        # 멀쩡한데 overview만 빠진 응답은 문서 전체를 실패시킨다(temperature 0이라
+        # 재시도해도 같은 응답이 나와 그 문서는 영구히 요약을 얻지 못한다).
+        if not _has_usable_content(parsed):
             if _looks_like_context_overflow(parsed):
                 raise SummaryNetworkError("context_overflow", "reduce_context_overflow")
-            raise SummaryNetworkError("bad_response", "reduce_overview_missing")
+            raise SummaryNetworkError("bad_response", "reduce_empty_summary")
         return self._resolve_group_sources(parsed, request)
 
     @staticmethod

@@ -34,7 +34,9 @@ export interface SummaryList {
 export type SummaryFailureCategory =
   | "timeout"
   | "invalid_response"
-  | "context_overflow";
+  | "context_overflow"
+  // 실패가 아니라 "성공했지만 일부 내용이 빠짐" — status는 succeeded로 온다.
+  | "partial_content";
 
 export interface SummaryStatus {
   providerAvailable: boolean;

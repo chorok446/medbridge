@@ -269,6 +269,78 @@ class TestSummaryRevisionGuard:
         assert arts == 0
 
 
+class TestPartialSummaryIsSurfaced:
+    async def test_dropped_content_is_not_reported_as_a_complete_summary(
+        self, client, monkeypatch
+    ):
+        """컨텍스트 초과로 일부 내용이 빠졌는데 100%·완료로 끝나면 사용자가 알 수 없다.
+
+        degraded 노드가 저장만 되고 어디에도 노출되지 않으면, 금기·부작용 절이 통째로
+        사라진 요약을 완결된 요약으로 신뢰하게 되고 재시도 안내도 뜨지 않는다.
+        """
+        from app.services.summary import grouping as grouping_mod
+        from app.services.summary import service as summary_service
+        from app.services.summary.endpoint import SummaryNetworkError
+        from app.services.summary.provider import DeterministicSummaryProvider
+        from app.services.tasks import summary_job as job_mod
+
+        await enable_deterministic()
+        doc_id = await upload_chunked(client, fx.single_column_korean(pages=4))
+        duuid = uuid.UUID(doc_id)
+        monkeypatch.setattr(grouping_mod, "GROUP_MAX_CHARS", 4000)
+        monkeypatch.setattr(grouping_mod, "GROUP_MIN_CHARS", 4000)
+
+        class RejectsMultiChunk(DeterministicSummaryProvider):
+            """조각 하나는 요약하지만 둘 이상 합치는 건 거부한다 → 열화 폴백."""
+
+            def summarize_group(self, request):
+                if len(request.chunks) > 1:
+                    raise SummaryNetworkError("context_overflow", "map_context_overflow")
+                return super().summarize_group(request)
+
+        async def _fake_provider(_session):
+            return RejectsMultiChunk()
+
+        monkeypatch.setattr(job_mod, "get_summary_provider", _fake_provider)
+
+        async with get_session_factory()() as s:
+            doc = await s.get(Document, duuid)
+            run = SummaryRun(
+                document_id=duuid,
+                status=SummaryRunStatus.QUEUED,
+                provider_name="deterministic",
+                model_name="deterministic-test-v1",
+                prompt_version="3b-1",
+                schema_version=1,
+                source_revision=doc.content_revision,
+                source_chunk_hash=await summary_service.current_chunk_hash(s, duuid),
+                learner_level="nursing_student",
+                language="ko",
+            )
+            job = DocumentJob(
+                document_id=duuid,
+                job_type=JobType.SUMMARIZE,
+                status=JobStatus.QUEUED,
+                correlation_id="partial",
+            )
+            s.add(run)
+            s.add(job)
+            await s.commit()
+            run_id, job_id = run.id, job.id
+
+        await job_mod.run_summary_job(duuid, "partial", run_id=run_id, job_id=job_id)
+
+        async with get_session_factory()() as s:
+            saved = await s.get(SummaryRun, run_id)
+        assert saved.status == SummaryRunStatus.SUCCEEDED  # 쓸 수 있는 요약은 남긴다
+        assert saved.error_code == "SUMMARY_PARTIAL"
+
+        res = await client.get(f"/api/documents/{doc_id}/summaries/status")
+        body = res.json()["data"]
+        assert body["failureCategory"] == "partial_content"
+        assert body["canRetry"] is True, "내용이 빠졌는데 재시도 경로가 닫혀 있다"
+
+
 class TestSummaryExternalConsent:
     async def test_external_provider_blocked_without_consent(self, client):
         await enable_external_openai()

@@ -216,6 +216,24 @@ class _Handler(BaseHTTPRequestHandler):
                     time.sleep(0.2)
             except (BrokenPipeError, OSError):
                 pass
+        elif path == "/ctxlen/chat/completions":
+            # OpenAI 호환 서버가 컨텍스트 초과를 알리는 유일한 명시적 신호
+            body = (
+                b'{"error":{"message":"This model\'s maximum context length is 4096 '
+                b'tokens","code":"context_length_exceeded"}}'
+            )
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif path == "/badparam/chat/completions":
+            body = b'{"error":{"message":"unknown parameter: foo"}}'
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
         elif path.startswith("/status"):
             code = int(path.split("/")[2])
             self.send_response(code)
@@ -264,6 +282,24 @@ class TestSafePost:
         with pytest.raises(SummaryNetworkError) as e:
             _post(local_server, "/notjson")
         assert e.value.category == "bad_response"
+
+    def test_context_length_exceeded_is_not_buried_in_bad_response(self, local_server):
+        """OpenAI 호환 서버(LM Studio·llama.cpp·vLLM·OpenAI)의 초과 신호는 400 본문뿐이다.
+
+        bad_response로 뭉뚱그리면 executor의 적응 분할이 발동하지 않아 문서 전체가
+        즉시 실패하고, 사용자는 실행 가능한 안내 대신 "응답 형식 오류"를 본다.
+        """
+        with pytest.raises(SummaryNetworkError) as e:
+            _post(local_server, "/ctxlen")
+        assert e.value.category == "context_overflow"
+        assert e.value.reason == "http_400_context_length"
+
+    def test_ordinary_bad_request_stays_bad_response(self, local_server):
+        """400을 전부 초과로 몰면 파라미터 오류에 분할 재시도를 낭비한다."""
+        with pytest.raises(SummaryNetworkError) as e:
+            _post(local_server, "/badparam")
+        assert e.value.category == "bad_response"
+        assert e.value.reason == "http_400"
 
     def test_timeout(self, local_server):
         with pytest.raises(SummaryNetworkError) as e:
