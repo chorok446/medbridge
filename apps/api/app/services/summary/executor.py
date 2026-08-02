@@ -467,12 +467,20 @@ def _is_input_too_large(exc: Exception) -> bool:
     해결책이 된다(분할하지 않으면 temperature 0 그리디 디코딩이라 재시도마다 같은 답이
     나와 영구 실패한다).
 
-    `finish_length`(출력 토큰 상한 도달)는 **제외한다**. 입력을 반으로 줄여도 항상 상한을
-    넘겨 쓰는 모델은 짧아지지 않아, 노드당 최대 22회까지 호출만 증폭시킨다.
+    `map_finish_length`도 포함한다. 이것은 공급자가 **더 큰 출력 예산으로 한 번 더 부른
+    뒤에도** 잘린 경우만 붙는 reason이다(실기기: 908노드 중 225번째가 3회 연속
+    finish_length로 실패해 문서 전체가 매번 버려졌다). 예산을 늘려도 안 되면 남은 수단은
+    입력을 줄이는 것뿐이고, 실제로 같은 문서의 다른 그룹은 분할로 통과했다.
+
+    한 번도 재시도하지 않은 날것의 `finish_length`는 **제외한다**. 공급자가 예산을 늘려
+    다시 부르는 것이 먼저이고, 그 단계를 건너뛰고 나누면 호출만 증폭된다.
     """
     if not isinstance(exc, SummaryNetworkError):
         return False
-    return exc.category == "context_overflow" or exc.reason == "map_summary_too_long"
+    return exc.category == "context_overflow" or exc.reason in (
+        "map_summary_too_long",
+        "map_finish_length",
+    )
 
 
 @dataclass

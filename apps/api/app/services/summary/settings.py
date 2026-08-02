@@ -27,6 +27,15 @@ REDUCE_FAN_IN = 8
 GROUP_SUMMARY_MAX_CHARS = 400
 SUMMARY_MAP_MAX_TOKENS = 512
 
+# 출력 상한에 걸려 JSON이 잘리면(finish_length) 응답 자체가 파싱 불가라 복구할 수 없다.
+# 실기기 로그: 908노드 중 225번째가 3회 연속 finish_length로 실패해, 이미 성공한 675개
+# 노드가 있는데도 매번 문서 전체가 버려졌다(temperature 0이라 재시도해도 같은 응답).
+#
+# 한 번은 더 넉넉한 예산으로 다시 부른다. 목적은 "잘린 JSON"을 "400자 초과"라는 복구
+# 가능한 계약 위반으로 바꾸는 것이다 — 그 다음은 executor가 입력을 나눠 적응한다.
+# 6,000자 그룹(≈4,740토큰) + 1,024 출력도 num_ctx=8192 안에 들어간다.
+SUMMARY_MAP_RETRY_MAX_TOKENS = 1024
+
 # 구조화 reduce는 overview·sections·keyConcepts 등을 한 번에 만들어 map보다 훨씬 길다.
 # 로컬 qwen3:8b 실측(그룹 8개 x 400자)에서 completion_tokens가 1,500 안팎으로 기존 상한
 # 2048의 72~74%까지 차올랐다. 여유가 얇으면 finish_reason=length로 잘린 JSON이 되어

@@ -12,6 +12,7 @@ from typing import Protocol
 from app.services.summary.settings import (
     GROUP_SUMMARY_MAX_CHARS,
     SUMMARY_MAP_MAX_TOKENS,
+    SUMMARY_MAP_RETRY_MAX_TOKENS,
     SUMMARY_REDUCE_MAX_TOKENS,
 )
 
@@ -569,13 +570,32 @@ class OpenAICompatibleSummaryProvider:
         )
         from app.services.summary.endpoint import SummaryNetworkError
 
-        raw = self._chat_for(
-            system,
-            user,
-            max_tokens=SUMMARY_MAP_MAX_TOKENS,
-            schema=_map_schema(),
-            external_max_tokens=SUMMARY_MAP_MAX_TOKENS,
-        )
+        def call(max_tokens: int) -> str:
+            return self._chat_for(
+                system,
+                user,
+                max_tokens=max_tokens,
+                schema=_map_schema(),
+                external_max_tokens=max_tokens,
+            )
+
+        try:
+            raw = call(SUMMARY_MAP_MAX_TOKENS)
+        except SummaryNetworkError as exc:
+            if exc.reason != "finish_length":
+                raise
+            # 출력 상한에 걸려 JSON이 잘렸다 — 응답이 파싱조차 안 되므로 그대로 두면
+            # 그 노드는 영구 실패한다(temperature 0이라 재시도해도 같은 지점에서 잘린다).
+            # 예산을 늘려 한 번만 다시 부른다. 그래도 넘치면 별도 reason으로 올려
+            # executor가 입력을 나눠 적응할 수 있게 한다.
+            try:
+                raw = call(SUMMARY_MAP_RETRY_MAX_TOKENS)
+            except SummaryNetworkError as retry_exc:
+                if retry_exc.reason == "finish_length":
+                    raise SummaryNetworkError(
+                        "bad_response", "map_finish_length"
+                    ) from retry_exc
+                raise
         parsed = self._parse_json_object(raw, stage="map")
         summary = parsed.get("summary")
         if not isinstance(summary, str):

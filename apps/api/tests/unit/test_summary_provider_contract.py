@@ -124,7 +124,9 @@ class TestFailureIsDiagnosable:
     @pytest.mark.parametrize(
         ("content", "finish_reason", "expected_reason"),
         [
-            (json.dumps({"summary": "정상"}), "length", "finish_length"),
+            # 출력 절단은 공급자가 예산을 늘려 한 번 더 부른다. 그래도 잘리면(이 mock은
+            # 항상 같은 응답을 준다) 분할 가능한 별도 reason으로 올린다.
+            (json.dumps({"summary": "정상"}), "length", "map_finish_length"),
             (json.dumps({"summary": "정상"}), "content_filter", "finish_content_filter"),
             (json.dumps({"summary": "정상"}), "무작위값", "finish_other"),
             ('{"summary":"끊김', "stop", "map_content_not_json"),
@@ -435,6 +437,11 @@ class TestLocalNativePath:
         assert "prerequisites" not in doc["properties"]
 
     def test_native_done_reason_is_checked_like_finish_reason(self):
+        """native의 done_reason도 OpenAI finish_reason과 같은 경로를 탄다.
+
+        절단은 공급자가 예산을 늘려 한 번 더 부르므로, 계속 잘리는 mock에서는 분할
+        가능한 map_finish_length로 올라온다.
+        """
         provider, _ = self._local(
             self._native_response(json.dumps({"summary": "정상"}), done_reason="length")
         )
@@ -442,7 +449,7 @@ class TestLocalNativePath:
         with pytest.raises(SummaryNetworkError) as caught:
             provider.summarize_group(_group_request())
 
-        assert caught.value.reason == "finish_length"
+        assert caught.value.reason == "map_finish_length"
 
     def test_non_ollama_local_server_keeps_openai_path(self):
         """is_local은 'loopback이다'이지 'Ollama다'가 아니다.
@@ -514,6 +521,22 @@ def test_group_size_fits_the_context_we_request():
     assert estimated < LOCAL_NUM_CTX, f"추정 {estimated:.0f}토큰 > num_ctx {LOCAL_NUM_CTX}"
 
 
+def test_map_retry_budget_also_fits_the_context_we_request():
+    """출력 절단 재시도는 예산을 키운다 — 그 예산까지 num_ctx 안에 들어가야 한다.
+
+    들어가지 않으면 절단을 고치려던 재시도가 컨텍스트 초과를 새로 만든다.
+    """
+    from app.services.summary.settings import (
+        GROUP_MAX_CHARS,
+        LOCAL_NUM_CTX,
+        SUMMARY_MAP_RETRY_MAX_TOKENS,
+    )
+
+    estimated = GROUP_MAX_CHARS * 0.79 + 150 + SUMMARY_MAP_RETRY_MAX_TOKENS
+    assert estimated < LOCAL_NUM_CTX, f"추정 {estimated:.0f}토큰 > num_ctx {LOCAL_NUM_CTX}"
+    assert SUMMARY_MAP_RETRY_MAX_TOKENS > SUMMARY_MAP_MAX_TOKENS
+
+
 def test_reduce_output_budget_fits_the_context_we_request():
     """구조화 reduce도 프롬프트 + 출력이 num_ctx 안에 들어가야 한다."""
     from app.services.summary.settings import (
@@ -526,6 +549,87 @@ def test_reduce_output_budget_fits_the_context_we_request():
     prompt_chars = GROUP_SUMMARY_MAX_CHARS * REDUCE_FAN_IN
     estimated = prompt_chars * 0.79 + 300 + SUMMARY_REDUCE_MAX_TOKENS
     assert estimated < LOCAL_NUM_CTX, f"추정 {estimated:.0f}토큰 > num_ctx {LOCAL_NUM_CTX}"
+
+
+class TestMapOutputBudget:
+    """출력 상한에 걸려 잘린 JSON은 파싱조차 안 되므로 그대로 두면 영구 실패한다.
+
+    실기기 로그: 908노드 중 225번째가 3회 연속 finish_length로 실패해, 이미 성공한
+    675개 노드가 있는데도 매번 문서 전체가 버려졌다(temperature 0이라 재시도해도 동일).
+    """
+
+    @staticmethod
+    def _sequence(responses: list[dict]):
+        """호출마다 다른 응답을 돌려주는 캡처(응답이 떨어지면 마지막 것을 반복)."""
+
+        class _Seq(_Capture):
+            def __call__(self, url, payload, api_key):
+                self.calls.append((url, payload, api_key))
+                self.payloads.append(payload)
+                index = min(len(self.calls) - 1, len(responses) - 1)
+                return responses[index]
+
+        return _Seq({})
+
+    def test_truncated_output_is_retried_with_a_larger_budget(self):
+        from app.services.summary.settings import SUMMARY_MAP_RETRY_MAX_TOKENS
+
+        capture = self._sequence(
+            [
+                _chat_response("{\"summary\":\"잘린", finish_reason="length"),
+                _chat_response(json.dumps({"summary": "정상 요약"})),
+            ]
+        )
+        provider = OpenAICompatibleSummaryProvider(
+            endpoint="https://api.example.com/v1",
+            model_name="test-model",
+            api_key="secret",
+            is_local=False,
+            http_client=capture,
+        )
+
+        result = provider.summarize_group(_group_request())
+
+        assert result.summary_text == "정상 요약"
+        assert len(capture.calls) == 2, "예산을 늘려 다시 부르지 않았다"
+        assert capture.calls[0][1]["max_tokens"] == SUMMARY_MAP_MAX_TOKENS
+        assert capture.calls[1][1]["max_tokens"] == SUMMARY_MAP_RETRY_MAX_TOKENS
+
+    def test_still_truncated_after_retry_becomes_a_splittable_reason(self):
+        """예산을 늘려도 넘치면 남은 수단은 입력을 줄이는 것뿐이다."""
+        capture = self._sequence(
+            [_chat_response("{\"summary\":\"잘린", finish_reason="length")]
+        )
+        provider = OpenAICompatibleSummaryProvider(
+            endpoint="https://api.example.com/v1",
+            model_name="test-model",
+            api_key="secret",
+            is_local=False,
+            http_client=capture,
+        )
+
+        with pytest.raises(SummaryNetworkError) as caught:
+            provider.summarize_group(_group_request())
+
+        assert caught.value.reason == "map_finish_length"
+        assert len(capture.calls) == 2, "재시도는 한 번뿐이어야 한다(호출 증폭 방지)"
+
+    def test_other_failures_are_not_retried(self):
+        """출력 절단이 아닌 실패까지 다시 부르면 호출만 낭비한다."""
+        capture = self._sequence([_chat_response("{}", finish_reason="content_filter")])
+        provider = OpenAICompatibleSummaryProvider(
+            endpoint="https://api.example.com/v1",
+            model_name="test-model",
+            api_key="secret",
+            is_local=False,
+            http_client=capture,
+        )
+
+        with pytest.raises(SummaryNetworkError) as caught:
+            provider.summarize_group(_group_request())
+
+        assert caught.value.reason == "finish_content_filter"
+        assert len(capture.calls) == 1
 
 
 class TestReduceContract:

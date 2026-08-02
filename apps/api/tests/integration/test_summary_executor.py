@@ -523,6 +523,31 @@ class TestAdaptiveSplitOnContextOverflow:
             await _run_executor(doc_id, run_id, job_id, rev, chash, provider)
         assert provider.group_calls == 1, f"분할 재시도 발생 ({provider.group_calls}회)"
 
+    async def test_truncation_that_survived_a_bigger_budget_does_split(self, client):
+        """공급자가 예산을 늘려 다시 부른 뒤에도 잘리면, 남은 수단은 입력을 줄이는 것뿐이다.
+
+        실기기에서 이 경로가 막혀 있어 908노드 중 225번째가 3회 연속 같은 지점에서
+        실패했고, 이미 성공한 675개 노드가 있는데도 문서 전체가 매번 버려졌다.
+        """
+        doc_id = await _upload_chunked(client, fx.single_column_korean(pages=3))
+
+        class TruncatesUntilSmall(CountingProvider):
+            """청크가 1개를 넘으면 예산을 늘려도 계속 잘린다(= map_finish_length)."""
+
+            def summarize_group(self, request):
+                if len(request.chunks) > 1:
+                    self.group_calls += 1
+                    raise SummaryNetworkError("bad_response", "map_finish_length")
+                return super().summarize_group(request)
+
+        provider = TruncatesUntilSmall()
+        run_id, job_id, rev, chash = await _make_run(doc_id, provider)
+
+        drafts = await _run_executor(doc_id, run_id, job_id, rev, chash, provider)
+
+        assert provider.group_calls > 0, "분할 경로가 실행되지 않았다"
+        assert drafts, "분할했는데도 artifact를 만들지 못했다"
+
     async def test_unrelated_failure_is_not_retried_by_splitting(self, client):
         """입력 크기와 무관한 실패까지 나눠 재시도하면 호출만 낭비한다."""
         doc_id = await _upload_chunked(client, fx.single_column_korean(pages=3))
