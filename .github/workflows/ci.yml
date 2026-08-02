@@ -7,9 +7,20 @@ on:
     branches: [develop, main]
   workflow_dispatch:
 
+# 같은 PR에 연달아 push하면 이전 실행은 이미 낡은 커밋을 검증하는 중이다. PR에서만
+# 취소한다 — develop push는 각 커밋이 독립적인 검증 기록이라 끝까지 돌린다.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# 이 워크플로는 저장소를 읽기만 한다(artifact 업로드는 별도 권한).
+permissions:
+  contents: read
+
 jobs:
   versions:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
       - name: 버전 일치 검증
@@ -17,12 +28,18 @@ jobs:
 
   backend:
     runs-on: ubuntu-latest
+    # 정상 소요는 2분 안쪽이다. 러너가 통신 두절로 죽으면 로그가 통째로 사라지므로
+    # (실측: Tests 단계 45분 정지 후 로그 미업로드) 기본 6시간을 기다리지 않는다.
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: apps/api
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: apps/api/uv.lock
       - name: Install dependencies
         run: uv sync
       - name: Lint
@@ -41,6 +58,7 @@ jobs:
 
   frontend:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: apps/web
@@ -68,7 +86,10 @@ jobs:
   # Windows 빌드 검증 — Release는 생성하지 않고 artifact만 업로드한다
   windows-build:
     runs-on: windows-latest
-    needs: [versions]
+    # Windows 러너는 분당 과금이 Linux의 2배이고 이 잡만 15분을 넘는다. lint·테스트가
+    # 이미 깨진 커밋에 그 시간을 쓰지 않는다(대신 시작이 1~2분 늦어진다).
+    needs: [versions, backend, frontend]
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v6
@@ -77,8 +98,19 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 22
+          cache: pnpm
+          cache-dependency-path: |
+            apps/web/pnpm-lock.yaml
+            apps/desktop/pnpm-lock.yaml
       - uses: dtolnay/rust-toolchain@stable
+      # Tauri release 빌드는 의존 crate를 매번 처음부터 컴파일한다 — 이 잡 소요의 대부분이다.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
       - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: apps/api/uv.lock
       - name: Frontend build (static export)
         working-directory: apps/web
         run: |
