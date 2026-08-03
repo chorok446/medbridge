@@ -61,10 +61,22 @@ async def error_report(db: AsyncSession = Depends(get_db)) -> dict:
         ).all()
     )
     recent_failures = [
-        {"failureCode": row[0], "occurredAt": row[1].isoformat() if row[1] else None}
+        {
+            "failureCode": row[0],
+            # 같은 코드에 여러 원인이 뭉쳐 있을 때 어느 계약이 깨졌는지. 코드가 정한
+            # 분류값만 저장되므로 문서 본문·모델 응답 원문은 들어가지 않는다.
+            # 이게 없으면 보고서만으로는 SUMMARY_INVALID_RESPONSE의 7가지 원인을
+            # 하나도 구분할 수 없다(로그 꼬리 200줄을 벗어나면 단서가 사라진다).
+            "failureReason": row[1],
+            "occurredAt": row[2].isoformat() if row[2] else None,
+        }
         for row in (
             await db.execute(
-                select(DocumentJob.failure_code, DocumentJob.completed_at)
+                select(
+                    DocumentJob.failure_code,
+                    DocumentJob.failure_reason,
+                    DocumentJob.completed_at,
+                )
                 .where(DocumentJob.failure_code.is_not(None))
                 .order_by(DocumentJob.created_at.desc())
                 .limit(20)

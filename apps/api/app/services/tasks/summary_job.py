@@ -51,16 +51,29 @@ async def _job_is_current(session, document_id: uuid.UUID, job_id: uuid.UUID) ->
     return job is not None and job.status in (JobStatus.QUEUED, JobStatus.RUNNING)
 
 
-async def _fail_run(session, run_id: uuid.UUID, job_id: uuid.UUID, code: str) -> None:
+async def _fail_run(
+    session,
+    run_id: uuid.UUID,
+    job_id: uuid.UUID,
+    code: str,
+    reason: str | None = None,
+) -> None:
+    """실패를 확정한다. `reason`은 같은 코드 안에서 어느 계약이 깨졌는지 가리킨다.
+
+    코드만 남기면 `SUMMARY_INVALID_RESPONSE` 하나에 7가지 원인이 뭉쳐, 오류 보고서를
+    받아도 잘린 JSON인지 HTTP 400인지 구분할 수 없다(로그 200줄 창을 벗어나면 끝이다).
+    """
     run = await session.get(SummaryRun, run_id)
     if run is not None and run.status in (SummaryRunStatus.QUEUED, SummaryRunStatus.RUNNING):
         run.status = SummaryRunStatus.FAILED
         run.error_code = code
+        run.failure_reason = reason
         run.completed_at = datetime.now(UTC)
     job = await session.get(DocumentJob, job_id)
     if job is not None and job.status in (JobStatus.QUEUED, JobStatus.RUNNING):
         job.status = JobStatus.FAILED
         job.failure_code = code
+        job.failure_reason = reason
         job.completed_at = datetime.now(UTC)
     await session.commit()
 
@@ -179,7 +192,9 @@ async def run_summary_job(
         )
         async with factory() as session:
             if await _job_is_current(session, document_id, job_id):
-                await _fail_run(session, run_id, job_id, failure_code)
+                await _fail_run(
+                    session, run_id, job_id, failure_code, _failure_reason(exc)
+                )
         return
 
     # 3) revision-guarded 원자적 저장

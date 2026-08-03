@@ -106,6 +106,9 @@ class DocumentJob(Base):
     max_attempts: Mapped[int] = mapped_column(Integer, default=3)
     correlation_id: Mapped[str] = mapped_column(String(64))
     failure_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # 실패 코드 하나에 여러 원인이 뭉쳐 있을 때 "어느 계약이 깨졌는지"를 가리키는
+    # 분류값. 코드가 정한 값만 들어간다 — 모델 응답 원문·문서 본문은 넣지 않는다.
+    failure_reason: Mapped[str | None] = mapped_column(String(50), nullable=True)
     failure_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

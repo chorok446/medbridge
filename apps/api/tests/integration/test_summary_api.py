@@ -1,5 +1,6 @@
 """요약 API 통합 테스트 — 생성/상태/조회/재시도/취소/삭제, 소유권, revision, 복구."""
 
+import json
 import uuid
 
 from sqlalchemy import func, select
@@ -339,6 +340,143 @@ class TestPartialSummaryIsSurfaced:
         body = res.json()["data"]
         assert body["failureCategory"] == "partial_content"
         assert body["canRetry"] is True, "내용이 빠졌는데 재시도 경로가 닫혀 있다"
+
+
+class TestFailureReasonIsRecoverableFromTheErrorReport:
+    """`SUMMARY_INVALID_RESPONSE` 하나에 7가지 원인이 뭉쳐 있다.
+
+    어느 계약이 깨졌는지는 로그에만 있었고, 오류 보고서가 담는 것은 실패 코드와 최근
+    200줄뿐이다. 실기기 보고서에서는 그 200줄이 전부 OCR 폴링이라, 요약이 잘린 JSON
+    때문에 죽었는지 HTTP 400으로 죽었는지 끝내 구분할 수 없었다.
+    """
+
+    async def _run_failing_summary(self, client, monkeypatch, reason: str):
+        from app.services.summary import service as summary_service
+        from app.services.summary.endpoint import SummaryNetworkError
+        from app.services.summary.provider import DeterministicSummaryProvider
+        from app.services.tasks import summary_job as job_mod
+
+        await enable_deterministic()
+        doc_id = await upload_chunked(client, fx.single_column_korean(pages=3))
+        duuid = uuid.UUID(doc_id)
+
+        class BrokenEnvelope(DeterministicSummaryProvider):
+            def summarize_group(self, request):
+                raise SummaryNetworkError("bad_response", reason)
+
+        async def _fake_provider(_session):
+            return BrokenEnvelope()
+
+        monkeypatch.setattr(job_mod, "get_summary_provider", _fake_provider)
+
+        async with get_session_factory()() as s:
+            doc = await s.get(Document, duuid)
+            run = SummaryRun(
+                document_id=duuid,
+                status=SummaryRunStatus.QUEUED,
+                provider_name="deterministic",
+                model_name="deterministic-test-v1",
+                prompt_version="3b-2",
+                schema_version=1,
+                source_revision=doc.content_revision,
+                source_chunk_hash=await summary_service.current_chunk_hash(s, duuid),
+                learner_level="nursing_student",
+                language="ko",
+            )
+            job = DocumentJob(
+                document_id=duuid,
+                job_type=JobType.SUMMARIZE,
+                status=JobStatus.QUEUED,
+                correlation_id="reason",
+            )
+            s.add(run)
+            s.add(job)
+            await s.commit()
+            run_id, job_id = run.id, job.id
+
+        await job_mod.run_summary_job(duuid, "reason", run_id=run_id, job_id=job_id)
+        return doc_id, run_id, job_id
+
+    async def test_reason_is_persisted_next_to_the_failure_code(
+        self, client, monkeypatch
+    ):
+        _, run_id, job_id = await self._run_failing_summary(
+            client, monkeypatch, "envelope_shape"
+        )
+        async with get_session_factory()() as s:
+            job = await s.get(DocumentJob, job_id)
+            run = await s.get(SummaryRun, run_id)
+        assert job.failure_code == "SUMMARY_INVALID_RESPONSE"
+        assert job.failure_reason == "envelope_shape"
+        assert run.failure_reason == "envelope_shape"
+
+    async def test_error_report_carries_the_reason(self, client, monkeypatch):
+        await self._run_failing_summary(client, monkeypatch, "envelope_not_json")
+
+        report = (await client.get("/api/system/error-report")).json()["data"]
+        failures = report["recentFailureCodes"]
+        assert any(
+            f["failureCode"] == "SUMMARY_INVALID_RESPONSE"
+            and f["failureReason"] == "envelope_not_json"
+            for f in failures
+        ), failures
+
+    async def test_unclassified_failures_report_no_reason_rather_than_leaking_text(
+        self, client, monkeypatch
+    ):
+        """분류되지 않은 예외는 원문을 남기지 않는다 — 본문이 보고서로 새면 안 된다."""
+        from app.services.summary.provider import DeterministicSummaryProvider
+        from app.services.tasks import summary_job as job_mod
+
+        await enable_deterministic()
+        doc_id = await upload_chunked(client, fx.single_column_korean(pages=3))
+        duuid = uuid.UUID(doc_id)
+        secret = "환자 김민준 혈압 180/110"
+
+        class LeakyProvider(DeterministicSummaryProvider):
+            def summarize_group(self, request):
+                raise RuntimeError(secret)
+
+        async def _fake_provider(_session):
+            return LeakyProvider()
+
+        monkeypatch.setattr(job_mod, "get_summary_provider", _fake_provider)
+
+        from app.services.summary import service as summary_service
+
+        async with get_session_factory()() as s:
+            doc = await s.get(Document, duuid)
+            run = SummaryRun(
+                document_id=duuid,
+                status=SummaryRunStatus.QUEUED,
+                provider_name="deterministic",
+                model_name="deterministic-test-v1",
+                prompt_version="3b-2",
+                schema_version=1,
+                source_revision=doc.content_revision,
+                source_chunk_hash=await summary_service.current_chunk_hash(s, duuid),
+                learner_level="nursing_student",
+                language="ko",
+            )
+            job = DocumentJob(
+                document_id=duuid,
+                job_type=JobType.SUMMARIZE,
+                status=JobStatus.QUEUED,
+                correlation_id="leak",
+            )
+            s.add(run)
+            s.add(job)
+            await s.commit()
+            run_id, job_id = run.id, job.id
+
+        await job_mod.run_summary_job(duuid, "leak", run_id=run_id, job_id=job_id)
+
+        async with get_session_factory()() as s:
+            job = await s.get(DocumentJob, job_id)
+        assert job.failure_code == "SUMMARY_FAILED"
+        assert job.failure_reason is None
+        report = (await client.get("/api/system/error-report")).json()["data"]
+        assert secret not in json.dumps(report, ensure_ascii=False)
 
 
 class TestSummaryExternalConsent:

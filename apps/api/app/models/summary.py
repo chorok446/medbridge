@@ -59,6 +59,9 @@ class SummaryRun(Base):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # 같은 error_code 안에서 어느 계약이 깨졌는지 가리키는 분류값(원문 없음).
+    # 사용자에게 보여주지 않는다 — 오류 보고서 진단용이다.
+    failure_reason: Mapped[str | None] = mapped_column(String(50), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now()
     )
