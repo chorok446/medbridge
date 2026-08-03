@@ -33,12 +33,25 @@ class QaHistoryTurn:
     content: str
 
 
+# 요약 파이프라인과 같은 3단계를 쓴다(learner_level). 알 수 없는 값은 기본값으로
+# 떨어뜨린다 — 사용자 입력이 프롬프트 문구를 바꾸는 경로이므로 화이트리스트로만 받는다.
+_LEVEL_HINTS = {
+    "concise": "답변은 간단하게, 핵심만 짧게 쓴다.",
+    "nursing_student": "간호학생이 이해할 수 있게 용어를 풀어 설명한다.",
+    "experienced_nurse": (
+        "임상 경험이 있는 간호사가 읽는다. 기초 용어 설명은 줄이고 핵심을 밀도 있게 쓴다."
+    ),
+}
+_DEFAULT_LEVEL = "nursing_student"
+
+
 @dataclass
 class QaRequest:
     question: str
     chunks: list[QaContextChunk]
     history: list[QaHistoryTurn] = field(default_factory=list)
     language: str = "ko"
+    learner_level: str = _DEFAULT_LEVEL
 
 
 class QaProvider(Protocol):
@@ -208,6 +221,7 @@ def _build_user_prompt(request: QaRequest) -> str:
     )
     parts.append(f"문서 청크:\n{chunk_block}")
     parts.append(f"질문: {request.question}")
+    parts.append(_LEVEL_HINTS.get(request.learner_level, _LEVEL_HINTS[_DEFAULT_LEVEL]))
     parts.append(
         f"위 청크만 근거로 JSON으로 답하라. claims는 최대 {MAX_CLAIMS}개, "
         f"followUpSuggestions는 최대 {MAX_FOLLOWUPS}개, 문서 범위 질문만."

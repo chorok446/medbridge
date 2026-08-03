@@ -291,6 +291,7 @@ async def run_stream(
     start_chunk_rev: int | None,
     request,
     *,
+    learner_level: str = "nursing_student",
     diag: dict | None = None,
 ):
     """NDJSON 이벤트 dict를 순차 yield하는 async 제너레이터. 항상 assistant를 terminal로 확정.
@@ -368,6 +369,7 @@ async def run_stream(
             question=user_content,
             chunks=retrieval.chunks,
             history=await _recent_history_safe(factory, thread_id, assistant_id),
+            learner_level=learner_level,
         )
 
         # 공급자 스트리밍을 스레드에서 실행하고 큐로 넘긴다(네트워크 I/O 격리·취소 가능)

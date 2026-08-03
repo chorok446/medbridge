@@ -44,6 +44,18 @@ class ThreadUpdate(CamelModel):
 
 class QuestionIn(CamelModel):
     question: str = Field(min_length=1)
+    # 답변 깊이. 저장하지 않고 요청마다 받는다 — 화면이 마지막 선택을 기억한다.
+    learner_level: str = Field(
+        default="nursing_student",
+        pattern="^(concise|nursing_student|experienced_nurse)$",
+    )
+
+
+class RetryIn(CamelModel):
+    learner_level: str = Field(
+        default="nursing_student",
+        pattern="^(concise|nursing_student|experienced_nurse)$",
+    )
 
 
 class ClaimOut(CamelModel):
@@ -198,7 +210,9 @@ async def post_message(
 ) -> dict:
     doc = await get_owned_document(db, user, document_id)
     thread = await qa_service.get_owned_thread(db, doc, thread_id)
-    await qa_service.ask(db, doc, user, thread, body.question)
+    await qa_service.ask(
+        db, doc, user, thread, body.question, learner_level=body.learner_level
+    )
     return wrap(await _answer_detail(db, thread))
 
 
@@ -209,12 +223,16 @@ async def post_message(
 async def retry_message(
     document_id: uuid.UUID,
     thread_id: uuid.UUID,
+    body: RetryIn | None = None,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     doc = await get_owned_document(db, user, document_id)
     thread = await qa_service.get_owned_thread(db, doc, thread_id)
-    await qa_service.retry_last(db, doc, user, thread)
+    # 수준은 저장하지 않으므로 재시도 때도 화면이 현재 선택값을 다시 보낸다.
+    await qa_service.retry_last(
+        db, doc, user, thread, learner_level=(body.learner_level if body else "nursing_student")
+    )
     return wrap(await _answer_detail(db, thread))
 
 
@@ -242,6 +260,7 @@ async def stream_message(
     user_msg, assistant_msg, request_id = await qa_stream.prepare_stream(
         db, doc, user, thread, body.question
     )
+    learner_level = body.learner_level
     aid = assistant_msg.id
     user_content = user_msg.content
     start_content_rev = doc.content_revision
@@ -252,6 +271,7 @@ async def stream_message(
         async for event in qa_stream.run_stream(
             document_id, thread_id, aid, user_content, request_id,
             start_content_rev, start_chunk_rev, request,
+            learner_level=learner_level,
         ):
             chunk = sp.encode_event(event)
             if len(chunk) > sp.MAX_EVENT_BYTES:

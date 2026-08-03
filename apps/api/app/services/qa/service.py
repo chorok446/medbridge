@@ -193,7 +193,13 @@ def _validate_question(question: str) -> str:
 
 
 async def ask(
-    db: AsyncSession, doc: Document, user: User, thread: QaThread, question: str
+    db: AsyncSession,
+    doc: Document,
+    user: User,
+    thread: QaThread,
+    question: str,
+    *,
+    learner_level: str = "nursing_student",
 ) -> AnswerOutcome:
     """질문 저장 → 검색 → 답변 생성 → 검증 → 저장. 동기 응답."""
     q = _validate_question(question)
@@ -252,12 +258,17 @@ async def ask(
     history = await _recent_history(db, thread.id, before_seq=user_msg.sequence_number)
     return await _generate(
         db, doc, user, thread, user_msg, assistant_msg, q, history,
-        start_content_rev, start_chunk_rev, provider,
+        start_content_rev, start_chunk_rev, provider, learner_level,
     )
 
 
 async def retry_last(
-    db: AsyncSession, doc: Document, user: User, thread: QaThread
+    db: AsyncSession,
+    doc: Document,
+    user: User,
+    thread: QaThread,
+    *,
+    learner_level: str = "nursing_student",
 ) -> AnswerOutcome:
     """마지막 실패/변경 assistant 메시지를 재시도한다(직전 user 질문으로)."""
     messages = list(
@@ -319,7 +330,7 @@ async def retry_last(
     history = await _recent_history(db, thread.id, before_seq=last_user.sequence_number)
     return await _generate(
         db, doc, user, thread, last_user, last_assistant, last_user.content, history,
-        start_content_rev, start_chunk_rev, provider,
+        start_content_rev, start_chunk_rev, provider, learner_level,
     )
 
 
@@ -372,7 +383,7 @@ async def _document_changed(
 
 async def _generate(
     db, doc, user, thread, user_msg, assistant_msg, question, history,
-    start_content_rev, start_chunk_rev, provider,
+    start_content_rev, start_chunk_rev, provider, learner_level="nursing_student",
 ) -> AnswerOutcome:
     import asyncio
 
@@ -403,7 +414,12 @@ async def _generate(
             user_msg=user_msg,
         )
 
-    request = QaRequest(question=question, chunks=retrieval.chunks, history=history)
+    request = QaRequest(
+        question=question,
+        chunks=retrieval.chunks,
+        history=history,
+        learner_level=learner_level,
+    )
     try:
         # 외부 전송 직전 동의 재확인 — identity map의 낡은 값을 피하려고 새로 읽는다.
         if provider_is_external(provider):

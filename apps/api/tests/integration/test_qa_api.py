@@ -431,3 +431,59 @@ class TestFollowupsReachTheClient:
         )
         detail = (await client.get(f"/api/documents/{doc_id}/qa/threads/{tid}")).json()["data"]
         assert assistant_of(detail)["followups"] == []
+
+
+class TestLearnerLevelWiring:
+    """라우트 → 서비스 → 공급자까지 여러 홉이라 배선이 끊겨도 조용하다. 끝에서 확인한다."""
+
+    async def test_requested_level_reaches_the_provider(self, client, monkeypatch):
+        await enable_deterministic()
+        from app.services.qa import provider as prov
+
+        seen: list[str] = []
+        original = prov.DeterministicQaProvider.answer
+
+        def capture(self, request):
+            seen.append(request.learner_level)
+            return original(self, request)
+
+        monkeypatch.setattr(prov.DeterministicQaProvider, "answer", capture)
+
+        doc_id = await upload_chunked(client, fx.single_column_korean(pages=2))
+        tid = await new_thread(client, doc_id)
+        await client.post(
+            f"/api/documents/{doc_id}/qa/threads/{tid}/messages",
+            json={"question": "심장은 무엇을 하나요?", "learnerLevel": "experienced_nurse"},
+        )
+        assert seen == ["experienced_nurse"]
+
+    async def test_omitted_level_uses_the_default(self, client, monkeypatch):
+        await enable_deterministic()
+        from app.services.qa import provider as prov
+
+        seen: list[str] = []
+        original = prov.DeterministicQaProvider.answer
+
+        def capture(self, request):
+            seen.append(request.learner_level)
+            return original(self, request)
+
+        monkeypatch.setattr(prov.DeterministicQaProvider, "answer", capture)
+
+        doc_id = await upload_chunked(client, fx.single_column_korean(pages=2))
+        tid = await new_thread(client, doc_id)
+        await client.post(
+            f"/api/documents/{doc_id}/qa/threads/{tid}/messages",
+            json={"question": "심장은 무엇을 하나요?"},
+        )
+        assert seen == ["nursing_student"]
+
+    async def test_unknown_level_is_rejected_at_the_edge(self, client):
+        await enable_deterministic()
+        doc_id = await upload_chunked(client, fx.single_column_korean(pages=2))
+        tid = await new_thread(client, doc_id)
+        res = await client.post(
+            f"/api/documents/{doc_id}/qa/threads/{tid}/messages",
+            json={"question": "심장은 무엇을 하나요?", "learnerLevel": "wizard"},
+        )
+        assert res.status_code == 422

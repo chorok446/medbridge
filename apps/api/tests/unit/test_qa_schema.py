@@ -324,6 +324,25 @@ class TestDeterministicProviderCitations:
         assert "[c0]" in _SYSTEM_PROMPT
 
 
+class TestLearnerLevelReachesThePrompt:
+    """학습 수준은 요약에만 있었다 — 질문 경로에도 통과시킨다."""
+
+    def test_level_changes_the_user_prompt(self):
+        from app.services.qa.provider import _build_user_prompt
+
+        base = QaRequest(question="심장은?", chunks=[], learner_level="nursing_student")
+        concise = QaRequest(question="심장은?", chunks=[], learner_level="concise")
+        assert _build_user_prompt(base) != _build_user_prompt(concise)
+        assert "간단" in _build_user_prompt(concise)
+
+    def test_unknown_level_falls_back_to_default(self):
+        from app.services.qa.provider import _build_user_prompt
+
+        weird = QaRequest(question="심장은?", chunks=[], learner_level="wizard")
+        default = QaRequest(question="심장은?", chunks=[])
+        assert _build_user_prompt(weird) == _build_user_prompt(default)
+
+
 class TestConflictDetectorAndReasons:
     C1 = "초기 연구에서는 이 요법이 사망 위험을 감소시킨다고 보고하였다"
     C2 = "후속 연구에서는 이 요법이 사망 위험에 영향을 주지 않았다고 보고하였다"
