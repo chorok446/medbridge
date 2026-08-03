@@ -209,6 +209,94 @@ class TestVerify:
         assert len(out.followups) == 3
 
 
+class TestCitationMarkers:
+    """답변 산문의 [c<n>] 마커는 검증을 통과한 근거만 가리켜야 한다."""
+
+    def test_valid_marker_survives(self):
+        lookup = _lookup(("c1", "심장은 혈액을 보낸다"))
+        out = verify(
+            {"answer": "심장은 혈액을 보냅니다[c0].", "answerStatus": "answered",
+             "claims": [{"text": "심장은 혈액을 보낸다", "sourceChunkIds": ["c1"]}]},
+            lookup, had_results=True,
+        )
+        assert out.answer == "심장은 혈액을 보냅니다[c0]."
+
+    def test_out_of_range_marker_is_removed(self):
+        lookup = _lookup(("c1", "심장은 혈액을 보낸다"))
+        out = verify(
+            {"answer": "심장은 혈액을 보냅니다[c7].", "answerStatus": "answered",
+             "claims": [{"text": "심장은 혈액을 보낸다", "sourceChunkIds": ["c1"]}]},
+            lookup, had_results=True,
+        )
+        assert out.answer == "심장은 혈액을 보냅니다."
+
+    def test_marker_to_unsupported_claim_is_removed(self):
+        # 두 번째 claim은 유효 출처가 없어 unsupported → 그 마커는 지운다.
+        lookup = _lookup(("c1", "심장은 혈액을 보낸다"))
+        out = verify(
+            {"answer": "심장은 혈액을 보냅니다[c0]. 폐는 산소를 만듭니다[c1].",
+             "answerStatus": "answered",
+             "claims": [{"text": "심장은 혈액을 보낸다", "sourceChunkIds": ["c1"]},
+                        {"text": "폐는 산소를 만든다", "sourceChunkIds": ["없는청크"]}]},
+            lookup, had_results=True,
+        )
+        assert "[c1]" not in out.answer
+        assert "[c0]" in out.answer
+
+    def test_marker_is_remapped_when_earlier_claim_is_skipped(self):
+        # 0번 raw 항목이 빈 텍스트로 버려지면 모델의 [c1]은 최종 claim_index 0을 가리켜야 한다.
+        lookup = _lookup(("c1", "심장은 혈액을 보낸다"))
+        out = verify(
+            {"answer": "심장은 혈액을 보냅니다[c1].", "answerStatus": "answered",
+             "claims": [{"text": "", "sourceChunkIds": ["c1"]},
+                        {"text": "심장은 혈액을 보낸다", "sourceChunkIds": ["c1"]}]},
+            lookup, had_results=True,
+        )
+        assert out.claims[0].claim_index == 0
+        assert out.answer == "심장은 혈액을 보냅니다[c0]."
+
+    def test_repeated_marker_for_same_claim_is_kept(self):
+        lookup = _lookup(("c1", "심장은 혈액을 보낸다"))
+        out = verify(
+            {"answer": "심장은 혈액을 보냅니다[c0]. 다시 말해 그렇습니다[c0].",
+             "answerStatus": "answered",
+             "claims": [{"text": "심장은 혈액을 보낸다", "sourceChunkIds": ["c1"]}]},
+            lookup, had_results=True,
+        )
+        assert out.answer.count("[c0]") == 2
+
+    def test_answer_without_markers_is_untouched(self):
+        lookup = _lookup(("c1", "심장은 혈액을 보낸다"))
+        out = verify(
+            {"answer": "심장은 혈액을 보냅니다.", "answerStatus": "answered",
+             "claims": [{"text": "심장은 혈액을 보낸다", "sourceChunkIds": ["c1"]}]},
+            lookup, had_results=True,
+        )
+        assert out.answer == "심장은 혈액을 보냅니다."
+
+    def test_document_brackets_are_not_treated_as_markers(self):
+        lookup = _lookup(("c1", "심장은 혈액을 보낸다"))
+        out = verify(
+            {"answer": "표 [1]과 [c0]을 보라.", "answerStatus": "answered",
+             "claims": [{"text": "심장은 혈액을 보낸다", "sourceChunkIds": ["c1"]}]},
+            lookup, had_results=True,
+        )
+        assert "표 [1]" in out.answer
+
+    def test_conflicting_claim_marker_survives(self):
+        c1 = "초기 연구에서는 이 요법이 사망 위험을 감소시킨다고 보고하였다"
+        c2 = "후속 연구에서는 이 요법이 사망 위험에 영향을 주지 않았다고 보고하였다"
+        lookup = _lookup(("c1", c1), ("c2", c2))
+        out = verify(
+            {"answer": f"{c1}[c0] 그러나 {c2}[c1]", "answerStatus": "answered",
+             "claims": [{"text": c1, "sourceChunkIds": ["c1"]},
+                        {"text": c2, "sourceChunkIds": ["c2"]}]},
+            lookup, had_results=True,
+        )
+        assert out.answer_status == "conflicting_evidence"
+        assert "[c0]" in out.answer and "[c1]" in out.answer
+
+
 class TestConflictDetectorAndReasons:
     C1 = "초기 연구에서는 이 요법이 사망 위험을 감소시킨다고 보고하였다"
     C2 = "후속 연구에서는 이 요법이 사망 위험에 영향을 주지 않았다고 보고하였다"

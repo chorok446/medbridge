@@ -9,6 +9,7 @@ import math
 import re
 from dataclasses import dataclass, field
 
+from app.core.logging import get_logger
 from app.models.enums import QaClaimVerification
 from app.services.qa.context import QaChunkRef
 from app.services.qa.settings import (
@@ -26,6 +27,12 @@ _WORD_RE = re.compile(r"[0-9A-Za-z가-힣]{2,}")
 # 부정 극성 표지 — 어휘 중복만으로 "A는 X한다"의 반대인 "A는 X하지 않는다"가 통과하는
 # 것을 막는다(의료 안전상 극성 뒤집힘이 가장 위험). 한국어 부정소 + 영어 부정어.
 _NEGATION_MARKERS = ("않", "없", "아니", "못", " 안 ", " no ", " not ", "n't", "없이")
+
+logger = get_logger(__name__)
+
+# 답변 산문 안의 인용 마커. 문서 본문에 흔한 대괄호(`[1]`, `[표 3]`)를 인용으로 오인하지
+# 않도록 `c` 접두사를 요구한다. MAX_CLAIMS=20이라 두 자리면 충분하다.
+_CITATION_RE = re.compile(r"\[c(\d{1,2})\]")
 
 # 지원 claim 간 상충 감지에 필요한 최소 공유 주제 토큰 수. 서로 다른 근거 청크의 두
 # 주장이 같은 대상을 다루면서(주제 어휘 충분히 겹침) 부정 극성만 반대일 때 상충으로 본다.
@@ -212,8 +219,12 @@ def verify(
 
     verified: list[VerifiedClaim] = []
     seen_text: set[str] = set()
+    # 모델이 쓴 마커 번호(모델 자신의 claims 배열 위치) → 최종 claim_index. 비었거나
+    # 중복인 항목을 건너뛰는 순간 둘이 어긋나므로, 이 표 없이 마커를 그대로 두면
+    # 사용자가 누른 번호가 엉뚱한 근거로 이동한다.
+    raw_to_index: dict[int, int] = {}
     idx = 0
-    for raw in (model_output.get("claims") or [])[: MAX_CLAIMS * 2]:
+    for raw_pos, raw in enumerate((model_output.get("claims") or [])[: MAX_CLAIMS * 2]):
         if not isinstance(raw, dict):
             continue
         text = str(raw.get("text") or "").strip()[:CLAIM_TEXT_MAX_CHARS]
@@ -230,6 +241,7 @@ def verify(
         else:
             claim_status = QaClaimVerification.SUPPORTED
         seen_text.add(text)
+        raw_to_index[raw_pos] = idx
         verified.append(
             VerifiedClaim(
                 claim_index=idx,
@@ -273,6 +285,39 @@ def verify(
         # 근거가 없으면 unsupported claim을 확정 사실처럼 저장하지 않는다
         verified = [c for c in verified if c.verification_status != QaClaimVerification.UNSUPPORTED]
 
+    # 마커 정리는 claim 필터링이 끝난 뒤에 돈다 — 걸러진 claim의 마커도 함께 사라져야 한다.
+    answer, dropped_citations = _rewrite_citations(answer, verified, raw_to_index)
+    if dropped_citations:
+        # 조용히 지우지 않는다. 마커가 통째로 사라지는 회귀를 로그에서 볼 수 있어야 한다.
+        # 원문은 남기지 않고 개수만 남긴다.
+        logger.info("qa_citations_dropped", dropped=dropped_citations)
+
     return VerifiedAnswer(
         answer=answer, answer_status=status, claims=verified, followups=followups
     )
+
+
+def _rewrite_citations(
+    answer: str, claims: list[VerifiedClaim], raw_to_index: dict[int, int]
+) -> tuple[str, int]:
+    """마커를 최종 claim_index로 다시 쓰고, 해석되지 않는 마커는 지운다.
+
+    남은 마커는 전부 "검증을 통과해 화면에 보이는 claim"을 가리킨다. 모델이 없는 근거를
+    지어내거나 번호를 잘못 써도 화면에는 인용 번호가 뜨지 않는다.
+    """
+    valid = {
+        c.claim_index
+        for c in claims
+        if c.verification_status != QaClaimVerification.UNSUPPORTED
+    }
+    dropped = 0
+
+    def _sub(m: re.Match) -> str:
+        nonlocal dropped
+        target = raw_to_index.get(int(m.group(1)))
+        if target is None or target not in valid:
+            dropped += 1
+            return ""
+        return f"[c{target}]"
+
+    return _CITATION_RE.sub(_sub, answer), dropped
