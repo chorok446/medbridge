@@ -146,6 +146,8 @@ PRODUCT.md의 anti-reference를 그대로 계승한다: 이 시스템은 **개�
 ### Named Rules
 **종이 한 장 규칙.** 화면에는 책상과 그 위의 종이, 두 층만 존재한다. 종이 위에 또 떠 있는 종이(중첩 카드, 그림자 스택)는 금지.
 
+**브랜드 마크 예외.** 그라디언트(Trust Blue `#2563eb` → Clinical Teal `#0D9488`)는 **앱 아이콘과 헤더 마크에만** 허용한다. UI 컴포넌트에는 여전히 금지다. `Clinical Teal`은 브랜드 색이며 상태 색·행동 색으로 쓰지 않는다 — 상태 4쌍과 Study Blue 규칙은 그대로다. 이 예외를 적어두지 않으면 "로고가 그라디언트니까 버튼도"로 번진다. 원본: `docs/brand/medbridge-logo-concept-1.svg`.
+
 ## 5. Components
 
 ### Buttons
