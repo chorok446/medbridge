@@ -29,6 +29,17 @@ GROUP_MIN_CHARS = 5000
 # 계층 reduce 한 단계에서 합치는 하위 요약 개수. 어느 단계도 모델 context를 넘지 않도록
 # 고정 상한을 둔다(711 → 89 → 12 → 2 → 구조화 reduce).
 REDUCE_FAN_IN = 8
+
+
+def summary_node_concurrency() -> int:
+    """같은 레벨에서 동시에 실행할 노드 수 (env `SUMMARY_NODE_CONCURRENCY`).
+
+    상수가 아니라 함수인 이유: 값이 사용자 기기 설정에서 오므로 import 시점에 굳으면
+    안 된다. 튜닝 근거는 `app.core.config.Settings.summary_node_concurrency` 참고.
+    """
+    from app.core.config import get_settings
+
+    return get_settings().summary_node_concurrency
 # map은 계층 reduce 입력용 짧은 JSON만 만든다. 로컬 모델이 불필요하게 긴 출력을
 # 만들어 finish_reason=length와 잘린 JSON을 반환하지 않도록 문자·토큰을 함께 제한한다.
 GROUP_SUMMARY_MAX_CHARS = 400

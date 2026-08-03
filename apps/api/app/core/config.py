@@ -24,6 +24,15 @@ class Settings(BaseSettings):
     max_pdf_size_mb: int = 800
     max_concurrent_jobs: int = 2
 
+    # 요약 계층의 같은 레벨에서 동시에 실행할 노드 수. 실기기 문서는 map 노드가 794개라
+    # 순차 실행으로는 몇 시간이 걸린다(`docs/testing/windows-local-ai-activation-diagnosis.md`).
+    #
+    # 실제 상한은 공급자다. Ollama는 OLLAMA_NUM_PARALLEL만큼만 진짜로 병렬 처리하고
+    # 나머지는 큐에 쌓이며, 큐에서 기다리는 시간도 요청 타임아웃을 소모한다. 그래서 크게
+    # 잡을수록 좋은 값이 아니라 기기에 맞춰야 하는 값이고, 화면에 노출하는 대신 env로
+    # 조정한다(SUMMARY_NODE_CONCURRENCY). 외부 provider는 거의 선형으로 빨라진다.
+    summary_node_concurrency: int = Field(default=4, ge=1, le=16)
+
     # 실제 상용 임베딩 공급자는 아직 없다 — "disabled"가 유일한 기본값이며,
     # 테스트에서만 "deterministic"으로 바꿔 쓴다. API 키를 여기 하드코딩하지 않는다.
     embedding_provider: str = Field(default="disabled", pattern="^(disabled|deterministic)$")

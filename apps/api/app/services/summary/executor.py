@@ -17,7 +17,7 @@ import asyncio
 import uuid
 from dataclasses import dataclass, replace
 
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 
 from app.core.logging import get_logger
 from app.models.document import Document
@@ -49,6 +49,7 @@ from app.services.summary.settings import (
     PROMPT_VERSION,
     REDUCE_FAN_IN,
     SCHEMA_VERSION,
+    summary_node_concurrency,
 )
 
 logger = get_logger(__name__)
@@ -141,6 +142,68 @@ def _output_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _representative_error(group: BaseExceptionGroup) -> BaseException:
+    """여러 노드가 함께 실패했을 때 호출자에게 올릴 예외 하나를 고른다.
+
+    취소·revision 변경은 실패가 아니라 제어 흐름이다. 모델 실패를 올리면 사용자가 직접
+    취소한 작업이 '요약 실패'로 기록되고, 문서가 바뀌어 버려야 할 결과가 공급자 오류로
+    둔갑해 오류 리포트를 오염시킨다. 그래서 하나라도 있으면 그쪽을 우선한다.
+
+    형제 태스크를 취소하며 생긴 `CancelledError`는 원인이 아니므로 제외한다 — 그걸
+    올리면 진짜 실패 원인이 분류 단계(`_classify_pipeline_failure`)에 닿지 못한다.
+    """
+    leaves: list[BaseException] = []
+    pending: list[BaseException] = [group]
+    while pending:
+        exc = pending.pop(0)
+        if isinstance(exc, BaseExceptionGroup):
+            pending = list(exc.exceptions) + pending
+        elif not isinstance(exc, asyncio.CancelledError):
+            leaves.append(exc)
+    for exc in leaves:
+        if isinstance(exc, SummaryCancelled | SummaryRevisionChanged):
+            return exc
+    # 남은 게 없으면 실행 자체가 밖에서 취소된 것이다 — 그대로 전파한다.
+    return leaves[0] if leaves else asyncio.CancelledError()
+
+
+async def _run_level(factory, specs: list[dict]) -> list[_NodeResult]:
+    """같은 레벨의 노드들을 동시에 실행한다. 결과는 입력(=position) 순서를 유지한다.
+
+    한 레벨 안의 노드는 서로의 결과를 쓰지 않으므로 순서를 지킬 이유가 없고, 순차
+    실행은 곧 대기 시간이다(실기기: map 794개 x 노드당 수 초 = 수 시간).
+
+    완료 순서가 아니라 **입력 순서**로 결과를 모으는 것이 핵심이다. 순서가 실행마다
+    달라지면 상위 reduce의 input_hash가 같이 달라져 노드 재사용이 통째로 무효가 되고,
+    같은 문서를 재시도할 때마다 처음부터 다시 요약하게 된다.
+    """
+    concurrency = max(1, summary_node_concurrency())
+    if concurrency == 1 or len(specs) <= 1:
+        return [await _process_node(factory, **spec) for spec in specs]
+
+    results: list[_NodeResult | None] = [None] * len(specs)
+    limit = asyncio.Semaphore(concurrency)
+
+    async def run_one(index: int, spec: dict) -> None:
+        async with limit:
+            results[index] = await _process_node(factory, **spec)
+
+    try:
+        # TaskGroup은 첫 실패에서 나머지를 취소한다. gather는 취소하지 않아, 사용자가
+        # 이미 오류를 본 뒤에도 남은 수백 개 호출이 계속 모델을 돌린다.
+        async with asyncio.TaskGroup() as tasks:
+            for index, spec in enumerate(specs):
+                tasks.create_task(run_one(index, spec))
+    except BaseExceptionGroup as group:
+        raise _representative_error(group) from None
+
+    if any(node is None for node in results):
+        # TaskGroup은 실패하면 예외를 던지므로 여기 도달하면 계약이 깨진 것이다. 조용히
+        # 건너뛰면 그 그룹의 내용이 통째로 빠진 요약이 '정상 완료'로 저장된다.
+        raise SummaryNetworkError("bad_response", "level_incomplete")
+    return [node for node in results if node is not None]
+
+
 async def execute_hierarchical_summary(
     factory,
     *,
@@ -209,54 +272,56 @@ async def execute_hierarchical_summary(
     counter = _Counter()
 
     # --- 레벨 0: 청크 그룹 map ---
-    level_nodes: list[_NodeResult] = []
-    for position, group in enumerate(groups):
-        input_hash = map_node_input_hash(
-            context_key, [(c.chunk_id, c.text) for c in group.chunks]
-        )
-        source_ids = list(dict.fromkeys(c.chunk_id for c in group.chunks))
-        request = GroupRequest(
-            group_id=group.group_id,
-            section_title=group.section_title,
-            chunks=group.chunks,
-            learner_level=learner_level,
-            language=language,
-        )
-        node = await _process_node(
-            factory,
-            provider=provider,
-            run_id=run_id,
-            document_id=document_id,
-            level=0,
-            position=position,
-            input_hash=input_hash,
-            request=request,
-            source_ids=source_ids,
-            # 레벨 0의 요청 청크는 원본 청크 그 자체다.
-            chunk_sources={c.chunk_id: [c.chunk_id] for c in group.chunks},
-            section_title=group.section_title,
-            counter=counter,
-            guard_args=guard_args,
-        )
-        level_nodes.append(node)
+    level_nodes = await _run_level(
+        factory,
+        [
+            dict(
+                provider=provider,
+                run_id=run_id,
+                document_id=document_id,
+                level=0,
+                position=position,
+                input_hash=map_node_input_hash(
+                    context_key, [(c.chunk_id, c.text) for c in group.chunks]
+                ),
+                request=GroupRequest(
+                    group_id=group.group_id,
+                    section_title=group.section_title,
+                    chunks=group.chunks,
+                    learner_level=learner_level,
+                    language=language,
+                ),
+                source_ids=list(dict.fromkeys(c.chunk_id for c in group.chunks)),
+                # 레벨 0의 요청 청크는 원본 청크 그 자체다.
+                chunk_sources={c.chunk_id: [c.chunk_id] for c in group.chunks},
+                section_title=group.section_title,
+                counter=counter,
+                guard_args=guard_args,
+            )
+            for position, group in enumerate(groups)
+        ],
+    )
 
     # --- 레벨 1+: bounded fan-in reduce ---
     level = 1
 
-    async def reduce_round(nodes: list[_NodeResult], fan_in: int, level: int):
-        """한 레벨을 fan_in개씩 묶어 상위 노드로 줄인다."""
-        next_nodes: list[_NodeResult] = []
-        for position, batch in enumerate(fan_in_batches(nodes, fan_in)):
-            input_hash = reduce_node_input_hash(
+    def _reduce_spec(position: int, batch: list[_NodeResult], level: int) -> dict:
+        # 출처는 자식 출처의 합집합 — 서버가 계산하고 모델 출력은 쓰지 않는다.
+        merged_source_ids: list[str] = []
+        for child in batch:
+            for cid in child.source_chunk_ids:
+                if cid not in merged_source_ids:
+                    merged_source_ids.append(cid)
+        return dict(
+            provider=provider,
+            run_id=run_id,
+            document_id=document_id,
+            level=level,
+            position=position,
+            input_hash=reduce_node_input_hash(
                 context_key, level, [(n.input_hash, n.summary_text) for n in batch]
-            )
-            # 출처는 자식 출처의 합집합 — 서버가 계산하고 모델 출력은 쓰지 않는다.
-            merged_source_ids: list[str] = []
-            for child in batch:
-                for cid in child.source_chunk_ids:
-                    if cid not in merged_source_ids:
-                        merged_source_ids.append(cid)
-            request = GroupRequest(
+            ),
+            request=GroupRequest(
                 group_id=f"L{level}n{position}",
                 section_title=batch[0].section_title,
                 chunks=[
@@ -271,27 +336,30 @@ async def execute_hierarchical_summary(
                 ],
                 learner_level=learner_level,
                 language=language,
-            )
-            node = await _process_node(
-                factory,
-                provider=provider,
-                run_id=run_id,
-                document_id=document_id,
-                level=level,
-                position=position,
-                input_hash=input_hash,
-                request=request,
-                source_ids=merged_source_ids,
-                # 레벨 1+의 요청 청크는 자식 노드다 — 그 노드의 출처가 원본 chunk id다.
-                chunk_sources={
-                    str(child.node_id): list(child.source_chunk_ids) for child in batch
-                },
-                section_title=batch[0].section_title,
-                counter=counter,
-                guard_args=guard_args,
-            )
-            next_nodes.append(node)
-        return next_nodes
+            ),
+            source_ids=merged_source_ids,
+            # 레벨 1+의 요청 청크는 자식 노드다 — 그 노드의 출처가 원본 chunk id다.
+            chunk_sources={
+                str(child.node_id): list(child.source_chunk_ids) for child in batch
+            },
+            section_title=batch[0].section_title,
+            counter=counter,
+            guard_args=guard_args,
+        )
+
+    async def reduce_round(nodes: list[_NodeResult], fan_in: int, level: int):
+        """한 레벨을 fan_in개씩 묶어 상위 노드로 줄인다.
+
+        레벨과 레벨 사이에는 의존이 있지만 한 레벨 안의 배치끼리는 독립이므로 동시에
+        실행한다(레벨 경계는 그대로 지킨다 — 자식 요약이 있어야 부모를 만들 수 있다).
+        """
+        return await _run_level(
+            factory,
+            [
+                _reduce_spec(position, batch, level)
+                for position, batch in enumerate(fan_in_batches(nodes, fan_in))
+            ],
+        )
 
     while len(level_nodes) > REDUCE_FAN_IN:
         level_nodes = await reduce_round(level_nodes, REDUCE_FAN_IN, level)
@@ -371,10 +439,22 @@ class _Counter:
     """호출 사이 전체 해시 확인 주기를 세는 카운터."""
 
     def __init__(self) -> None:
-        self.processed = 0
+        self.processed = 0  # 완료된 노드 수 — 실패 로그의 `completed_before`에 쓴다
+        self.started = 0  # 시작된 노드 수 — 전체 해시 확인 주기의 기준
 
     def next_needs_full_check(self) -> bool:
-        return self.processed % FULL_HASH_CHECK_INTERVAL == 0
+        """N개마다 한 번 True.
+
+        완료 수(`processed`)가 아니라 시작 순번을 쓴다. 노드를 동시에 실행하면 아직
+        아무것도 끝나지 않은 시점에 여러 노드가 동시에 진입해 완료 수가 전부 0이고,
+        그 전부가 비싼 전체 해시 재계산을 함께 돌린다.
+
+        증가와 읽기 사이에 await가 없으므로 같은 이벤트 루프의 태스크끼리는 서로
+        끼어들지 못한다 — 각 호출이 서로 다른 순번을 받는다.
+        """
+        index = self.started
+        self.started += 1
+        return index % FULL_HASH_CHECK_INTERVAL == 0
 
 
 async def _process_node(
@@ -470,30 +550,39 @@ async def _process_node(
     # 경로에서 요약에 들어가지도 않은 청크가 근거로 남아, 사용자가 '근거 보기'를 눌렀을 때
     # 요약문과 무관한 페이지로 이동하고 그 문장이 거기에 근거한 것으로 오인한다.
     covered_ids = _resolve_covered(result.covered_ids, chunk_sources) or list(source_ids)
-    async with factory() as session:
-        node = SummaryNode(
-            document_id=document_id,
-            summary_run_id=run_id,
-            level=level,
-            position=position,
-            # 열화 결과(모델이 만든 완결 요약이 아니라 이어붙인 축약본)는 succeeded로
-            # 두지 않는다. 그러면 _find_reusable이 이후 모든 재시도에 같은 축약본을
-            # 돌려줘, 사용자가 컨텍스트를 늘려도 더 나은 요약을 받을 수 없다.
-            status="degraded" if result.degraded else "succeeded",
-            input_hash=input_hash,
-            output_hash=_output_hash(text),
-            summary_text=text,
-            source_chunk_ids_json=list(covered_ids),
-            attempt_count=1,
-            reused=False,
-        )
-        session.add(node)
-        await _bump_completed(session, run_id)
-        await session.commit()
-        await session.refresh(node)
+
+    async def _persist() -> uuid.UUID:
+        async with factory() as session:
+            node = SummaryNode(
+                document_id=document_id,
+                summary_run_id=run_id,
+                level=level,
+                position=position,
+                # 열화 결과(모델이 만든 완결 요약이 아니라 이어붙인 축약본)는 succeeded로
+                # 두지 않는다. 그러면 _find_reusable이 이후 모든 재시도에 같은 축약본을
+                # 돌려줘, 사용자가 컨텍스트를 늘려도 더 나은 요약을 받을 수 없다.
+                status="degraded" if result.degraded else "succeeded",
+                input_hash=input_hash,
+                output_hash=_output_hash(text),
+                summary_text=text,
+                source_chunk_ids_json=list(covered_ids),
+                attempt_count=1,
+                reused=False,
+            )
+            session.add(node)
+            await _bump_completed(session, run_id)
+            await session.commit()
+            await session.refresh(node)
+            return node.id
+
+    # 모델 호출이 끝난 결과는 취소되더라도 반드시 저장한다. 노드를 동시에 실행하면 형제
+    # 노드 하나가 실패할 때 나머지가 취소되는데, 그 취소가 저장 직전에 닿으면 이미 지불한
+    # 모델 호출이 통째로 버려진다. 그러면 재시도해도 재사용할 노드가 없어, 체크포인트를
+    # 둔 이유(중단 후 재시도가 성공 노드를 재사용한다) 자체가 사라진다.
+    node_id = await asyncio.shield(_persist())
     counter.processed += 1
     return _NodeResult(
-        node_id=node.id,
+        node_id=node_id,
         input_hash=input_hash,
         summary_text=text,
         source_chunk_ids=list(covered_ids),
@@ -770,6 +859,13 @@ def _truncate_on_boundary(text: str) -> str:
 
 
 async def _bump_completed(session, run_id: uuid.UUID) -> None:
-    run = await session.get(SummaryRun, run_id)
-    if run is not None:
-        run.completed_nodes = (run.completed_nodes or 0) + 1
+    """진행률 카운터를 1 올린다.
+
+    읽고-더하고-쓰는 대신 DB에서 증가시킨다. 노드를 동시에 실행하면 세션 두 개가 같은
+    값을 읽고 같은 값을 써서 증가분을 잃고, 진행률이 실제보다 낮은 값에서 멈춘다.
+    """
+    await session.execute(
+        update(SummaryRun)
+        .where(SummaryRun.id == run_id)
+        .values(completed_nodes=func.coalesce(SummaryRun.completed_nodes, 0) + 1)
+    )

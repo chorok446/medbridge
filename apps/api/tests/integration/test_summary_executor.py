@@ -1,5 +1,7 @@
 """저장형 계층 요약 실행기 — 체크포인트·재사용·재개·취소·revision·진행률 검증."""
 
+import threading
+import time
 import uuid
 
 import pytest
@@ -28,18 +30,26 @@ from tests.integration.conftest import drain_jobs
 
 
 class CountingProvider(DeterministicSummaryProvider):
-    """결정론적 공급자 + 호출 횟수 기록. 호출 수가 곧 모델 비용이다."""
+    """결정론적 공급자 + 호출 횟수 기록. 호출 수가 곧 모델 비용이다.
+
+    실행기는 노드를 동시에 돌리고 공급자 호출은 `asyncio.to_thread`로 나가므로 이
+    카운터는 여러 스레드에서 증가한다. `+= 1`은 CPython에서 원자적이지 않아 락 없이는
+    호출을 세다 놓치고, "재사용으로 모델을 부르지 않았다"는 검증이 조용히 통과한다.
+    """
 
     def __init__(self) -> None:
+        self._counter_lock = threading.Lock()
         self.group_calls = 0
         self.document_calls = 0
 
     def summarize_group(self, request):
-        self.group_calls += 1
+        with self._counter_lock:
+            self.group_calls += 1
         return super().summarize_group(request)
 
     def summarize_document(self, request):
-        self.document_calls += 1
+        with self._counter_lock:
+            self.document_calls += 1
         return super().summarize_document(request)
 
 
@@ -188,6 +198,9 @@ class TestCheckpointing:
         # 그룹을 잘게 나눠 여러 노드가 생기게 한다(픽스처 본문이 짧아 기본값이면 1그룹).
         monkeypatch.setattr(grouping_mod, "GROUP_MAX_CHARS", 400)
         monkeypatch.setattr(grouping_mod, "GROUP_MIN_CHARS", 400)
+        # 재개 의미만 본다 — "몇 번째에서 실패했나"가 결정적이어야 하므로 순차로 고정한다.
+        # 동시 실행 중 실패는 TestNodeConcurrency에서 따로 검증한다.
+        _set_concurrency(monkeypatch, 1)
         doc_id = await _upload_chunked(client, fx.single_column_korean(pages=6))
 
         class FailsAfterFirst(CountingProvider):
@@ -658,6 +671,224 @@ class TestSplitPoint:
         for sizes in ([1, 1], [10_000, 1], [1, 10_000]):
             mid = _split_point(self._chunks(sizes))
             assert 1 <= mid <= len(sizes) - 1
+
+
+class ConcurrencyProbe(CountingProvider):
+    """호출을 잠시 붙잡아 두고 동시에 실행 중인 호출 수의 최대값을 기록한다."""
+
+    def __init__(self, hold_seconds: float = 0.05) -> None:
+        super().__init__()
+        self._state_lock = threading.Lock()
+        self._in_flight = 0
+        self.max_in_flight = 0
+        self._hold = hold_seconds
+
+    def summarize_group(self, request):
+        with self._state_lock:
+            self._in_flight += 1
+            self.max_in_flight = max(self.max_in_flight, self._in_flight)
+        try:
+            time.sleep(self._hold)
+            return super().summarize_group(request)
+        finally:
+            with self._state_lock:
+                self._in_flight -= 1
+
+
+def _set_concurrency(monkeypatch, value: int) -> None:
+    """같은 레벨에서 동시에 실행할 노드 수를 고정한다(실기기에서는 기기 설정에서 온다)."""
+    monkeypatch.setattr(executor_mod, "summary_node_concurrency", lambda: value)
+
+
+def _many_groups(monkeypatch) -> None:
+    """픽스처 본문을 여러 그룹으로 쪼갠다 — 기본값이면 한 그룹이라 동시성이 드러나지 않는다."""
+    monkeypatch.setattr(grouping_mod, "GROUP_MAX_CHARS", 400)
+    monkeypatch.setattr(grouping_mod, "GROUP_MIN_CHARS", 400)
+
+
+class TestNodeConcurrency:
+    """같은 레벨의 노드는 서로 독립이므로 동시에 실행한다.
+
+    실기기 문서는 map 노드가 794개였다. 순차로는 노드당 수 초 x 794 = 수 시간이라
+    사용자가 요약을 끝까지 볼 수 없었다.
+    """
+
+    async def test_level_nodes_run_concurrently(self, client, monkeypatch):
+        _many_groups(monkeypatch)
+        _set_concurrency(monkeypatch, 4)
+        doc_id = await _upload_chunked(client, fx.single_column_korean(pages=6))
+        provider = ConcurrencyProbe()
+        run_id, job_id, rev, chash = await _make_run(doc_id, provider)
+
+        drafts = await _run_executor(doc_id, run_id, job_id, rev, chash, provider)
+
+        assert drafts
+        assert provider.group_calls > 1, "그룹이 하나뿐이면 이 검증은 아무것도 말하지 않는다"
+        assert provider.max_in_flight > 1
+
+    async def test_concurrency_never_exceeds_the_configured_limit(
+        self, client, monkeypatch
+    ):
+        """공급자를 무제한으로 두드리지 않는다 — 로컬 모델은 큐만 쌓이고 타임아웃을 태운다."""
+        _many_groups(monkeypatch)
+        _set_concurrency(monkeypatch, 2)
+        doc_id = await _upload_chunked(client, fx.single_column_korean(pages=6))
+        provider = ConcurrencyProbe()
+        run_id, job_id, rev, chash = await _make_run(doc_id, provider)
+
+        await _run_executor(doc_id, run_id, job_id, rev, chash, provider)
+
+        assert provider.max_in_flight <= 2
+
+    async def test_node_order_follows_input_not_completion(self, client, monkeypatch):
+        """완료 순서가 뒤섞여도 노드 position은 입력 순서를 유지한다.
+
+        position이 완료 순서를 따라가면 reduce 입력 순서가 실행마다 달라져 input_hash가
+        바뀌고, 재사용이 통째로 무효가 된다(같은 문서를 매번 처음부터 다시 요약한다).
+        """
+        _many_groups(monkeypatch)
+        _set_concurrency(monkeypatch, 4)
+        doc_id = await _upload_chunked(client, fx.single_column_korean(pages=6))
+
+        class ReverseOrderProvider(CountingProvider):
+            """뒤쪽 그룹일수록 빨리 끝나게 만들어 완료 순서를 입력 순서와 어긋나게 한다."""
+
+            def summarize_group(self, request):
+                time.sleep(max(0.0, 0.15 - 0.02 * len(request.chunks)))
+                return super().summarize_group(request)
+
+        provider = ReverseOrderProvider()
+        run_id, job_id, rev, chash = await _make_run(doc_id, provider)
+        await _run_executor(doc_id, run_id, job_id, rev, chash, provider)
+
+        async with get_session_factory()() as s:
+            level0 = (
+                await s.execute(
+                    select(SummaryNode)
+                    .where(SummaryNode.summary_run_id == run_id, SummaryNode.level == 0)
+                    .order_by(SummaryNode.position)
+                )
+            ).scalars().all()
+        assert len(level0) > 1
+        assert [n.position for n in level0] == list(range(len(level0)))
+
+        # 같은 문서를 다시 요약하면 전부 재사용돼야 한다 — 순서가 흔들렸다면 여기서 깨진다.
+        second = CountingProvider()
+        run2_id, job2_id, rev2, chash2 = await _make_run(doc_id, second)
+        await _run_executor(doc_id, run2_id, job2_id, rev2, chash2, second)
+        assert second.group_calls == 0
+
+    async def test_first_failure_stops_launching_new_nodes(self, client, monkeypatch):
+        """한 노드가 실패하면 아직 시작하지 않은 노드는 부르지 않는다.
+
+        실패한 실행의 결과는 어차피 버려진다. 계속 부르면 사용자가 이미 오류를 본 뒤에도
+        로컬 모델이 수백 번 더 돌아 기기를 점유한다.
+        """
+        _many_groups(monkeypatch)
+        _set_concurrency(monkeypatch, 2)
+        doc_id = await _upload_chunked(client, fx.single_column_korean(pages=6))
+
+        class FailsImmediately(CountingProvider):
+            def summarize_group(self, request):
+                super().summarize_group(request)
+                raise RuntimeError("모의 공급자 실패")
+
+        provider = FailsImmediately()
+        run_id, job_id, rev, chash = await _make_run(doc_id, provider)
+        with pytest.raises(RuntimeError):
+            await _run_executor(doc_id, run_id, job_id, rev, chash, provider)
+
+        # 동시에 떠 있던 호출까지는 끝날 수 있지만 그 이상은 시작하지 않는다.
+        assert provider.group_calls <= 2
+
+    async def test_inflight_success_is_checkpointed_despite_a_sibling_failure(
+        self, client, monkeypatch
+    ):
+        """형제 노드가 실패해 취소돼도, 모델 호출을 끝낸 노드는 저장된다.
+
+        저장 직전에 취소를 받아들이면 이미 지불한 모델 호출이 통째로 버려지고 재시도가
+        재사용할 노드가 없다 — 체크포인트를 둔 이유가 사라진다.
+        """
+        _many_groups(monkeypatch)
+        _set_concurrency(monkeypatch, 4)
+        doc_id = await _upload_chunked(client, fx.single_column_korean(pages=6))
+
+        class OneFailsRestSucceed(CountingProvider):
+            """position 순서와 무관하게 정확히 한 호출만 실패시킨다."""
+
+            def __init__(self) -> None:
+                super().__init__()
+                self._fail_lock = threading.Lock()
+                self._failed = False
+
+            def summarize_group(self, request):
+                with self._fail_lock:
+                    should_fail = not self._failed
+                    self._failed = True
+                if should_fail:
+                    time.sleep(0.05)  # 형제들이 모델 호출을 끝낼 시간을 준다
+                    raise RuntimeError("모의 공급자 실패")
+                return super().summarize_group(request)
+
+        provider = OneFailsRestSucceed()
+        run_id, job_id, rev, chash = await _make_run(doc_id, provider)
+        with pytest.raises(RuntimeError):
+            await _run_executor(doc_id, run_id, job_id, rev, chash, provider)
+
+        # group_calls는 성공한 호출만 센다(실패 경로는 super()를 부르지 않는다).
+        assert provider.group_calls > 0, "형제 노드가 없으면 이 검증은 아무것도 말하지 않는다"
+        # 성공한 형제는 하나도 빠짐없이 체크포인트로 남아 있어야 한다.
+        assert await _node_count(run_id) == provider.group_calls
+
+    async def test_progress_counts_every_completed_node(self, client, monkeypatch):
+        """동시 증가에서 completed_nodes를 잃지 않는다 — 진행률이 실제보다 낮게 멈춘다."""
+        _many_groups(monkeypatch)
+        _set_concurrency(monkeypatch, 4)
+        doc_id = await _upload_chunked(client, fx.single_column_korean(pages=6))
+        provider = ConcurrencyProbe(hold_seconds=0.02)
+        run_id, job_id, rev, chash = await _make_run(doc_id, provider)
+
+        await _run_executor(doc_id, run_id, job_id, rev, chash, provider)
+
+        saved = await _node_count(run_id)
+        assert saved > 1
+        async with get_session_factory()() as s:
+            run = await s.get(SummaryRun, run_id)
+            assert run.completed_nodes == saved
+
+
+class TestConcurrentFailureSelection:
+    """여러 노드가 함께 실패했을 때 호출자에게 올릴 예외를 고르는 규칙."""
+
+    def test_control_flow_wins_over_a_model_failure(self):
+        """취소·revision 변경은 실패가 아니라 제어 흐름이다.
+
+        모델 실패를 올리면 사용자가 직접 취소한 작업이 '요약 실패'로 기록되고,
+        문서가 바뀌어 버려야 할 결과가 공급자 오류로 둔갑해 오류 리포트를 오염시킨다.
+        """
+        group = ExceptionGroup(
+            "nodes",
+            [RuntimeError("모델 실패"), SummaryCancelled(), SummaryRevisionChanged()],
+        )
+        assert isinstance(executor_mod._representative_error(group), SummaryCancelled)
+
+    def test_revision_change_is_preferred_over_a_model_failure(self):
+        group = ExceptionGroup("nodes", [RuntimeError("모델 실패"), SummaryRevisionChanged()])
+        assert isinstance(
+            executor_mod._representative_error(group), SummaryRevisionChanged
+        )
+
+    def test_model_failure_is_preserved_for_classification(self):
+        """분류 가능한 공급자 실패는 원형 그대로 올린다 — 실패 코드가 여기서 정해진다."""
+        original = SummaryNetworkError("context_overflow", "map_context")
+        group = ExceptionGroup("nodes", [original])
+        assert executor_mod._representative_error(group) is original
+
+    def test_injected_cancellations_are_not_mistaken_for_the_cause(self):
+        """형제 태스크를 취소하며 생긴 CancelledError가 실제 원인을 가리면 안 된다."""
+        original = RuntimeError("진짜 원인")
+        group = ExceptionGroup("nodes", [original, ExceptionGroup("nested", [ValueError("x")])])
+        assert executor_mod._representative_error(group) is original
 
 
 class TestSourceOwnership:
