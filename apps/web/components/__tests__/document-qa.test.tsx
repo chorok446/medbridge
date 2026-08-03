@@ -44,6 +44,7 @@ const answerDetail: QaThreadDetail = {
       sequenceNumber: 1,
       retrievalMode: null,
       claims: [],
+      followups: [],
     },
     {
       id: "m2",
@@ -67,6 +68,7 @@ const answerDetail: QaThreadDetail = {
           ],
         },
       ],
+      followups: [],
     },
   ],
 };
@@ -249,5 +251,66 @@ describe("DocumentQa", () => {
     await screen.findByText("심장은 혈액을 보냅니다.");
     const text = container.textContent ?? "";
     expect(text).not.toMatch(/chunkId|sourceChunkIds|b1|deterministic|bbox|:\d{4,5}/i);
+  });
+});
+
+describe("답변 렌더", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const claim = {
+    text: "심장은 혈액을 보낸다",
+    verificationStatus: "supported" as const,
+    sourceRefs: [
+      {
+        pageNumber: 3,
+        blockId: "b1",
+        bbox: [0, 0, 1, 1] as [number, number, number, number],
+        readingOrder: 0,
+        sourceMethod: "digital" as const,
+      },
+    ],
+  };
+
+  function withAssistant(content: string) {
+    apiMock.listThreads.mockResolvedValue([thread]);
+    apiMock.getThread.mockResolvedValue({
+      thread,
+      messages: [
+        {
+          id: "m9",
+          role: "assistant" as const,
+          content,
+          status: "completed" as const,
+          sequenceNumber: 2,
+          retrievalMode: "keyword",
+          claims: [claim],
+          followups: [],
+        },
+      ],
+    });
+  }
+
+  it("마커가 있으면 문장 안에서 근거를 짚을 수 있다", async () => {
+    withAssistant("심장은 혈액을 보냅니다[c0].");
+    renderQa();
+    expect(
+      await screen.findByRole("button", { name: /3쪽 근거 보기/ }),
+    ).toBeInTheDocument();
+  });
+
+  it("마커가 없는 옛 메시지는 기존 주장 목록으로 떨어진다", async () => {
+    withAssistant("심장은 혈액을 보냅니다.");
+    renderQa();
+    expect(await screen.findByText("심장은 혈액을 보낸다")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /근거 보기/ })).toBeNull();
+  });
+
+  it("인용을 누르면 그 쪽으로 이동한다", async () => {
+    withAssistant("심장은 혈액을 보냅니다[c0].");
+    renderQa();
+    await userEvent.click(await screen.findByRole("button", { name: /3쪽 근거 보기/ }));
+    await waitFor(() =>
+      expect(screen.getByTestId("pdf-viewer")).toHaveAttribute("data-page", "3"),
+    );
   });
 });

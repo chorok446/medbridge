@@ -2,7 +2,9 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { CitedText, SourceList } from "@/components/citations";
 import { PdfViewer } from "@/components/pdf-viewer";
+import { type CitationSource, hasCitations, tokenizeCitations } from "@/lib/citations";
 import { useQaStream } from "@/hooks/use-qa-stream";
 import {
   createThread,
@@ -331,19 +333,47 @@ function AssistantMessage({
   const supportedClaims = message.claims.filter(
     (c) => c.verificationStatus === "supported" || c.verificationStatus === "conflicting",
   );
+  // 인용 번호 i는 claims[i]에 대응한다 — 서버(verify)가 그렇게 다시 써서 보낸다.
+  const sources: CitationSource[] = message.claims.map((c) => ({
+    pageNumber: c.sourceRefs[0]?.pageNumber ?? 1,
+    sectionTitle: c.sourceRefs[0]?.sectionTitle ?? null,
+    sourceMethod: c.sourceRefs[0]?.sourceMethod ?? "digital",
+    bbox: c.sourceRefs[0]?.bbox ?? [0, 0, 0, 0],
+  }));
+  const cited = hasCitations(tokenizeCitations(message.content, sources.length));
+
   return (
     <div>
       {notice && <p className="mb-1 text-xs text-slate-500">{notice}</p>}
-      <p className="whitespace-pre-wrap leading-snug text-slate-800">{message.content}</p>
-      {supportedClaims.length > 0 && (
-        <ul className="mt-2 flex flex-col gap-1.5">
-          {supportedClaims.map((c, i) => (
-            <li key={i} className="border-t border-slate-200 pt-1.5">
-              <p className="text-xs leading-snug text-slate-600">{c.text}</p>
-              <ClaimSources claim={c} onNavigate={onNavigate} />
-            </li>
-          ))}
-        </ul>
+      {cited ? (
+        <>
+          <CitedText
+            content={message.content}
+            sources={sources}
+            onNavigate={(s) => onNavigate({ pageNumber: s.pageNumber, bbox: s.bbox })}
+          />
+          <SourceList
+            sources={sources}
+            onNavigate={(s) => onNavigate({ pageNumber: s.pageNumber, bbox: s.bbox })}
+          />
+        </>
+      ) : (
+        <>
+          {/* 마커 없는 옛 메시지 — 기존 렌더를 그대로 둔다. 백필하지 않으므로 이 경로는 남는다. */}
+          <p className="max-w-[68ch] whitespace-pre-wrap text-[17px] leading-[1.7] text-slate-900">
+            {message.content}
+          </p>
+          {supportedClaims.length > 0 && (
+            <ul className="mt-2 flex flex-col gap-1.5">
+              {supportedClaims.map((c, i) => (
+                <li key={i} className="border-t border-slate-200 pt-1.5">
+                  <p className="text-sm leading-snug text-slate-600">{c.text}</p>
+                  <ClaimSources claim={c} onNavigate={onNavigate} />
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
       )}
     </div>
   );

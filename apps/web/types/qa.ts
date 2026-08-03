@@ -38,6 +38,8 @@ export interface QaMessage {
   sequenceNumber: number;
   retrievalMode: string | null;
   claims: QaClaim[];
+  /** 모델이 제안한 다음 질문. 마이그레이션 0012 이전 메시지는 빈 배열이다. */
+  followups: string[];
 }
 
 export interface QaThread {
