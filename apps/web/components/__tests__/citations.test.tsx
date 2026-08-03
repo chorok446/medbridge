@@ -50,7 +50,7 @@ describe("SourceList", () => {
   it("navigates to the picked source", () => {
     const onNavigate = vi.fn();
     render(<SourceList sources={SOURCES} onNavigate={onNavigate} />);
-    fireEvent.click(screen.getByRole("button", { name: /7쪽/ }));
+    fireEvent.click(screen.getByRole("button", { name: /7쪽 근거 보기/ }));
     expect(onNavigate).toHaveBeenCalledWith(SOURCES[1]);
   });
 

@@ -26,7 +26,8 @@ function DocumentDetail() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [notice, setNotice] = useState<string | null>(null);
-  const [mainTab, setMainTab] = useState<"preview" | "extraction" | "summary" | "qa">("preview");
+  // null = 아직 사용자가 고르지 않음. 기본 탭은 문서 상태를 보고 정한다(아래 effectiveTab).
+  const [mainTab, setMainTab] = useState<"preview" | "extraction" | "summary" | "qa" | null>(null);
 
   const fileUrlQuery = useQuery({
     queryKey: ["file-url", id],
@@ -82,6 +83,9 @@ function DocumentDetail() {
 
   const doc = docQuery.data;
   const processing = isActive(doc.processingStatus);
+  // 읽을 준비가 끝난 문서는 "무엇을 물어볼까"가 먼저 보이게 한다. 아직 처리 중이면
+  // 질문할 대상이 없으므로 문서 보기로 연다.
+  const effectiveTab = mainTab ?? (hasExtraction(doc.processingStatus) ? "qa" : "preview");
 
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-8">
@@ -177,10 +181,10 @@ function DocumentDetail() {
             <button
               key={t.key}
               role="tab"
-              aria-selected={mainTab === t.key}
+              aria-selected={effectiveTab === t.key}
               onClick={() => setMainTab(t.key)}
               className={`rounded-t px-4 py-2 ${
-                mainTab === t.key
+                effectiveTab === t.key
                   ? "border border-b-0 border-slate-200 bg-white font-semibold text-blue-700"
                   : "text-slate-500 hover:text-slate-800"
               }`}
@@ -191,11 +195,11 @@ function DocumentDetail() {
         </div>
       )}
 
-      {mainTab === "extraction" && fileUrlQuery.data ? (
+      {effectiveTab === "extraction" && fileUrlQuery.data ? (
         <ExtractionReview doc={doc} fileUrl={fileUrlQuery.data} />
-      ) : mainTab === "summary" && fileUrlQuery.data ? (
+      ) : effectiveTab === "summary" && fileUrlQuery.data ? (
         <SummaryView doc={doc} fileUrl={fileUrlQuery.data} />
-      ) : mainTab === "qa" && fileUrlQuery.data ? (
+      ) : effectiveTab === "qa" && fileUrlQuery.data ? (
         <DocumentQa doc={doc} fileUrl={fileUrlQuery.data} />
       ) : (
       <div className="grid gap-6 lg:grid-cols-[1fr_300px]">

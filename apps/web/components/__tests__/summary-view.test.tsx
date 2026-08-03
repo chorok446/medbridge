@@ -208,7 +208,7 @@ describe("SummaryView", () => {
     apiMock.getSummaryStatus.mockResolvedValue(status());
     apiMock.getSummaries.mockResolvedValue({ stale: false, artifacts: [overviewArtifact] });
     renderView();
-    const sourceBtn = await screen.findByRole("button", { name: "2쪽" });
+    const sourceBtn = await screen.findByRole("button", { name: /2쪽 근거 보기/ });
     expect(screen.getByTestId("pdf-viewer").getAttribute("data-page")).toBe("1");
     await userEvent.click(sourceBtn);
     expect(screen.getByTestId("pdf-viewer").getAttribute("data-page")).toBe("2");
@@ -236,5 +236,34 @@ describe("SummaryView", () => {
     await screen.findByText("이 문서는 심부전을 다룹니다.");
     const text = container.textContent ?? "";
     expect(text).not.toMatch(/chunkId|sourceChunkIds|token|bm25|deterministic|:\d{4,5}/i);
+  });
+});
+
+describe("요약 출처 표기", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("스캔으로 읽은 근거를 사람 말로 알려준다", async () => {
+    apiMock.getSummaryStatus.mockResolvedValue(status());
+    apiMock.getSummaries.mockResolvedValue({
+      stale: false,
+      artifacts: [
+        {
+          ...overviewArtifact,
+          sourceRefs: [
+            {
+              pageNumber: 5,
+              blockId: "b9",
+              bbox: [0, 0, 1, 1] as [number, number, number, number],
+              readingOrder: 0,
+              sourceMethod: "ocr" as const,
+            },
+          ],
+        },
+      ],
+    });
+    renderView();
+    expect(await screen.findByText(/스캔 인식/)).toBeInTheDocument();
+    // 기술 용어는 화면에 내지 않는다 (PRODUCT.md anti-reference)
+    expect(screen.queryByText(/OCR/i)).toBeNull();
   });
 });

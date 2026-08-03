@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { SourceList } from "@/components/citations";
 import { ErrorReportButton } from "@/components/error-report-button";
 import { PdfViewer } from "@/components/pdf-viewer";
 import { createSummary, getSummaries, getSummaryStatus, retrySummary } from "@/lib/api/summary";
@@ -265,24 +266,19 @@ export function SummaryView({ doc, fileUrl }: Props) {
                                 {a.title}
                               </p>
                             )}
-                            <p className="whitespace-pre-wrap text-sm leading-snug text-slate-700">
+                            <p className="max-w-[68ch] whitespace-pre-wrap text-[17px] leading-[1.7] text-slate-900">
                               {artifactBody(a)}
                             </p>
-                            {a.sourceRefs.length > 0 && (
-                              <div className="mt-1.5 flex flex-wrap gap-1">
-                                <span className="text-xs text-slate-400">출처:</span>
-                                {dedupePages(a.sourceRefs).map((ref) => (
-                                  <button
-                                    key={`${ref.pageNumber}-${ref.blockId}`}
-                                    type="button"
-                                    onClick={() => navigate(ref)}
-                                    className="rounded bg-blue-50 px-2 py-0.5 text-xs text-blue-700 hover:bg-blue-100"
-                                  >
-                                    {ref.pageNumber}쪽
-                                  </button>
-                                ))}
-                              </div>
-                            )}
+                            {/* 질문 탭과 같은 출처 표기를 쓴다 — 근거를 읽는 법이 화면마다 다르면 안 된다 */}
+                            <SourceList
+                              sources={dedupePages(a.sourceRefs).map((r) => ({
+                                pageNumber: r.pageNumber,
+                                sectionTitle: null,
+                                sourceMethod: r.sourceMethod,
+                                bbox: r.bbox,
+                              }))}
+                              onNavigate={navigate}
+                            />
                           </li>
                         ))}
                       </ul>

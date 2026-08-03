@@ -49,6 +49,9 @@ export function SourceList({ sources, onNavigate }: Omit<Props, "content">) {
             <button
               type="button"
               onClick={() => onNavigate(s)}
+              // 인용 pill과 같은 이름을 쓴다 — 같은 곳으로 가는 두 버튼의 이름이 다르면
+              // 스크린리더 사용자에게는 서로 다른 기능으로 들린다.
+              aria-label={`${s.pageNumber}쪽 근거 보기`}
               className="w-full rounded px-1 py-1 text-left text-sm text-slate-700 hover:bg-slate-50 focus:outline-2 focus:outline-offset-2 focus:outline-blue-600"
             >
               <span className="mr-1.5 text-xs font-medium text-blue-700">{i + 1}</span>

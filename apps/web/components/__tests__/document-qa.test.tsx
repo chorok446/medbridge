@@ -293,9 +293,8 @@ describe("답변 렌더", () => {
   it("마커가 있으면 문장 안에서 근거를 짚을 수 있다", async () => {
     withAssistant("심장은 혈액을 보냅니다[c0].");
     renderQa();
-    expect(
-      await screen.findByRole("button", { name: /3쪽 근거 보기/ }),
-    ).toBeInTheDocument();
+    // 문장 안의 인용 번호와 아래 출처 목록이 같은 곳을 가리키므로 이름도 같다.
+    expect(await screen.findAllByRole("button", { name: /3쪽 근거 보기/ })).toHaveLength(2);
   });
 
   it("마커가 없는 옛 메시지는 기존 주장 목록으로 떨어진다", async () => {
@@ -308,7 +307,8 @@ describe("답변 렌더", () => {
   it("인용을 누르면 그 쪽으로 이동한다", async () => {
     withAssistant("심장은 혈액을 보냅니다[c0].");
     renderQa();
-    await userEvent.click(await screen.findByRole("button", { name: /3쪽 근거 보기/ }));
+    const [inlinePill] = await screen.findAllByRole("button", { name: /3쪽 근거 보기/ });
+    await userEvent.click(inlinePill);
     await waitFor(() =>
       expect(screen.getByTestId("pdf-viewer")).toHaveAttribute("data-page", "3"),
     );
