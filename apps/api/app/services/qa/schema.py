@@ -15,6 +15,7 @@ from app.services.qa.context import QaChunkRef
 from app.services.qa.settings import (
     ANSWER_MAX_CHARS,
     CLAIM_TEXT_MAX_CHARS,
+    FOLLOWUP_MAX_CHARS,
     MAX_CLAIMS,
     MAX_FOLLOWUPS,
 )
@@ -210,15 +211,32 @@ def claims_conflict(claim_texts: list[str]) -> bool:
     return False
 
 
+def sanitize_followups(raw) -> list[str]:
+    """모델이 낸 후속 질문을 개수·길이 모두 잘라 돌려준다.
+
+    이 값은 DB에 저장된 뒤 버튼으로 그대로 재전송된다. 길이를 안 자르면 질문 상한을 넘는
+    제안이 칩으로 그려지고, 누르는 순간 422로 죽는다 — 사용자에겐 그냥 고장으로 보인다.
+    """
+    return [
+        str(f).strip()[:FOLLOWUP_MAX_CHARS]
+        for f in (raw or [])
+        if str(f).strip()
+    ][:MAX_FOLLOWUPS]
+
+
 def verify(
     model_output: dict, lookup: dict[str, QaChunkRef], *, had_results: bool
 ) -> VerifiedAnswer:
     """모델 출력 dict → 검증된 답변. 지원 claim만 남기고 최종 상태를 결정한다."""
-    answer = str(model_output.get("answer") or "").strip()[:ANSWER_MAX_CHARS]
+    # 절단은 마커를 다시 쓴 뒤에 한다(아래). 여기서 자르면 경계에 걸린 '[c1' 조각이
+    # 정규식에 매치되지 않아 지워지지도 다시 쓰이지도 못한 채 화면에 남는다.
+    answer = str(model_output.get("answer") or "").strip()
     model_status = str(model_output.get("answerStatus") or "").strip()
 
     verified: list[VerifiedClaim] = []
-    seen_text: set[str] = set()
+    # 텍스트 → 이미 채택한 claim_index. 중복 텍스트를 건너뛸 때 그 자리를 가리키던 마커를
+    # 살아 있는 동일 claim으로 remap한다 — 그냥 버리면 근거가 있는 문장이 인용을 잃는다.
+    seen_text: dict[str, int] = {}
     # 모델이 쓴 마커 번호(모델 자신의 claims 배열 위치) → 최종 claim_index. 비었거나
     # 중복인 항목을 건너뛰는 순간 둘이 어긋나므로, 이 표 없이 마커를 그대로 두면
     # 사용자가 누른 번호가 엉뚱한 근거로 이동한다.
@@ -228,7 +246,10 @@ def verify(
         if not isinstance(raw, dict):
             continue
         text = str(raw.get("text") or "").strip()[:CLAIM_TEXT_MAX_CHARS]
-        if not text or text in seen_text:
+        if not text:
+            continue
+        if text in seen_text:
+            raw_to_index[raw_pos] = seen_text[text]
             continue
         ids = _valid_ids(raw.get("sourceChunkIds"), lookup)
         # 지원 조건: 유효 출처 있음 + 수치가 원문에 존재 + 근거 청크에 어휘적으로 연결됨
@@ -240,7 +261,7 @@ def verify(
             claim_status = QaClaimVerification.UNSUPPORTED
         else:
             claim_status = QaClaimVerification.SUPPORTED
-        seen_text.add(text)
+        seen_text[text] = idx
         raw_to_index[raw_pos] = idx
         verified.append(
             VerifiedClaim(
@@ -275,11 +296,7 @@ def verify(
     else:
         status = "completed"
 
-    followups = [
-        str(f).strip()
-        for f in (model_output.get("followUpSuggestions") or [])
-        if str(f).strip()
-    ][:MAX_FOLLOWUPS]
+    followups = sanitize_followups(model_output.get("followUpSuggestions"))
 
     if status in ("not_found", "insufficient_evidence"):
         # 근거가 없으면 unsupported claim을 확정 사실처럼 저장하지 않는다
@@ -287,6 +304,7 @@ def verify(
 
     # 마커 정리는 claim 필터링이 끝난 뒤에 돈다 — 걸러진 claim의 마커도 함께 사라져야 한다.
     answer, dropped_citations = _rewrite_citations(answer, verified, raw_to_index)
+    answer = _truncate_answer(answer)
     if dropped_citations:
         # 조용히 지우지 않는다. 마커가 통째로 사라지는 회귀를 로그에서 볼 수 있어야 한다.
         # 원문은 남기지 않고 개수만 남긴다.
@@ -295,6 +313,18 @@ def verify(
     return VerifiedAnswer(
         answer=answer, answer_status=status, claims=verified, followups=followups
     )
+
+
+def _truncate_answer(answer: str) -> str:
+    """상한으로 자르되, 절단 경계에 걸린 마커 조각을 남기지 않는다.
+
+    '…혈압이 상승한다[c1' 같은 꼬리는 정규식에 매치되지 않아 제거 경로를 빠져나가고,
+    프론트도 닫는 대괄호가 없으면 본문 글자로 렌더한다 — 사용자가 내부 표기를 그대로 본다.
+    """
+    if len(answer) <= ANSWER_MAX_CHARS:
+        return answer
+    cut = answer[:ANSWER_MAX_CHARS]
+    return re.sub(r"\[c?\d{0,2}$", "", cut).rstrip()
 
 
 def _rewrite_citations(

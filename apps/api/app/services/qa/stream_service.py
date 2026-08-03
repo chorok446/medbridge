@@ -34,7 +34,11 @@ from app.services.qa import context as qa_context
 from app.services.qa import stream_protocol as sp
 from app.services.qa.factory import get_qa_streaming_provider
 from app.services.qa.provider import QaRequest
-from app.services.qa.schema import claims_conflict, classify_claim_event
+from app.services.qa.schema import (
+    claims_conflict,
+    classify_claim_event,
+    sanitize_followups,
+)
 from app.services.qa.service import (
     _fresh_document,
     _fresh_user,
@@ -186,7 +190,8 @@ async def recover_interrupted_streams() -> int:
 async def _apply_terminal(
     s: AsyncSession, assistant_id: uuid.UUID, status: QaMessageStatus, *,
     content: str | None = None, error_code: str | None = None,
-    claims: list | None = None, clear_draft: bool = True,
+    claims: list | None = None, followups: list[str] | None = None,
+    clear_draft: bool = True,
 ) -> bool:
     """주어진 세션에서 활성 상태일 때만 terminal로 원자적 전환하고 (선택) claim 저장.
 
@@ -200,6 +205,8 @@ async def _apply_terminal(
         values["content"] = content
     if error_code is not None:
         values["error_code"] = error_code
+    if followups is not None:
+        values["followups_json"] = list(followups) or None
     if clear_draft:
         values["draft_content"] = None
     if status == QaMessageStatus.INTERRUPTED:
@@ -393,6 +400,7 @@ async def run_stream(
         hb = 0
         since_recheck = 0
         stream_final_hint = ""
+        stream_followups: list[str] = []
         hb_every = max(1, int(sp.HEARTBEAT_INTERVAL_SEC / STREAM_POLL_INTERVAL_SEC))
         while True:
             # 짧은 폴링으로 취소·연결 끊김을 빠르게 감지하고, heartbeat는 별도 주기로 낸다
@@ -437,6 +445,7 @@ async def run_stream(
             event = val
             if event.get("type") == "final":
                 stream_final_hint = str(event.get("answerStatus") or "")
+                stream_followups = sanitize_followups(event.get("followUpSuggestions"))
                 if diag is not None:
                     diag["final_hint"] = stream_final_hint
                 cancel_event.set()  # 공급자 스트림 종료
@@ -506,7 +515,9 @@ async def run_stream(
                 yield sp.interrupted(broken.upper())
                 return
             won = await _apply_terminal(
-                s, assistant_id, status, content=content, claims=supported
+                s, assistant_id, status, content=content, claims=supported,
+                # 근거를 못 찾았다고 말한 답변 밑에 모델이 지어낸 다음 질문을 붙이지 않는다.
+                followups=stream_followups if supported else [],
             )
             if won:
                 await s.commit()
@@ -548,8 +559,21 @@ def _final_status(supported: list, final_hint: str, *, had_results: bool):
     if len(supported) >= 2 and (
         final_hint == "conflicting_evidence" or claims_conflict([c.text for c in supported])
     ):
-        return QaMessageStatus.CONFLICTING_EVIDENCE, "\n".join(c.text for c in supported)
-    return QaMessageStatus.COMPLETED, "\n".join(c.text for c in supported)
+        return QaMessageStatus.CONFLICTING_EVIDENCE, _cited_body(supported)
+    return QaMessageStatus.COMPLETED, _cited_body(supported)
+
+
+def _cited_body(supported: list) -> str:
+    """검증된 주장들을 인용 마커가 박힌 본문으로 조립한다.
+
+    비스트림 경로는 모델이 산문 안에 마커를 넣고 서버가 검사하지만, 여기서는 본문 자체를
+    서버가 만든다 — 그러니 마커도 서버가 붙인다. 모델 협조가 필요 없고 모든 마커가 반드시
+    해석되므로, 잘못된 근거를 가리키는 번호가 생길 수 없다.
+
+    번호는 claim_index다. classify_claim_event가 채택한 주장에만 0부터 순서대로 매기므로
+    저장되는 claims 배열의 위치와 정확히 일치한다 — 프론트가 그 위치로 출처를 찾는다.
+    """
+    return "\n".join(f"{c.text}[c{c.claim_index}]" for c in supported)
 
 
 async def _finish_broken(factory, assistant_id: uuid.UUID, broken: str) -> None:

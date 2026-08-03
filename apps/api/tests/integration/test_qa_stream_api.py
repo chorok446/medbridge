@@ -338,3 +338,76 @@ def _fake_async(provider):
         return provider
 
     return _coro()
+
+
+class TestStreamingCarriesTheNewContract:
+    """화면이 쓰는 유일한 경로는 스트리밍이다 — 인용·후속질문·학습수준이 여기서 살아야 한다."""
+
+    async def test_final_content_carries_citation_markers(self, client):
+        await enable_deterministic()
+        doc_id, tid = await setup_doc(client)
+        events = await collect(client, doc_id, tid)
+        completed = [e for e in events if e["type"] == "completed"][-1]
+        msg = completed["message"]
+        assert msg["claims"], "지원 주장이 있어야 이 테스트가 의미 있다"
+        # 저장된 본문에 마커가 있어야 프론트가 문장 안에서 근거를 짚을 수 있다.
+        for i in range(len(msg["claims"])):
+            assert f"[c{i}]" in msg["content"]
+
+    async def test_marker_index_matches_claim_order(self, client):
+        await enable_deterministic()
+        doc_id, tid = await setup_doc(client)
+        events = await collect(client, doc_id, tid)
+        msg = [e for e in events if e["type"] == "completed"][-1]["message"]
+        # [cN]은 claims[N]의 텍스트가 끝나는 자리에 붙는다.
+        for i, claim in enumerate(msg["claims"]):
+            assert f"{claim['text']}[c{i}]" in msg["content"]
+
+    async def test_followups_from_the_final_event_are_persisted(self, client, monkeypatch):
+        await enable_deterministic()
+        from app.services.qa import streaming as st
+
+        original = st.DeterministicStreamingQaProvider.stream_answer
+
+        def with_followups(self, request, cancel_token):
+            for event in original(self, request, cancel_token):
+                if event.get("type") == "final":
+                    event = {**event, "followUpSuggestions": ["더 자세히?", "다른 예시는?"]}
+                yield event
+
+        monkeypatch.setattr(st.DeterministicStreamingQaProvider, "stream_answer", with_followups)
+        doc_id, tid = await setup_doc(client)
+        await collect(client, doc_id, tid)
+        detail = (await client.get(f"/api/documents/{doc_id}/qa/threads/{tid}")).json()["data"]
+        assistant = [m for m in detail["messages"] if m["role"] == "assistant"][-1]
+        assert assistant["followups"] == ["더 자세히?", "다른 예시는?"]
+
+    async def test_learner_level_reaches_the_streaming_prompt(self, client, monkeypatch):
+        await enable_deterministic()
+        from app.services.qa import streaming as st
+
+        seen: list[str] = []
+        original = st.DeterministicStreamingQaProvider.stream_answer
+
+        def capture(self, request, cancel_token):
+            seen.append(request.learner_level)
+            yield from original(self, request, cancel_token)
+
+        monkeypatch.setattr(st.DeterministicStreamingQaProvider, "stream_answer", capture)
+        doc_id, tid = await setup_doc(client)
+        async with client.stream(
+            "POST", f"/api/documents/{doc_id}/qa/threads/{tid}/messages/stream",
+            json={"question": "심장은 무엇을 하나요?", "learnerLevel": "concise"},
+        ) as resp:
+            async for _ in resp.aiter_lines():
+                pass
+        assert seen == ["concise"]
+
+    def test_streaming_prompt_includes_the_level_hint(self):
+        from app.services.qa.provider import QaRequest
+        from app.services.qa.streaming import _build_user_prompt
+
+        concise = _build_user_prompt(QaRequest(question="q", chunks=[], learner_level="concise"))
+        default = _build_user_prompt(QaRequest(question="q", chunks=[]))
+        assert concise != default
+        assert "간단" in concise

@@ -492,7 +492,13 @@ async def _generate(
         retrieval_mode=retrieval.retrieval_mode,
         claims=claim_rows,
         user_msg=user_msg,
-        followups=verified.followups,
+        # 산문을 안전 문구로 갈아끼운 답변에는 후속 질문도 붙이지 않는다. "근거를 찾지
+        # 못했다" 바로 밑에 모델이 지어낸 다음 질문을 놓으면 날조 차단이 반만 걸린다.
+        followups=(
+            verified.followups
+            if verified.answer_status not in ("not_found", "insufficient_evidence")
+            else []
+        ),
     )
     logger.info(
         "qa_answered",

@@ -19,6 +19,9 @@ MAX_CLAIMS = 20
 MAX_FOLLOWUPS = 3
 ANSWER_MAX_CHARS = 4000
 CLAIM_TEXT_MAX_CHARS = 600
+# 후속 질문 한 개의 길이 상한. 이 값은 저장 후 버튼으로 그대로 재전송되므로 질문 상한
+# (MAX_QUESTION_CHARS)보다 훨씬 짧아야 한다 — 칩이 패널 폭을 밀어내지 않을 정도로 짧게.
+FOLLOWUP_MAX_CHARS = 120
 
 # 비의료용 안전 고지 (프런트에서도 항상 표시)
 MEDICAL_DISCLAIMER = "이 답변은 학습 보조용이며 실제 진단·처방·응급 판단에 사용하지 마세요."

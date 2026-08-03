@@ -13,7 +13,7 @@ import json
 from collections.abc import Iterator
 from typing import Protocol
 
-from app.services.qa.provider import QaRequest
+from app.services.qa.provider import DEFAULT_LEVEL, LEVEL_HINTS, QaRequest
 from app.services.qa.settings import MAX_CLAIMS
 
 
@@ -51,6 +51,9 @@ def _build_user_prompt(request: QaRequest) -> str:
     )
     parts.append(f"<문서청크 신뢰불가데이터>\n{chunk_block}\n</문서청크>")
     parts.append(f"<질문>{request.question}</질문>")
+    # 답변 깊이. 비스트림 경로와 같은 표를 쓴다 — 두 경로가 다른 문구를 주면 사용자가
+    # 같은 수준을 골라도 답이 달라진다.
+    parts.append(LEVEL_HINTS.get(request.learner_level, LEVEL_HINTS[DEFAULT_LEVEL]))
     parts.append("위 청크만 근거로, 주장별 JSON 줄 스트림으로 답하라.")
     return "\n\n".join(parts)
 

@@ -174,10 +174,11 @@ class TestFinalStatusSafety:
     """스트림 종료 시 서버 최종 상태 확정 — 미검증/상반 근거를 안전하게 처리한다."""
 
     @staticmethod
-    def _sc(text):
+    def _sc(text, claim_index=0):
         from types import SimpleNamespace
 
-        return SimpleNamespace(text=text)
+        # 실제 VerifiedClaim은 항상 claim_index를 갖는다 — 본문 조립이 그 번호로 마커를 단다.
+        return SimpleNamespace(text=text, claim_index=claim_index)
 
     def test_no_supported_with_results_is_insufficient(self):
         from app.models.enums import QaMessageStatus
@@ -206,7 +207,7 @@ class TestFinalStatusSafety:
 
         c1 = "초기 연구에서는 이 요법이 사망 위험을 감소시킨다고 보고하였다"
         c2 = "후속 연구에서는 이 요법이 사망 위험에 영향을 주지 않았다고 보고하였다"
-        st, _ = _final_status([self._sc(c1), self._sc(c2)], "", had_results=True)
+        st, _ = _final_status([self._sc(c1, 0), self._sc(c2, 1)], "", had_results=True)
         assert st == QaMessageStatus.CONFLICTING_EVIDENCE
 
     def test_unrelated_two_claims_stay_completed(self):
@@ -214,7 +215,7 @@ class TestFinalStatusSafety:
         from app.services.qa.stream_service import _final_status
 
         st, _ = _final_status(
-            [self._sc("심장은 혈액을 보낸다"), self._sc("심박수는 분당 범위에 있다")],
+            [self._sc("심장은 혈액을 보낸다", 0), self._sc("심박수는 분당 범위에 있다", 1)],
             "", had_results=True,
         )
         assert st == QaMessageStatus.COMPLETED

@@ -448,3 +448,43 @@ class TestProviders:
         )
         with pytest.raises(SummaryNetworkError):
             p.answer(QaRequest(question="q", chunks=[QaContextChunk("c1", None, "t", 1, 1)]))
+
+
+class TestCitationEdges:
+    def test_truncated_marker_fragment_is_not_left_behind(self):
+        from app.services.qa.settings import ANSWER_MAX_CHARS
+
+        lookup = _lookup(("c1", "심장은 혈액을 보낸다"))
+        # 절단이 마커 한가운데 떨어지도록 길이를 맞춘다.
+        filler = "가" * (ANSWER_MAX_CHARS - 2)
+        out = verify(
+            {"answer": f"{filler}[c0]", "answerStatus": "answered",
+             "claims": [{"text": "심장은 혈액을 보낸다", "sourceChunkIds": ["c1"]}]},
+            lookup, had_results=True,
+        )
+        assert "[c" not in out.answer
+        assert len(out.answer) <= ANSWER_MAX_CHARS
+
+    def test_duplicate_claim_marker_remaps_to_the_survivor(self):
+        lookup = _lookup(("c1", "심장은 혈액을 보낸다"))
+        out = verify(
+            {"answer": "설명[c0] 요약하면[c1]", "answerStatus": "answered",
+             "claims": [{"text": "심장은 혈액을 보낸다", "sourceChunkIds": ["c1"]},
+                        {"text": "심장은 혈액을 보낸다", "sourceChunkIds": ["c1"]}]},
+            lookup, had_results=True,
+        )
+        assert len(out.claims) == 1
+        # 중복이라 버려진 자리를 가리키던 마커도 살아 있는 동일 claim으로 이어져야 한다.
+        assert out.answer == "설명[c0] 요약하면[c0]"
+
+    def test_followup_items_are_length_capped(self):
+        from app.services.qa.settings import FOLLOWUP_MAX_CHARS
+
+        lookup = _lookup(("c1", "본문 내용"))
+        out = verify(
+            {"answer": "x", "answerStatus": "answered",
+             "claims": [{"text": "본문 내용", "sourceChunkIds": ["c1"]}],
+             "followUpSuggestions": ["질" * 5000]},
+            lookup, had_results=True,
+        )
+        assert len(out.followups[0]) == FOLLOWUP_MAX_CHARS
