@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { SourceList } from "@/components/citations";
+import { dedupeRefs } from "@/lib/citations";
 import { ErrorReportButton } from "@/components/error-report-button";
 import { PdfViewer } from "@/components/pdf-viewer";
 import { createSummary, getSummaries, getSummaryStatus, retrySummary } from "@/lib/api/summary";
@@ -269,14 +270,22 @@ export function SummaryView({ doc, fileUrl }: Props) {
                             <p className="max-w-[68ch] whitespace-pre-wrap text-[17px] leading-[1.7] text-slate-900">
                               {artifactBody(a)}
                             </p>
-                            {/* 질문 탭과 같은 출처 표기를 쓴다 — 근거를 읽는 법이 화면마다 다르면 안 된다 */}
+                            {/* 질문 탭과 같은 출처 표기를 쓴다 — 근거를 읽는 법이 화면마다
+                                다르면 안 된다. 다만 요약 본문에는 인용 마커가 없으므로
+                                번호는 붙이지 않는다(number: null): 본문 어디에도 대응하지
+                                않는 순번은 사용자를 찾아 헤매게 만든다. */}
                             <SourceList
-                              sources={dedupePages(a.sourceRefs).map((r) => ({
-                                pageNumber: r.pageNumber,
-                                sectionTitle: null,
-                                sourceMethod: r.sourceMethod,
-                                bbox: r.bbox,
-                              }))}
+                              groups={[
+                                {
+                                  number: null,
+                                  refs: dedupeRefs(a.sourceRefs).map((r) => ({
+                                    pageNumber: r.pageNumber,
+                                    sectionTitle: null,
+                                    sourceMethod: r.sourceMethod,
+                                    bbox: r.bbox,
+                                  })),
+                                },
+                              ]}
                               onNavigate={navigate}
                             />
                           </li>
@@ -294,15 +303,3 @@ export function SummaryView({ doc, fileUrl }: Props) {
   );
 }
 
-function dedupePages<T extends { pageNumber: number; blockId: string }>(refs: T[]): T[] {
-  const seen = new Set<string>();
-  const out: T[] = [];
-  for (const r of refs) {
-    const key = `${r.pageNumber}-${r.blockId}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      out.push(r);
-    }
-  }
-  return out;
-}

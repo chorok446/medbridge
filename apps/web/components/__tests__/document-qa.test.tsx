@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DocumentQa } from "@/components/document-qa";
 import { ApiError } from "@/lib/api/client";
 import type { DocumentSummary } from "@/types/api";
@@ -96,6 +96,10 @@ function renderQa() {
     </QueryClientProvider>,
   );
 }
+
+// 학습 수준은 localStorage에 남는다 — 초기화하지 않으면 앞 테스트의 선택이 뒤 테스트로
+// 새어 기본값 검증이 순서에 따라 깨진다.
+beforeEach(() => window.localStorage.clear());
 
 describe("DocumentQa", () => {
   afterEach(() => vi.restoreAllMocks());
@@ -372,5 +376,79 @@ describe("질문 탭 진입", () => {
         expect.anything(),
       ),
     );
+  });
+});
+
+describe("리뷰 회귀", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("검증 실패 주장을 출처로 제시하지 않는다", async () => {
+    apiMock.listThreads.mockResolvedValue([thread]);
+    apiMock.getThread.mockResolvedValue({
+      thread,
+      messages: [
+        {
+          id: "m1", role: "assistant" as const, content: "확인된 사실[c0] 근거 없는 말[c1]",
+          status: "completed" as const, sequenceNumber: 2, retrievalMode: "keyword",
+          followups: [],
+          claims: [
+            {
+              text: "확인된 사실", verificationStatus: "supported" as const,
+              sourceRefs: [{ pageNumber: 3, blockId: "b1", bbox: [0, 0, 1, 1] as [number, number, number, number],
+                             readingOrder: 0, sourceMethod: "digital" as const }],
+            },
+            // 출처가 없어 검증에 실패한 주장 — 1쪽으로 날조하면 안 된다.
+            { text: "근거 없는 말", verificationStatus: "unsupported" as const, sourceRefs: [] },
+          ],
+        },
+      ],
+    });
+    renderQa();
+    await screen.findAllByRole("button", { name: /3쪽 근거 보기/ });
+    expect(screen.queryByRole("button", { name: /1쪽 근거 보기/ })).toBeNull();
+  });
+
+  it("한 주장의 출처가 여럿이면 모두 보여준다", async () => {
+    apiMock.listThreads.mockResolvedValue([thread]);
+    apiMock.getThread.mockResolvedValue({
+      thread,
+      messages: [
+        {
+          id: "m2", role: "assistant" as const, content: "두 곳에 근거가 있다[c0]",
+          status: "completed" as const, sequenceNumber: 2, retrievalMode: "keyword",
+          followups: [],
+          claims: [
+            {
+              text: "두 곳에 근거가 있다", verificationStatus: "supported" as const,
+              sourceRefs: [
+                { pageNumber: 3, blockId: "b1", bbox: [0, 0, 1, 1] as [number, number, number, number],
+                  readingOrder: 0, sourceMethod: "digital" as const },
+                { pageNumber: 7, blockId: "b2", bbox: [0, 0, 1, 1] as [number, number, number, number],
+                  readingOrder: 1, sourceMethod: "digital" as const },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    renderQa();
+    expect(await screen.findByRole("button", { name: /7쪽 근거 보기/ })).toBeInTheDocument();
+  });
+
+  it("대화가 시작된 뒤에도 학습 수준을 바꿀 수 있다", async () => {
+    apiMock.listThreads.mockResolvedValue([thread]);
+    apiMock.getThread.mockResolvedValue(answerDetail);
+    renderQa();
+    expect(await screen.findByRole("radio", { name: "간호학생" })).toBeChecked();
+  });
+
+  it("청크가 준비되지 않았으면 복구 방법을 알려준다", async () => {
+    apiMock.listThreads.mockResolvedValue([]);
+    apiMock.createThread.mockResolvedValue({ thread });
+    apiMock.getThread.mockResolvedValue({ thread, messages: [] });
+    streamMock.streamQuestion.mockRejectedValue(new ApiError(409, "INVALID_STATE", "먼저 문서 검색 준비를 완료해 주세요.", false));
+    renderQa();
+    await userEvent.click(await screen.findByText("이 문서의 핵심 내용은 무엇인가요?"));
+    expect(await screen.findByText(/문서 검색\s*준비하기/)).toBeInTheDocument();
   });
 });

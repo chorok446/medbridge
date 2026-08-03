@@ -37,3 +37,17 @@ export function tokenizeCitations(content: string, claimCount: number): Citation
 export function hasCitations(tokens: CitationToken[]): boolean {
   return tokens.some((t) => t.kind === "citation");
 }
+
+/** 같은 페이지·블록을 가리키는 중복 출처를 접는다. 한 주장이 여러 청크에 근거를 두면
+ *  같은 블록이 반복해서 들어온다 — 목록에 같은 줄이 두 번 뜨면 차이를 판단할 수 없다. */
+export function dedupeRefs<T extends { pageNumber: number; blockId: string }>(refs: T[]): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const r of refs) {
+    const key = `${r.pageNumber}-${r.blockId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(r);
+  }
+  return out;
+}

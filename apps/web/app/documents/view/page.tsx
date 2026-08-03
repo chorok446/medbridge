@@ -28,6 +28,8 @@ function DocumentDetail() {
   const [notice, setNotice] = useState<string | null>(null);
   // null = 아직 사용자가 고르지 않음. 기본 탭은 문서 상태를 보고 정한다(아래 effectiveTab).
   const [mainTab, setMainTab] = useState<"preview" | "extraction" | "summary" | "qa" | null>(null);
+  // 문서를 처음 본 시점의 기본 탭. 폴링으로 상태가 바뀌어도 여기서 고정된다.
+  const [defaultTab, setDefaultTab] = useState<"preview" | "qa" | null>(null);
 
   const fileUrlQuery = useQuery({
     queryKey: ["file-url", id],
@@ -85,7 +87,16 @@ function DocumentDetail() {
   const processing = isActive(doc.processingStatus);
   // 읽을 준비가 끝난 문서는 "무엇을 물어볼까"가 먼저 보이게 한다. 아직 처리 중이면
   // 질문할 대상이 없으므로 문서 보기로 연다.
-  const effectiveTab = mainTab ?? (hasExtraction(doc.processingStatus) ? "qa" : "preview");
+  //
+  // 처음 본 문서 상태로 한 번만 정하고 그 뒤로는 바꾸지 않는다. 매 렌더 재계산하면
+  // 2초 폴링으로 추출이 끝나는 순간 사용자가 읽던 PDF가 아무 조작 없이 질문 패널로
+  // 교체된다 — 보던 페이지와 스크롤을 잃는다.
+  if (defaultTab === null) {
+    // 렌더 중 파생 상태 확정 — React가 지원하는 패턴이다(즉시 재렌더, 커밋 없음).
+    setDefaultTab(hasExtraction(doc.processingStatus) ? "qa" : "preview");
+  }
+  const effectiveTab =
+    mainTab ?? defaultTab ?? (hasExtraction(doc.processingStatus) ? "qa" : "preview");
 
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-8">

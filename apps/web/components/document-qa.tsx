@@ -1,10 +1,15 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { CitedText, SourceList } from "@/components/citations";
 import { PdfViewer } from "@/components/pdf-viewer";
-import { type CitationSource, hasCitations, tokenizeCitations } from "@/lib/citations";
+import {
+  type CitationSource,
+  dedupeRefs,
+  hasCitations,
+  tokenizeCitations,
+} from "@/lib/citations";
 import { useQaStream } from "@/hooks/use-qa-stream";
 import {
   createThread,
@@ -80,6 +85,8 @@ export function DocumentQa({ doc, fileUrl }: Props) {
   // 마지막 선택을 브라우저에 기억한다 — 서버에 저장하지 않는다. 이 패널은
   // useSearchParams 아래 Suspense 안이라 정적 프리렌더에 들어가지 않으므로
   // 첫 렌더에서 바로 읽어도 하이드레이션이 어긋나지 않는다.
+  // 전송 중 잠금. busy(렌더 값)는 createThread를 기다리는 동안 아직 false다.
+  const sendingRef = useRef(false);
   const [level, setLevel] = useState<LearnerLevel>(() => {
     if (typeof window === "undefined") return "nursing_student";
     const saved = window.localStorage.getItem(LEVEL_STORAGE_KEY);
@@ -128,6 +135,14 @@ export function DocumentQa({ doc, fileUrl }: Props) {
     messages.filter((m) => m.role === "assistant").at(-1)?.followups ?? [];
   const providerUnavailable = stream.state.phase === "failed" && stream.state.errorStatus === 501;
   const consentNeeded = stream.state.phase === "failed" && stream.state.errorStatus === 403;
+  // 청크가 아직 없는 문서(막 올린 자료)는 서버가 409로 막는다. 안내가 없으면 사용자에겐
+  // 버튼이 죽은 것으로 보인다 — PRODUCT.md "오류는 다음 행동과 함께".
+  const notReady = stream.state.phase === "failed" && stream.state.errorStatus === 409;
+  const streamFailed =
+    stream.state.phase === "failed" &&
+    !providerUnavailable &&
+    !consentNeeded &&
+    !notReady;
   const busy = stream.active || retryMutation.isPending;
 
   function navigate(ref: NavigateRef) {
@@ -144,20 +159,29 @@ export function DocumentQa({ doc, fileUrl }: Props) {
   async function askQuestion(raw: string) {
     const q = raw.trim();
     if (!q || busy) return;
-    let threadId = effectiveThreadId;
-    if (threadId === null) {
-      const created = await createThread(doc.id);
-      threadId = created.thread.id;
-      setSelectedThreadId(threadId);
+    // busy는 렌더 시점 값이라 createThread를 기다리는 동안 아직 false다. 예시·후속 질문
+    // 버튼을 연타하면 그 틈으로 두 번째 클릭이 들어와 스레드가 둘 생기고, 두 번째 요청이
+    // 첫 번째를 abort해 첫 질문은 답을 못 받은 채 남는다. ref로 즉시 잠근다.
+    if (sendingRef.current) return;
+    sendingRef.current = true;
+    try {
+      let threadId = effectiveThreadId;
+      if (threadId === null) {
+        const created = await createThread(doc.id);
+        threadId = created.thread.id;
+        setSelectedThreadId(threadId);
+        void queryClient.invalidateQueries({ queryKey: ["qa-threads", doc.id] });
+      }
+      setPendingQuestion(q);
+      setInput("");
+      await stream.ask(threadId, q, level);
+      // 스트림 종료(완료/취소/중단/실패) → DB에 확정된 메시지를 다시 불러온다.
+      setPendingQuestion(null);
+      void queryClient.invalidateQueries({ queryKey: ["qa-thread", doc.id, threadId] });
       void queryClient.invalidateQueries({ queryKey: ["qa-threads", doc.id] });
+    } finally {
+      sendingRef.current = false;
     }
-    setPendingQuestion(q);
-    setInput("");
-    await stream.ask(threadId, q, level);
-    // 스트림 종료(완료/취소/중단/실패) → DB에 확정된 메시지를 다시 불러온다.
-    setPendingQuestion(null);
-    void queryClient.invalidateQueries({ queryKey: ["qa-thread", doc.id, threadId] });
-    void queryClient.invalidateQueries({ queryKey: ["qa-threads", doc.id] });
   }
 
   return (
@@ -218,28 +242,6 @@ export function DocumentQa({ doc, fileUrl }: Props) {
               <p className="text-lg font-semibold text-slate-900">
                 이 문서에 대해 질문해 보세요.
               </p>
-              <fieldset className="flex gap-1.5">
-                <legend className="sr-only">학습 수준</legend>
-                {LEVELS.map((l) => (
-                  <label
-                    key={l.key}
-                    className={`cursor-pointer rounded-full border px-3 py-1 text-xs ${
-                      level === l.key
-                        ? "border-blue-600 bg-blue-50 text-blue-700"
-                        : "border-slate-200 text-slate-600 hover:bg-slate-50"
-                    }`}
-                  >
-                    <input
-                      type="radio"
-                      name="learner-level"
-                      className="sr-only"
-                      checked={level === l.key}
-                      onChange={() => chooseLevel(l.key)}
-                    />
-                    {l.label}
-                  </label>
-                ))}
-              </fieldset>
               <ul className="flex w-full flex-col gap-2">
                 {EXAMPLE_QUESTIONS.map((q) => (
                   <li key={q}>
@@ -318,6 +320,17 @@ export function DocumentQa({ doc, fileUrl }: Props) {
               외부 모델을 쓰려면 앱 설정과 이 문서에서 외부 전송을 먼저 허용해 주세요.
             </p>
           )}
+          {notReady && (
+            <p role="alert" className="mt-3 rounded bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              아직 질문할 준비가 되지 않았어요. 위쪽 [텍스트 확인] 탭에서 “문서 검색
+              준비하기”를 먼저 눌러 주세요.
+            </p>
+          )}
+          {streamFailed && (
+            <p role="alert" className="mt-3 rounded bg-red-50 px-3 py-2 text-sm text-red-800">
+              답변을 만들지 못했어요. 잠시 후 다시 질문해 주세요.
+            </p>
+          )}
 
           {!busy && lastFollowups.length > 0 && (
             <ul className="mt-3 flex flex-wrap gap-1.5">
@@ -352,10 +365,38 @@ export function DocumentQa({ doc, fileUrl }: Props) {
                 다시 시도
               </button>
             )}
+          {retryMutation.isError && (
+            <p role="alert" className="mt-2 rounded bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              지금은 다시 시도할 수 없어요. 아래에 질문을 다시 입력해 주세요.
+            </p>
+          )}
         </div>
 
         <div className="border-t border-slate-100 p-2">
-          <p className="mb-1.5 px-1 text-[11px] text-slate-400">
+          {/* 대화가 시작된 뒤에도 어떤 수준이 적용 중인지 보이고 바꿀 수 있어야 한다 */}
+          <fieldset className="mb-2 flex justify-center gap-1.5">
+            <legend className="sr-only">학습 수준</legend>
+            {LEVELS.map((l) => (
+              <label
+                key={l.key}
+                className={`cursor-pointer rounded-full border px-3 py-1 text-xs ${
+                  level === l.key
+                    ? "border-blue-600 bg-blue-50 text-blue-700"
+                    : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="learner-level"
+                  className="sr-only"
+                  checked={level === l.key}
+                  onChange={() => chooseLevel(l.key)}
+                />
+                {l.label}
+              </label>
+            ))}
+          </fieldset>
+          <p className="mb-1.5 px-1 text-xs text-slate-500">
             업로드한 문서 기준 답변이에요. 실제 진단·처방·응급 판단에 사용하지 마세요.
           </p>
           <form
@@ -399,13 +440,21 @@ function AssistantMessage({
   const supportedClaims = message.claims.filter(
     (c) => c.verificationStatus === "supported" || c.verificationStatus === "conflicting",
   );
-  // 인용 번호 i는 claims[i]에 대응한다 — 서버(verify)가 그렇게 다시 써서 보낸다.
-  const sources: CitationSource[] = message.claims.map((c) => ({
-    pageNumber: c.sourceRefs[0]?.pageNumber ?? 1,
-    sectionTitle: c.sourceRefs[0]?.sectionTitle ?? null,
-    sourceMethod: c.sourceRefs[0]?.sourceMethod ?? "digital",
-    bbox: c.sourceRefs[0]?.bbox ?? [0, 0, 0, 0],
-  }));
+  // 인용 번호 i는 claims[i]에 대응한다 — 서버가 마커를 그 번호로 맞춰 보낸다. 그래서
+  // 배열 자리는 그대로 두고, 보여주면 안 되는 자리만 null로 비운다. 걸러내며 당기면
+  // 번호가 밀려 사용자가 누른 인용이 다른 근거로 이동한다.
+  const sources: (CitationSource[] | null)[] = message.claims.map((c) =>
+    // 검증에 실패해 화면에 내보내지 않기로 한 주장의 페이지를 '출처'로 제시하지 않는다.
+    // 출처가 아예 없는 주장도 마찬가지 — 없는 근거를 1쪽으로 지어내지 않는다.
+    c.verificationStatus === "unsupported" || c.sourceRefs.length === 0
+      ? null
+      : dedupeRefs(c.sourceRefs).map((r) => ({
+          pageNumber: r.pageNumber,
+          sectionTitle: r.sectionTitle ?? null,
+          sourceMethod: r.sourceMethod,
+          bbox: r.bbox,
+        })),
+  );
   const cited = hasCitations(tokenizeCitations(message.content, sources.length));
 
   return (
@@ -419,7 +468,9 @@ function AssistantMessage({
             onNavigate={(s) => onNavigate({ pageNumber: s.pageNumber, bbox: s.bbox })}
           />
           <SourceList
-            sources={sources}
+            groups={sources.flatMap((refs, i) =>
+              refs ? [{ number: i + 1, refs }] : [],
+            )}
             onNavigate={(s) => onNavigate({ pageNumber: s.pageNumber, bbox: s.bbox })}
           />
         </>
@@ -464,13 +515,13 @@ function SourceBadges({
   if (refs.length === 0) return null;
   return (
     <div className="mt-1 flex flex-wrap gap-1">
-      <span className="text-[11px] text-slate-400">출처:</span>
+      <span className="text-xs text-slate-500">출처:</span>
       {refs.map((r) => (
         <button
           key={`${r.pageNumber}-${r.blockId}`}
           type="button"
           onClick={() => onNavigate({ pageNumber: r.pageNumber, bbox: r.bbox })}
-          className="rounded bg-blue-50 px-2 py-0.5 text-[11px] text-blue-700 hover:bg-blue-100"
+          className="rounded bg-blue-50 px-2 py-0.5 text-xs text-blue-700 hover:bg-blue-100"
         >
           {r.pageNumber}쪽
         </button>
