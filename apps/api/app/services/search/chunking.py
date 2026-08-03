@@ -14,6 +14,7 @@ from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.document import Document
+from app.models.enums import OcrRunStatus
 from app.models.extraction import DocumentBlock, DocumentPage, DocumentTable
 from app.models.search import DocumentChunk
 from app.services.extraction.geometry import overlap_ratio
@@ -131,13 +132,33 @@ def _table_markdown_for_block(
     return None
 
 
+def _has_digital_text(block: DocumentBlock) -> bool:
+    """이 블록이 '이미 읽어낸 디지털 본문'인지.
+
+    빈 IMAGE 블록은 디지털 본문이 아니라 **OCR이 필요했던 이유** 그 자체다. 내용을
+    보지 않고 출처만 보면 스캔 페이지가 항상 "디지털 블록이 있는 페이지"로 판정돼
+    그 페이지의 OCR 텍스트가 통째로 청크에서 빠지고, 요약·검색이 스캔 문서의 본문을
+    한 글자도 보지 못한다.
+    """
+    return _block_source_method(block) == "digital" and (
+        bool((block.text or "").strip()) or block.is_table
+    )
+
+
 def _select_blocks(
     pages: list[DocumentPage], blocks: list[DocumentBlock]
 ) -> list[tuple[int, DocumentBlock]]:
-    """페이지별로 머리말·꼬리말을 제외하고, 디지털 블록이 있으면 그 페이지의 OCR
+    """페이지별로 머리말·꼬리말을 제외하고, 디지털 본문이 있으면 그 페이지의 OCR
     블록은 제외한다(디지털 우선). 반환은 (page_number, block) 튜플의 읽기 순서 목록.
+
+    판독 신뢰도가 바닥인 페이지의 OCR 블록도 제외한다. 형식은 성공이지만 내용은
+    노이즈라, 그대로 두면 요약·검색이 그 노이즈를 근거로 삼고 사용자는 그것을 완결된
+    결과로 신뢰한다(실기기: 재시도한 11페이지가 평균 신뢰도 0.32~0.38로 돌아왔다).
     """
     page_number_by_id = {p.id: p.page_number for p in pages}
+    unreliable_page_ids = {
+        p.id for p in pages if p.ocr_status == OcrRunStatus.OCR_LOW_CONFIDENCE.value
+    }
     by_page: dict[int, list[DocumentBlock]] = {}
     for b in blocks:
         if b.is_header or b.is_footer:
@@ -149,9 +170,11 @@ def _select_blocks(
 
     selected: list[tuple[int, DocumentBlock]] = []
     for page_number, page_blocks in sorted(by_page.items()):
-        has_digital = any(_block_source_method(b) == "digital" for b in page_blocks)
+        has_digital = any(_has_digital_text(b) for b in page_blocks)
         for b in sorted(page_blocks, key=lambda b: b.reading_order):
-            if has_digital and _block_source_method(b) == "ocr":
+            if _block_source_method(b) == "ocr" and (
+                has_digital or b.page_id in unreliable_page_ids
+            ):
                 continue
             if not (b.text or "").strip() and not b.is_table:
                 continue

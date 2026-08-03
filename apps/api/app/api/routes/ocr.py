@@ -27,7 +27,12 @@ router = APIRouter(prefix="/api/documents", tags=["ocr"])
 
 class OcrOptions(CamelModel):
     language: str = Field(default="kor+eng", pattern=r"^[a-z+_]{2,30}$")
-    quality: str = Field(default="standard")
+    # 기본값을 여기서 정하지 않는다. 시작은 standard, 재시도는 high가 기본이라 값이
+    # 다르고, 무엇보다 프런트엔드는 빈 `{}`를 보낸다. 여기에 "standard"를 박아두면
+    # `body or OcrOptions(quality="high")` 같은 fallback이 영원히 죽는다 — 빈 body도
+    # 채워진 모델이라 truthy이기 때문이다. 실제로 '다시 읽기'가 첫 실행과 같은 DPI로
+    # 돌아, 결정론적 엔진이 바이트 단위로 같은 결과를 내는 no-op이 되어 있었다.
+    quality: str | None = None
     pages: list[int] | None = None
 
 
@@ -67,7 +72,7 @@ async def start_ocr(
         doc,
         correlation_id_var.get(),
         language=options.language,
-        quality=options.quality,
+        quality=options.quality or "standard",
         pages=options.pages,
     )
     return wrap(OcrStartOut(target_pages=targets, started=targets > 0))
@@ -82,7 +87,7 @@ async def retry_ocr(
 ) -> dict:
     """실패·저품질 페이지 재시도 (고품질 모드 기본)."""
     doc = await get_owned_document(db, user, document_id)
-    options = body or OcrOptions(quality="high")
+    options = body or OcrOptions()
     pages = options.pages
     if pages is None:
         rows = (
@@ -191,7 +196,7 @@ async def ocr_single_page(
         doc,
         correlation_id_var.get(),
         language=options.language,
-        quality=options.quality,
+        quality=options.quality or "standard",
         pages=[page_number],
     )
     return wrap(OcrStartOut(target_pages=targets, started=targets > 0))

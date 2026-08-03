@@ -88,6 +88,13 @@ async def run_ocr_job(
         logger.info("ocr_engine_ready", document_id=str(document_id), **describe())
 
     processed = failed = 0
+    # 형식은 성공했지만 내용이 노이즈인 페이지. 실패와 따로 세되 잡을 성공으로
+    # 마감하지는 않는다 — 조용히 SUCCEEDED로 끝나면 오류 리포트에 흔적이 남지 않고,
+    # 사용자는 본문이 빠진 문서를 '다 읽었다'로 받는다.
+    unreliable = 0
+    # 본문이 실제로 달라진 페이지 수. 결과가 같은 재실행까지 revision을 올리면 이미
+    # 만들어 둔 요약 노드 수백 개가 재사용 키에서 무효가 된다.
+    changed = 0
     while True:
         async with factory() as session:
             if not await _job_is_current(session, document_id, job_id):
@@ -143,9 +150,17 @@ async def run_ocr_job(
                         .limit(1)
                     )
                 ).scalars().one()
-                await ocr_service.apply_ocr_result(session, page, result, run_row)
+                page_changed = await ocr_service.apply_ocr_result(
+                    session, page, result, run_row
+                )
                 await session.commit()
                 processed += 1
+                changed += int(page_changed)
+                if run_row.status in (
+                    OcrRunStatus.OCR_LOW_CONFIDENCE,
+                    OcrRunStatus.OCR_EMPTY,
+                ):
+                    unreliable += 1
                 logger.info(
                     "ocr_page_done",
                     document_id=str(document_id),
@@ -153,6 +168,12 @@ async def run_ocr_job(
                     words=run_row.word_count,
                     mean_confidence=run_row.mean_confidence,
                     duration_ms=run_row.duration_ms,
+                    # 판독 품질 판정 결과. 이게 없으면 신뢰도 0.35짜리 노이즈 페이지와
+                    # 정상 페이지가 같은 "완료" 한 줄로만 남아 로그로 구분할 수 없다.
+                    result_status=run_row.status.value,
+                    # 같은 결과를 다시 쓴 재실행인지 — 재시도가 실제로 무언가 바꿨는지
+                    # 판단하는 유일한 신호다(결정론적 엔진은 같은 입력에 같은 답을 낸다).
+                    changed=page_changed,
                 )
         except Exception as exc:
             failed += 1
@@ -200,23 +221,39 @@ async def run_ocr_job(
         job = await session.get(DocumentJob, job_id)
         doc = await session.get(Document, document_id)
         if job is not None:
-            job.status = JobStatus.SUCCEEDED if failed == 0 else JobStatus.FAILED
-            if failed:
+            incomplete = failed + unreliable
+            job.status = JobStatus.SUCCEEDED if incomplete == 0 else JobStatus.FAILED
+            if incomplete:
                 job.failure_code = "OCR_PARTIAL_FAILURE"
+                # 같은 코드라도 대응이 다르다. "엔진이 죽었다"는 설치·경로 문제고,
+                # "읽긴 읽었는데 노이즈다"는 원본 스캔 품질 문제다.
+                job.failure_reason = (
+                    "page_errors_and_unreliable"
+                    if failed and unreliable
+                    else ("page_errors" if failed else "unreliable_pages")
+                )
             job.completed_at = datetime.now(UTC)
         if doc is not None:
             await ocr_service.rollup_document_status(session, doc)
-            if processed > 0:
-                # OCR로 내용이 바뀜 — content revision을 올린다(기존 청크·요약 stale).
+            if changed > 0:
+                # 본문이 실제로 바뀜 — content revision을 올린다(기존 청크·요약 stale).
+                # `processed > 0`을 기준으로 삼으면 같은 결과를 다시 쓴 재실행도 revision을
+                # 올려, 이미 성공한 요약 노드 수백 개가 재사용 키에서 통째로 무효가 된다.
                 doc.content_revision = (doc.content_revision or 1) + 1
         await session.commit()
         logger.info(
-            "ocr_job_done", document_id=str(document_id), processed=processed, failed=failed
+            "ocr_job_done",
+            document_id=str(document_id),
+            processed=processed,
+            failed=failed,
+            # 형식만 성공한 페이지 수 — failed=0인데 본문이 비는 이유가 여기서만 보인다.
+            unreliable=unreliable,
+            changed=changed,
         )
 
     # 내용이 바뀌었으면 청크를 자동으로 다시 만든다(요약은 자동 생성하지 않는다 —
     # 모델 호출은 사용자가 실행). 청크 재생성 실패는 OCR 완료 자체를 되돌리지 않는다.
-    if processed > 0:
+    if changed > 0:
         async with factory() as session:
             doc = await session.get(Document, document_id)
             if doc is not None and doc.deleted_at is None:

@@ -236,8 +236,28 @@ async def _digital_normalized_text(db: AsyncSession, page_id: uuid.UUID) -> str:
 
 async def apply_ocr_result(
     db: AsyncSession, page: DocumentPage, result: OcrResult, run: OcrRun
-) -> None:
-    """OCR 결과를 원자적으로 교체 저장 — 같은 트랜잭션에서 커밋은 호출자가 한다."""
+) -> bool:
+    """OCR 결과를 원자적으로 교체 저장 — 같은 트랜잭션에서 커밋은 호출자가 한다.
+
+    반환값은 **페이지 본문이 실제로 달라졌는지**다. 호출자는 이 값으로 문서
+    content_revision을 올릴지 정한다 — 같은 결과를 다시 쓴 재실행까지 revision을
+    올리면 이미 만들어 둔 청크·요약이 아무 이유 없이 stale이 된다.
+    """
+    previous_text = page.normalized_text or ""
+    # 판정 상태도 함께 본다. 같은 단어를 신뢰도만 다르게 돌려주면 본문은 그대로여도
+    # 청크 포함 여부가 뒤집히므로(저신뢰 페이지는 청크에서 빠진다) 재생성이 필요하다.
+    #
+    # 비교 대상은 `page.ocr_status`가 아니라 **직전 실행 기록**이다. 페이지 상태는 잡을
+    # 등록하는 순간 이미 pending으로 덮여 있어, 그걸 기준으로 삼으면 결과가 완전히 같은
+    # 재실행도 항상 "바뀜"으로 판정된다.
+    previous_status = (
+        await db.execute(
+            select(OcrRun.status)
+            .where(OcrRun.page_id == page.id, OcrRun.id != run.id)
+            .order_by(OcrRun.created_at.desc())
+            .limit(1)
+        )
+    ).scalars().first()
     digital_boxes = await _digital_text_bboxes(db, page.id)
     await _delete_ocr_rows(db, page.id)
 
@@ -379,6 +399,7 @@ async def apply_ocr_result(
     run.word_count = len(kept)
     run.duration_ms = result.duration_ms
     run.completed_at = datetime.now(UTC)
+    return page.normalized_text != previous_text or status != previous_status
 
 
 async def rollup_document_status(db: AsyncSession, doc: Document) -> None:
@@ -391,12 +412,20 @@ async def rollup_document_status(db: AsyncSession, doc: Document) -> None:
     if not pages:
         return
     remaining_ocr = sum(1 for p in pages if p.requires_ocr)
-    # 실패·빈 결과 페이지는 '읽힌 것'으로 승격하지 않는다 (M6)
+    # 실패·빈 결과 페이지는 '읽힌 것'으로 승격하지 않는다 (M6).
+    # 저신뢰 결과도 같다 — 단어는 있지만 내용은 노이즈라 청크에서도 제외된다. 이걸
+    # '읽힌 것'으로 세면 문서가 extracted로 승격돼, 사용자는 본문 일부가 통째로 빠진
+    # 문서를 '다 읽었다'로 신뢰하고 재시도 안내조차 받지 못한다.
     unresolved = sum(
         1
         for p in pages
         if p.extraction_status.value == "failed"
-        or p.ocr_status in (OcrRunStatus.OCR_FAILED.value, OcrRunStatus.OCR_EMPTY.value)
+        or p.ocr_status
+        in (
+            OcrRunStatus.OCR_FAILED.value,
+            OcrRunStatus.OCR_EMPTY.value,
+            OcrRunStatus.OCR_LOW_CONFIDENCE.value,
+        )
     )
     if doc.processing_status not in (
         ProcessingStatus.OCR_REQUIRED,

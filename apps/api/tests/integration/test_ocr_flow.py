@@ -6,11 +6,15 @@ import pytest
 from sqlalchemy import func, select
 
 from app.db.session import get_session_factory
-from app.models.enums import OcrRunStatus
+from app.models.document import Document, DocumentJob
+from app.models.enums import JobType, OcrRunStatus
 from app.models.extraction import DocumentBlock, DocumentPage, DocumentWord
 from app.models.ocr import OcrRun
+from app.models.search import DocumentChunk
 from app.services.extraction.ocr import OcrResult, OcrWord
 from app.services.ocr import service as ocr_service
+from app.services.ocr.settings import OCR_HIGH_QUALITY_DPI, OCR_LOW_MEMORY_DPI
+from app.services.search.chunking import rebuild_chunks
 from tests import extraction_fixtures as fx
 from tests.integration.conftest import drain_jobs
 
@@ -38,6 +42,7 @@ class FakeEngine:
         self.result = result
         self.error = error
         self.calls: list[int] = []
+        self.dpis: list[int] = []
 
     @property
     def available(self) -> bool:
@@ -49,6 +54,7 @@ class FakeEngine:
 
     def recognize_page(self, pdf_path, page_number, *, language="kor+eng", dpi=0):
         self.calls.append(page_number)
+        self.dpis.append(dpi)
         if self.error:
             raise self.error
         result = self.result or OcrResult(page_number=page_number)
@@ -414,3 +420,242 @@ class TestOcrControlPaths:
                 )
             ).scalar_one()
         assert runs == 0 and blocks == 0
+
+
+def _low_confidence_result(texts: list[str]) -> OcrResult:
+    """판독에 실패한 것과 다름없는 결과 — 단어는 있지만 신뢰도가 바닥이다.
+
+    실기기 재시도에서 11페이지가 평균 신뢰도 0.32~0.38로 돌아왔다. 형식은 성공이라
+    아무 게이트에도 걸리지 않았지만 내용은 노이즈였다.
+    """
+    return OcrResult(
+        page_number=1, words=fake_words(texts, conf=0.35), mean_confidence=0.35
+    )
+
+
+class TestLowConfidenceIsolation:
+    """저신뢰 OCR 결과를 '읽은 내용'으로 취급하지 않는다.
+
+    형식만 성공한 노이즈가 청크로 들어가면 요약·검색이 그 노이즈를 근거로 삼고,
+    사용자는 그것을 완결된 결과로 신뢰한다.
+    """
+
+    async def test_low_confidence_text_is_kept_out_of_chunks(self, client, monkeypatch):
+        fake = FakeEngine(result=_low_confidence_result(["ㄱㅂㅅ", "ㅁㄴㅇ", "ㄹㅇㅋ", "ㅍㅌㅊ"]))
+        monkeypatch.setattr(ocr_service, "engine", lambda: fake)
+        doc = await upload_extracted(client, fx.blank_image_page())
+        await client.post(f"/api/documents/{doc['id']}/ocr")
+        await drain_jobs()
+
+        doc_id = uuid.UUID(doc["id"])
+        async with get_session_factory()() as session:
+            await rebuild_chunks(session, doc_id)
+            await session.commit()
+            texts = [
+                r[0]
+                for r in (
+                    await session.execute(
+                        select(DocumentChunk.normalized_text).where(
+                            DocumentChunk.document_id == doc_id
+                        )
+                    )
+                ).all()
+            ]
+        assert not any("ㄱㅂㅅ" in t for t in texts), texts
+
+    async def test_low_confidence_keeps_document_unresolved(self, client, monkeypatch):
+        """ocr_empty와 같은 취급 — '다 읽었다'로 승격하지 않는다."""
+        fake = FakeEngine(result=_low_confidence_result(["흐림", "판독", "불가", "상태"]))
+        monkeypatch.setattr(ocr_service, "engine", lambda: fake)
+        doc = await upload_extracted(client, fx.blank_image_page())
+        await client.post(f"/api/documents/{doc['id']}/ocr")
+        await drain_jobs()
+
+        after = (await client.get(f"/api/documents/{doc['id']}")).json()["data"]
+        assert after["processingStatus"] == "ocr_required"
+
+    async def test_low_confidence_marks_the_job_partially_failed(
+        self, client, monkeypatch
+    ):
+        """잡이 조용히 성공으로 끝나면 오류 리포트에 아무 흔적도 남지 않는다."""
+        fake = FakeEngine(result=_low_confidence_result(["흐림", "판독", "불가", "상태"]))
+        monkeypatch.setattr(ocr_service, "engine", lambda: fake)
+        doc = await upload_extracted(client, fx.blank_image_page())
+        await client.post(f"/api/documents/{doc['id']}/ocr")
+        await drain_jobs()
+
+        async with get_session_factory()() as session:
+            job = (
+                await session.execute(
+                    select(DocumentJob)
+                    .where(
+                        DocumentJob.document_id == uuid.UUID(doc["id"]),
+                        DocumentJob.job_type == JobType.OCR_DOCUMENT,
+                    )
+                    .order_by(DocumentJob.created_at.desc())
+                    .limit(1)
+                )
+            ).scalars().one()
+        assert job.failure_code == "OCR_PARTIAL_FAILURE"
+        # 같은 실패 코드라도 "엔진이 죽었다"와 "읽긴 읽었는데 노이즈다"는 대응이 다르다.
+        assert job.failure_reason == "unreliable_pages"
+
+    async def test_engine_errors_and_noise_get_different_reasons(
+        self, client, monkeypatch
+    ):
+        """엔진 실패는 저신뢰와 구분돼야 한다 — 보고서에서 원인을 좁히는 유일한 단서다."""
+        fake = FakeEngine(error=RuntimeError("boom"))
+        monkeypatch.setattr(ocr_service, "engine", lambda: fake)
+        doc = await upload_extracted(client, fx.blank_image_page())
+        await client.post(f"/api/documents/{doc['id']}/ocr")
+        await drain_jobs()
+
+        async with get_session_factory()() as session:
+            job = (
+                await session.execute(
+                    select(DocumentJob)
+                    .where(
+                        DocumentJob.document_id == uuid.UUID(doc["id"]),
+                        DocumentJob.job_type == JobType.OCR_DOCUMENT,
+                    )
+                    .order_by(DocumentJob.created_at.desc())
+                    .limit(1)
+                )
+            ).scalars().one()
+        assert job.failure_code == "OCR_PARTIAL_FAILURE"
+        assert job.failure_reason == "page_errors"
+
+    async def test_good_pages_still_reach_the_chunks(self, client, monkeypatch):
+        """저신뢰만 걸러낸다 — 정상 판독 결과까지 버리면 안 된다."""
+        fake = FakeEngine(
+            result=OcrResult(
+                page_number=1,
+                words=fake_words(["정상", "판독", "결과", "보존"], conf=0.95),
+                mean_confidence=0.95,
+            )
+        )
+        monkeypatch.setattr(ocr_service, "engine", lambda: fake)
+        doc = await upload_extracted(client, fx.blank_image_page())
+        await client.post(f"/api/documents/{doc['id']}/ocr")
+        await drain_jobs()
+
+        doc_id = uuid.UUID(doc["id"])
+        async with get_session_factory()() as session:
+            await rebuild_chunks(session, doc_id)
+            await session.commit()
+            texts = [
+                r[0]
+                for r in (
+                    await session.execute(
+                        select(DocumentChunk.normalized_text).where(
+                            DocumentChunk.document_id == doc_id
+                        )
+                    )
+                ).all()
+            ]
+        assert any("정상" in t for t in texts), texts
+
+
+class TestRetryActuallyRetries:
+    async def test_retry_uses_high_quality_even_with_an_empty_body(
+        self, client, monkeypatch
+    ):
+        """'다시 읽기'는 첫 실행보다 높은 해상도로 다시 읽어야 한다.
+
+        프런트엔드는 빈 `{}`를 보낸다. 그걸 '사용자가 standard를 골랐다'로 읽으면
+        재시도가 첫 실행과 같은 DPI로 돌고, tesseract는 결정론적이라 바이트 단위로
+        같은 결과가 나온다 — 재시도 버튼이 아무것도 하지 않는다.
+        """
+        fake = FakeEngine(result=_low_confidence_result(["흐림", "판독", "불가", "상태"]))
+        monkeypatch.setattr(ocr_service, "engine", lambda: fake)
+        doc = await upload_extracted(client, fx.blank_image_page())
+        await client.post(f"/api/documents/{doc['id']}/ocr")
+        await drain_jobs()
+        first_dpi = fake.dpis[-1]
+
+        res = await client.post(f"/api/documents/{doc['id']}/ocr/retry", json={})
+        assert res.status_code == 200, res.text
+        await drain_jobs()
+
+        assert fake.dpis[-1] == OCR_HIGH_QUALITY_DPI
+        assert fake.dpis[-1] > first_dpi
+
+    async def test_explicit_quality_in_the_body_is_still_honoured(
+        self, client, monkeypatch
+    ):
+        """사용자가 품질을 명시하면 그 값을 쓴다 — 기본값이 선택을 덮어쓰지 않는다."""
+        fake = FakeEngine(result=_low_confidence_result(["흐림", "판독", "불가", "상태"]))
+        monkeypatch.setattr(ocr_service, "engine", lambda: fake)
+        doc = await upload_extracted(client, fx.blank_image_page())
+        await client.post(f"/api/documents/{doc['id']}/ocr")
+        await drain_jobs()
+
+        res = await client.post(
+            f"/api/documents/{doc['id']}/ocr/retry", json={"quality": "low_memory"}
+        )
+        assert res.status_code == 200, res.text
+        await drain_jobs()
+        assert fake.dpis[-1] == OCR_LOW_MEMORY_DPI
+
+
+class TestContentRevisionOnlyMovesOnRealChange:
+    async def test_identical_rerun_does_not_invalidate_downstream_work(
+        self, client, monkeypatch
+    ):
+        """결과가 같으면 content_revision을 올리지 않는다.
+
+        revision은 요약 노드 재사용 키(build_context_key)에 들어간다. 아무것도 바뀌지
+        않은 재실행에 revision을 올리면, 실기기에서처럼 이미 성공한 map 노드 수백 개가
+        통째로 무효가 되고 사용자는 같은 요약을 처음부터 다시 기다린다.
+        """
+        fake = FakeEngine(
+            result=OcrResult(
+                page_number=1,
+                words=fake_words(["동일", "결과", "재실행", "검증"], conf=0.95),
+                mean_confidence=0.95,
+            )
+        )
+        monkeypatch.setattr(ocr_service, "engine", lambda: fake)
+        doc = await upload_extracted(client, fx.blank_image_page())
+        doc_id = uuid.UUID(doc["id"])
+        await client.post(f"/api/documents/{doc['id']}/ocr")
+        await drain_jobs()
+        async with get_session_factory()() as session:
+            first = (await session.get(Document, doc_id)).content_revision
+
+        await client.post(f"/api/documents/{doc['id']}/ocr", json={"pages": [1]})
+        await drain_jobs()
+
+        async with get_session_factory()() as session:
+            assert (await session.get(Document, doc_id)).content_revision == first
+
+    async def test_changed_text_still_bumps_the_revision(self, client, monkeypatch):
+        """내용이 실제로 바뀌면 revision은 올라가야 한다 — 그래야 stale 요약이 걸린다."""
+        fake = FakeEngine(
+            result=OcrResult(
+                page_number=1,
+                words=fake_words(["첫번째", "판독", "결과", "확인"], conf=0.95),
+                mean_confidence=0.95,
+            )
+        )
+        monkeypatch.setattr(ocr_service, "engine", lambda: fake)
+        doc = await upload_extracted(client, fx.blank_image_page())
+        doc_id = uuid.UUID(doc["id"])
+        await client.post(f"/api/documents/{doc['id']}/ocr")
+        await drain_jobs()
+        async with get_session_factory()() as session:
+            first = (await session.get(Document, doc_id)).content_revision
+
+        fake2 = FakeEngine(
+            result=OcrResult(
+                page_number=1,
+                words=fake_words(["두번째", "판독", "결과", "교체"], conf=0.95),
+                mean_confidence=0.95,
+            )
+        )
+        monkeypatch.setattr(ocr_service, "engine", lambda: fake2)
+        await client.post(f"/api/documents/{doc['id']}/ocr", json={"pages": [1]})
+        await drain_jobs()
+
+        async with get_session_factory()() as session:
+            assert (await session.get(Document, doc_id)).content_revision > first
