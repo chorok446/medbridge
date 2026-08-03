@@ -13,7 +13,7 @@
 3. 후속 질문을 제안한다.
 4. 질문을 크게 받는 검색 화면으로 시작한다.
 
-MedBridge는 2번을 이미 지킨다(`insufficient_evidence` / `not_found`). 3번은 **백엔드가 이미 만들어 저장하는데 화면이 쓰지 않는다**. 1번과 4번은 없다.
+MedBridge는 2번을 이미 지킨다(`insufficient_evidence` / `not_found`). 3번은 **모델이 만들고 서버가 받아놓고는 버린다** — `verify()`가 `followups`를 채워 `_finalize()`까지 넘기지만(`service.py:479`), `_finalize()`가 하는 일은 `if followups: assistant_msg.error_code = None`뿐이고(`service.py:501-502`) `QaMessage`에 저장할 컬럼이 없다. 1번과 4번은 아예 없다.
 
 ### 1.1 진짜 문제 — 읽는 문장과 검증된 문장이 다르다
 
@@ -38,7 +38,8 @@ MedBridge는 2번을 이미 지킨다(`insufficient_evidence` / `not_found`). 3�
 - **DDx(감별진단) · Tx Plan(치료계획) · Clinical Calcs.** `PRODUCT.md:17`의 "진단·처방·응급 판단 기능은 영구적으로 만들지 않는다"에 정면으로 걸린다. Vera의 간판 기능이지만 이 제품에는 들어오지 않는다.
 - 음성 질문(OpenEvidence의 hands-free). 로컬 STT가 별도 과제다.
 - 문서 목록 화면의 전역 질문창. 백엔드가 문서별 QA만 지원한다.
-- DB 마이그레이션. 이 설계는 스키마를 바꾸지 않는다.
+
+**마이그레이션은 후속 질문 저장 한 건만 한다.** 인용 마커는 기존 `content` 안에 들어가므로 스키마를 건드리지 않는다. 후속 질문은 저장할 곳이 없어 컬럼이 하나 필요하다(§4.3).
 
 ## 3. 인용 계약 (백엔드)
 
@@ -108,7 +109,15 @@ MedBridge는 2번을 이미 지킨다(`insufficient_evidence` / `not_found`). 3�
 
 ### 4.3 후속 질문
 
-`QaMessage`에 `followups: string[]`을 추가하고(백엔드는 이미 저장 중, `service.py:479`) 답변 아래 칩 3개로 렌더한다. 누르면 그 질문이 입력창에 들어가는 것이 아니라 **바로 전송된다** — 한 번 더 누르게 만들 이유가 없다.
+모델이 만든 후속 질문을 답변 아래 칩 3개로 렌더한다. 누르면 입력창에 들어가는 것이 아니라 **바로 전송된다** — 한 번 더 누르게 만들 이유가 없다.
+
+저장 경로가 없으므로 만든다.
+
+- 마이그레이션 `0012`: `qa_messages.followups_json` (JSON, nullable)
+- `_finalize()`가 실제로 저장한다. 현재의 `if followups: assistant_msg.error_code = None`은 후속 질문과 아무 상관이 없는 줄이므로 함께 걷어낸다.
+- `MessageOut.followups`로 응답에 노출, `QaMessage` 타입에 `followups: string[]` 추가
+
+기존 메시지는 `null` → 빈 배열로 읽어 칩을 렌더하지 않는다. 백필 없음.
 
 ## 5. 질문 탭 IA
 
@@ -194,7 +203,9 @@ Vera의 모드 탭 자리에 기존 `LearnerLevel`(`concise` / `nursing_student`
 
 - `app/services/qa/schema.py` — 마커 파싱·제거 (`verify()`)
 - `app/services/qa/provider.py` — 프롬프트 계약, `learner_level` 반영
-- `app/services/qa/service.py` · `stream_service.py` — `learnerLevel` 전달
+- `app/services/qa/service.py` · `stream_service.py` — `learnerLevel` 전달, `followups` 저장
+- `app/models/qa.py` — `QaMessage.followups_json`
+- `alembic/versions/0012_qa_followups.py` — 신규
 - `app/api/routes/qa.py` — 요청 스키마, `followups` 응답 노출
 
 **프론트**
