@@ -498,8 +498,7 @@ async def _finalize(
     assistant_msg.status = status
     assistant_msg.retrieval_mode = retrieval_mode
     assistant_msg.completed_at = datetime.now(UTC)
-    if followups:
-        assistant_msg.error_code = None
+    assistant_msg.followups_json = list(followups) if followups else None
     for c in claims:
         db.add(c)
     # 스레드 제목이 없으면 첫 질문으로 자동 지정

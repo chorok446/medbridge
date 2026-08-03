@@ -85,6 +85,8 @@ class QaMessage(Base):
     model_name: Mapped[str | None] = mapped_column(String(100), nullable=True)
     retrieval_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # 모델이 제안한 다음 질문. 없으면 NULL — 기존 메시지는 백필하지 않는다.
+    followups_json: Mapped[list | None] = mapped_column(JSON, nullable=True)
     # 스트리밍(Sprint 4B) — 전부 nullable, 기존 행 무해
     draft_content: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 부분 유니크 인덱스(uq_qa_stream_request_id)로 유일성 보장 — 컬럼 unique는 두지 않는다

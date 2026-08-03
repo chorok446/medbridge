@@ -393,3 +393,41 @@ class TestDeleteCascade:
             msgs = (await s.execute(select(func.count()).select_from(QaMessage))).scalar_one()
             claims = (await s.execute(select(func.count()).select_from(QaClaim))).scalar_one()
         assert threads == 0 and msgs == 0 and claims == 0
+
+
+class TestFollowupsReachTheClient:
+    """모델이 만든 후속 질문은 저장되어 다시 불러도 살아 있어야 한다."""
+
+    async def test_followups_are_persisted_and_returned(self, client, monkeypatch):
+        await enable_deterministic()
+        from app.services.qa import provider as prov
+
+        original = prov.DeterministicQaProvider.answer
+
+        def with_followups(self, request):
+            out = original(self, request)
+            out["followUpSuggestions"] = ["더 자세히?", "다른 예시는?"]
+            return out
+
+        monkeypatch.setattr(prov.DeterministicQaProvider, "answer", with_followups)
+
+        doc_id = await upload_chunked(client, fx.single_column_korean(pages=2))
+        tid = await new_thread(client, doc_id)
+        await client.post(
+            f"/api/documents/{doc_id}/qa/threads/{tid}/messages",
+            json={"question": "심장은 무엇을 하나요?"},
+        )
+        # 응답이 아니라 "다시 조회"로 확인한다 — 저장되지 않으면 여기서 사라진다.
+        detail = (await client.get(f"/api/documents/{doc_id}/qa/threads/{tid}")).json()["data"]
+        assert assistant_of(detail)["followups"] == ["더 자세히?", "다른 예시는?"]
+
+    async def test_messages_without_followups_return_empty_list(self, client):
+        await enable_deterministic()
+        doc_id = await upload_chunked(client, fx.single_column_korean(pages=2))
+        tid = await new_thread(client, doc_id)
+        await client.post(
+            f"/api/documents/{doc_id}/qa/threads/{tid}/messages",
+            json={"question": "심장은 무엇을 하나요?"},
+        )
+        detail = (await client.get(f"/api/documents/{doc_id}/qa/threads/{tid}")).json()["data"]
+        assert assistant_of(detail)["followups"] == []

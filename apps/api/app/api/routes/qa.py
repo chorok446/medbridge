@@ -60,6 +60,8 @@ class MessageOut(CamelModel):
     sequence_number: int
     retrieval_mode: str | None
     claims: list[ClaimOut]
+    # 모델이 제안한 다음 질문. 옛 메시지는 빈 배열로 나간다.
+    followups: list[str] = []
 
 
 class ThreadDetailOut(CamelModel):
@@ -95,6 +97,7 @@ def _message_out(m: QaMessage, claims: list[QaClaim]) -> MessageOut:
         sequence_number=m.sequence_number,
         retrieval_mode=m.retrieval_mode,
         claims=[_claim_out(c) for c in claims],
+        followups=list(m.followups_json or []),
     )
 
 
