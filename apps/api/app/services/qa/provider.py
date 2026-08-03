@@ -58,6 +58,9 @@ _SYSTEM_PROMPT = (
     "- 상충하는 내용이 있으면 한쪽을 임의로 고르지 말고 conflicting_evidence로 표시한다.\n"
     "- 모든 사실 주장(claim)에는 근거가 된 청크의 chunkId를 sourceChunkIds로 붙인다. "
     "근거 없는 사실 주장을 만들지 않는다.\n"
+    "- answer 산문에서 근거가 있는 문장 끝에 그 claim의 번호를 [c0], [c1] 형태로 붙인다. "
+    "번호는 claims 배열의 순서(0부터)다.\n"
+    "- 근거가 없는 문장에는 마커를 붙이지 않는다. claims에 없는 번호를 쓰지 않는다.\n"
     "- page나 bbox를 직접 출력하지 않는다.\n"
     "- JSON 외의 텍스트를 출력하지 않는다.\n"
     'JSON 형식: {"answer": "...", "answerStatus": '
@@ -103,7 +106,8 @@ class DeterministicQaProvider:
             if c.text.strip()
         ]
         claims = [{"text": t, "sourceChunkIds": [cid]} for t, cid in pairs]
-        answer = " ".join(t for t, _ in pairs)[:ANSWER_MAX_CHARS]
+        # 마커를 함께 낸다 — 통합 테스트가 실제 인용 경로를 타야 의미가 있다.
+        answer = " ".join(f"{t}[c{i}]" for i, (t, _) in enumerate(pairs))[:ANSWER_MAX_CHARS]
         return {
             "answer": answer or "이 자료에서는 확인할 수 없습니다.",
             "answerStatus": "answered" if claims else "not_found",

@@ -297,6 +297,33 @@ class TestCitationMarkers:
         assert "[c0]" in out.answer and "[c1]" in out.answer
 
 
+class TestDeterministicProviderCitations:
+    """결정론 공급자도 마커를 낸다 — 통합 테스트가 실제 인용 경로를 타야 의미가 있다."""
+
+    def test_answer_carries_markers_for_each_claim(self):
+        req = QaRequest(
+            question="심장은?",
+            chunks=[
+                QaContextChunk(chunk_id="c1", section_title="순환", text="심장은 혈액을 보낸다",
+                               page_start=1, page_end=1),
+                QaContextChunk(chunk_id="c2", section_title="호흡", text="폐는 산소를 교환한다",
+                               page_start=2, page_end=2),
+            ],
+        )
+        out = DeterministicQaProvider().answer(req)
+        assert "[c0]" in out["answer"]
+        assert "[c1]" in out["answer"]
+
+    def test_not_found_answer_has_no_markers(self):
+        out = DeterministicQaProvider().answer(QaRequest(question="x", chunks=[]))
+        assert "[c" not in out["answer"]
+
+    def test_system_prompt_documents_the_marker_rule(self):
+        from app.services.qa.provider import _SYSTEM_PROMPT
+
+        assert "[c0]" in _SYSTEM_PROMPT
+
+
 class TestConflictDetectorAndReasons:
     C1 = "초기 연구에서는 이 요법이 사망 위험을 감소시킨다고 보고하였다"
     C2 = "후속 연구에서는 이 요법이 사망 위험에 영향을 주지 않았다고 보고하였다"
