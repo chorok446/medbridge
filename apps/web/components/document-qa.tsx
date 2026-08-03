@@ -38,6 +38,16 @@ const EXAMPLE_QUESTIONS = [
   "이 자료에서 강조하는 점은 무엇인가요?",
 ];
 
+// 답변 깊이. 요약 파이프라인의 learner_level과 같은 3단계다.
+const LEVELS = [
+  { key: "concise", label: "간단히" },
+  { key: "nursing_student", label: "간호학생" },
+  { key: "experienced_nurse", label: "경력간호사" },
+] as const;
+
+type LearnerLevel = (typeof LEVELS)[number]["key"];
+const LEVEL_STORAGE_KEY = "medbridge.qa.learnerLevel";
+
 function statusNotice(status: QaMessage["status"]): string | null {
   switch (status) {
     case "not_found":
@@ -67,6 +77,14 @@ export function DocumentQa({ doc, fileUrl }: Props) {
   const [input, setInput] = useState("");
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
+  // 마지막 선택을 브라우저에 기억한다 — 서버에 저장하지 않는다. 이 패널은
+  // useSearchParams 아래 Suspense 안이라 정적 프리렌더에 들어가지 않으므로
+  // 첫 렌더에서 바로 읽어도 하이드레이션이 어긋나지 않는다.
+  const [level, setLevel] = useState<LearnerLevel>(() => {
+    if (typeof window === "undefined") return "nursing_student";
+    const saved = window.localStorage.getItem(LEVEL_STORAGE_KEY);
+    return LEVELS.some((l) => l.key === saved) ? (saved as LearnerLevel) : "nursing_student";
+  });
   const pageCount = doc.pageCount ?? 0;
   const stream = useQaStream(doc.id);
 
@@ -85,7 +103,7 @@ export function DocumentQa({ doc, fileUrl }: Props) {
   const messages = detailQuery.data?.messages ?? [];
 
   const retryMutation = useMutation({
-    mutationFn: () => retryAnswer(doc.id, effectiveThreadId as string),
+    mutationFn: () => retryAnswer(doc.id, effectiveThreadId as string, level),
     onSuccess: (detail) =>
       queryClient.setQueryData(["qa-thread", doc.id, detail.thread.id], detail),
   });
@@ -106,6 +124,8 @@ export function DocumentQa({ doc, fileUrl }: Props) {
     },
   });
 
+  const lastFollowups =
+    messages.filter((m) => m.role === "assistant").at(-1)?.followups ?? [];
   const providerUnavailable = stream.state.phase === "failed" && stream.state.errorStatus === 501;
   const consentNeeded = stream.state.phase === "failed" && stream.state.errorStatus === 403;
   const busy = stream.active || retryMutation.isPending;
@@ -116,8 +136,13 @@ export function DocumentQa({ doc, fileUrl }: Props) {
     setFlashKey((k) => k + 1);
   }
 
-  async function submit() {
-    const q = input.trim();
+  function chooseLevel(next: LearnerLevel) {
+    setLevel(next);
+    window.localStorage.setItem(LEVEL_STORAGE_KEY, next);
+  }
+
+  async function askQuestion(raw: string) {
+    const q = raw.trim();
     if (!q || busy) return;
     let threadId = effectiveThreadId;
     if (threadId === null) {
@@ -128,7 +153,7 @@ export function DocumentQa({ doc, fileUrl }: Props) {
     }
     setPendingQuestion(q);
     setInput("");
-    await stream.ask(threadId, q);
+    await stream.ask(threadId, q, level);
     // 스트림 종료(완료/취소/중단/실패) → DB에 확정된 메시지를 다시 불러온다.
     setPendingQuestion(null);
     void queryClient.invalidateQueries({ queryKey: ["qa-thread", doc.id, threadId] });
@@ -189,15 +214,39 @@ export function DocumentQa({ doc, fileUrl }: Props) {
 
         <div className="flex-1 overflow-auto p-3">
           {messages.length === 0 && !busy && (
-            <div className="text-sm text-slate-600">
-              <p className="mb-2 font-medium">이 문서에 대해 질문해 보세요.</p>
-              <ul className="flex flex-col gap-1.5">
+            <div className="flex flex-col items-center gap-4 px-2 py-6 text-center">
+              <p className="text-lg font-semibold text-slate-900">
+                이 문서에 대해 질문해 보세요.
+              </p>
+              <fieldset className="flex gap-1.5">
+                <legend className="sr-only">학습 수준</legend>
+                {LEVELS.map((l) => (
+                  <label
+                    key={l.key}
+                    className={`cursor-pointer rounded-full border px-3 py-1 text-xs ${
+                      level === l.key
+                        ? "border-blue-600 bg-blue-50 text-blue-700"
+                        : "border-slate-200 text-slate-600 hover:bg-slate-50"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="learner-level"
+                      className="sr-only"
+                      checked={level === l.key}
+                      onChange={() => chooseLevel(l.key)}
+                    />
+                    {l.label}
+                  </label>
+                ))}
+              </fieldset>
+              <ul className="flex w-full flex-col gap-2">
                 {EXAMPLE_QUESTIONS.map((q) => (
                   <li key={q}>
                     <button
                       type="button"
-                      onClick={() => setInput(q)}
-                      className="w-full rounded border border-slate-200 px-3 py-2 text-left hover:bg-slate-50"
+                      onClick={() => void askQuestion(q)}
+                      className="w-full rounded-lg border border-slate-200 px-4 py-3 text-left text-sm hover:bg-slate-50"
                     >
                       {q}
                     </button>
@@ -270,6 +319,23 @@ export function DocumentQa({ doc, fileUrl }: Props) {
             </p>
           )}
 
+          {!busy && lastFollowups.length > 0 && (
+            <ul className="mt-3 flex flex-wrap gap-1.5">
+              {lastFollowups.map((q) => (
+                <li key={q}>
+                  {/* 입력창에 채우지 않고 바로 보낸다 — 한 번 더 누르게 만들 이유가 없다. */}
+                  <button
+                    type="button"
+                    onClick={() => void askQuestion(q)}
+                    className="rounded-full border border-slate-200 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
+                  >
+                    {q}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+
           {!stream.active &&
             messages.some(
               (m) =>
@@ -296,7 +362,7 @@ export function DocumentQa({ doc, fileUrl }: Props) {
             className="flex gap-2"
             onSubmit={(e) => {
               e.preventDefault();
-              submit();
+              void askQuestion(input);
             }}
           >
             <input

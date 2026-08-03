@@ -49,7 +49,7 @@ export function useQaStream(documentId: string) {
   }, []);
 
   const ask = useCallback(
-    async (threadId: string, question: string) => {
+    async (threadId: string, question: string, learnerLevel?: string) => {
       abortRef.current?.abort();
       const gen = (genRef.current += 1);
       const controller = new AbortController();
@@ -63,6 +63,7 @@ export function useQaStream(documentId: string) {
       try {
         await streamQuestion(documentId, threadId, question, {
           signal: controller.signal,
+          learnerLevel,
           onEvent: (event) => {
             if (!fresh()) return;
             if (

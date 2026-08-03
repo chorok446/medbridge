@@ -314,3 +314,63 @@ describe("답변 렌더", () => {
     );
   });
 });
+
+describe("질문 탭 진입", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it("대화가 없으면 예시 질문과 학습 수준을 함께 보여준다", async () => {
+    apiMock.listThreads.mockResolvedValue([]);
+    renderQa();
+    expect(await screen.findByText("이 문서의 핵심 내용은 무엇인가요?")).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "간호학생" })).toBeChecked();
+  });
+
+  it("선택한 학습 수준을 질문과 함께 보낸다", async () => {
+    apiMock.listThreads.mockResolvedValue([]);
+    apiMock.createThread.mockResolvedValue({ thread });
+    apiMock.getThread.mockResolvedValue({ thread, messages: [] });
+    streamMock.streamQuestion.mockImplementation(fakeStream([]));
+    renderQa();
+    await userEvent.click(await screen.findByRole("radio", { name: "간단히" }));
+    await userEvent.click(screen.getByText("이 문서의 핵심 내용은 무엇인가요?"));
+    await waitFor(() =>
+      expect(streamMock.streamQuestion).toHaveBeenCalledWith(
+        "d1",
+        "t1",
+        "이 문서의 핵심 내용은 무엇인가요?",
+        expect.objectContaining({ learnerLevel: "concise" }),
+      ),
+    );
+  });
+
+  it("후속 질문을 누르면 입력창을 거치지 않고 바로 보낸다", async () => {
+    apiMock.listThreads.mockResolvedValue([thread]);
+    apiMock.createThread.mockResolvedValue({ thread });
+    apiMock.getThread.mockResolvedValue({
+      thread,
+      messages: [
+        {
+          id: "m9",
+          role: "assistant" as const,
+          content: "답변입니다.",
+          status: "completed" as const,
+          sequenceNumber: 2,
+          retrievalMode: "keyword",
+          claims: [],
+          followups: ["더 자세히 알려줘"],
+        },
+      ],
+    });
+    streamMock.streamQuestion.mockImplementation(fakeStream([]));
+    renderQa();
+    await userEvent.click(await screen.findByRole("button", { name: "더 자세히 알려줘" }));
+    await waitFor(() =>
+      expect(streamMock.streamQuestion).toHaveBeenCalledWith(
+        "d1",
+        "t1",
+        "더 자세히 알려줘",
+        expect.anything(),
+      ),
+    );
+  });
+});

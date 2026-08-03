@@ -14,7 +14,12 @@ export async function streamQuestion(
   documentId: string,
   threadId: string,
   question: string,
-  opts: { signal: AbortSignal; onEvent: (event: QaStreamEvent) => void },
+  opts: {
+    signal: AbortSignal;
+    onEvent: (event: QaStreamEvent) => void;
+    /** 답변 깊이. 서버가 저장하지 않으므로 요청마다 함께 보낸다. */
+    learnerLevel?: string;
+  },
 ): Promise<void> {
   const { base, token } = await getApiConfig();
   const res = await fetch(
@@ -26,7 +31,9 @@ export async function streamQuestion(
         "Content-Type": "application/json",
         ...(token ? { "X-MedBridge-Token": token } : {}),
       },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify(
+        opts.learnerLevel ? { question, learnerLevel: opts.learnerLevel } : { question },
+      ),
     },
   );
 
