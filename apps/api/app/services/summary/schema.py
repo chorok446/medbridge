@@ -6,6 +6,7 @@
 - 알 수 없는/타 문서 chunk id 거부, 빈 출처·빈 내용 항목 제거, 최대 길이 제한, 중복 제거.
 """
 
+import re
 from dataclasses import dataclass, field
 
 from app.core.logging import get_logger
@@ -71,27 +72,47 @@ def _refs_for(ids: list[str], lookup: dict[str, ChunkRef]) -> list[dict]:
     return out
 
 
-def _clean_text(value, limit: int, *, field_name: str = "?") -> str:
-    """모델의 arbitrary value를 문자열로 강제 변환하거나 조용히 자르지 않는다.
+# 문장 끝. 한국어 종결(다./요.)과 서양식 문장부호를 함께 본다.
+_SENTENCE_END = re.compile(r"(?:[.!?。]|다\.|요\.)\s")
 
-    상한 초과는 항목 전체를 버린다(중간 절단으로 의미가 뒤집히는 것보다 안전하다).
-    다만 **조용히** 버리면 사용자는 개요가 통째로 빠진 요약을 오류 없이 받게 되므로
-    반드시 흔적을 남긴다. 원문은 남기지 않고 길이만 기록한다.
+
+def _clean_text(value, limit: int, *, field_name: str = "?") -> str:
+    """모델의 arbitrary value를 문자열로 강제 변환하거나 문장 중간에서 자르지 않는다.
+
+    상한을 넘기면 **문장 경계까지만** 남긴다. 아무 데서나 자르면 의료 문장에서 의미가
+    뒤집힌다("신부전 환자에게 투여 금기다" → "신부전 환자에게 투여 금"). 반대로 항목을
+    통째로 버리면 남길 수 있었던 문장까지 사라지고, 사용자는 개요가 없는 요약을 오류
+    없이 받는다 — 노드가 열화된 게 아니라서 부분 완료 안내조차 뜨지 않는다.
+
+    자를 문장 경계가 없으면(한 문장이 통째로 상한을 넘는 경우) 그때는 버린다.
+    조용히 버리지 않도록 흔적을 남긴다 — 원문은 남기지 않고 길이만 기록한다.
     """
     if not isinstance(value, str):
         return ""
     cleaned = value.strip()
     if not cleaned:
         return ""
-    if len(cleaned) > limit:
+    if len(cleaned) <= limit:
+        return cleaned
+
+    boundaries = [m.end() for m in _SENTENCE_END.finditer(cleaned[: limit + 1])]
+    if boundaries:
         logger.info(
-            "summary_artifact_dropped_too_long",
+            "summary_artifact_truncated_too_long",
             field=field_name,
             length=len(cleaned),
             limit=limit,
+            kept=boundaries[-1],
         )
-        return ""
-    return cleaned
+        return cleaned[: boundaries[-1]].strip()
+
+    logger.info(
+        "summary_artifact_dropped_too_long",
+        field=field_name,
+        length=len(cleaned),
+        limit=limit,
+    )
+    return ""
 
 
 def build_artifacts(

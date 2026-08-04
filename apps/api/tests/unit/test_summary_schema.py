@@ -15,6 +15,7 @@ from app.services.summary.provider import (
     GroupRequest,
 )
 from app.services.summary.schema import ChunkRef, build_artifacts
+from app.services.summary.settings import OVERVIEW_MAX_CHARS
 
 
 def _chunk(cid: str, text: str, page: int = 1) -> ChunkRef:
@@ -133,6 +134,39 @@ class TestBuildArtifacts:
         }
         arts = build_artifacts(structured, lookup, learner_level="nursing_student")
         assert arts == []
+
+
+class TestOverLimitFields:
+    """상한을 넘긴 필드를 통째로 버리면 사용자는 개요가 없는 요약을 오류 없이 받는다.
+
+    중간에서 자르면 안 된다는 판단은 옳다 — 의료 문장에서 "투여 금기다"가 "투여 금"으로
+    잘리면 의미가 뒤집힌다. 하지만 그렇다고 항목 전체를 없애면, 남길 수 있었던 문장까지
+    함께 사라지고 그 사실이 화면에 전혀 드러나지 않는다. 문장 경계에서 자르면 둘 다
+    피할 수 있다.
+    """
+
+    def _overview(self, text: str):
+        lookup = _lookup("c1")
+        structured = {"overview": {"text": text, "sourceChunkIds": ["c1"]}}
+        return build_artifacts(structured, lookup, learner_level="nursing_student")
+
+    def test_keeps_whole_sentences_instead_of_dropping_everything(self):
+        sentence = "이 약은 신부전 환자에게 투여 금기다. "
+        arts = self._overview(sentence * (OVERVIEW_MAX_CHARS // len(sentence) + 3))
+
+        assert arts, "상한을 넘겼다고 개요가 통째로 사라졌다"
+        text = arts[0].content_json["text"]
+        assert len(text) <= OVERVIEW_MAX_CHARS
+        assert text.endswith("금기다."), f"문장 중간에서 잘렸다: ...{text[-20:]}"
+
+    def test_drops_when_there_is_no_sentence_boundary_to_cut_at(self):
+        """자를 경계가 없으면 버린다 — 중간 절단으로 의미를 뒤집지 않는다."""
+        arts = self._overview("가" * (OVERVIEW_MAX_CHARS + 200))
+        assert arts == []
+
+    def test_within_limit_text_is_untouched(self):
+        arts = self._overview("짧은 개요다.")
+        assert arts[0].content_json["text"] == "짧은 개요다."
 
 
 class TestNumbers:
