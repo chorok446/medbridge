@@ -66,6 +66,14 @@ FULL_HASH_CHECK_INTERVAL = 25
 # 입력을 줄여 적응한다. 깊이 3이면 그룹을 1/8까지 쪼갠다.
 MAX_SPLIT_DEPTH = 3
 
+# 출력 길이 계약 위반(map_summary_too_long)에는 분할을 얕게만 시도한다.
+#
+# 컨텍스트 초과는 입력을 줄이면 반드시 풀리지만, 출력이 긴 것은 **입력 크기의 함수가
+# 아니다** — 스키마 강제가 걸리지 않는 경로의 모델은 입력을 1/8로 줄여도 계속 넘긴다.
+# 그런 모델에 깊이 3까지 재귀하면 그룹당 20회 넘는 호출을 태우고도 결국 실패한다.
+# 한 번은 줄여서 기회를 주되, 그 다음은 모델이 준 출력을 잘라 쓰는 쪽이 낫다.
+MAX_OUTPUT_LENGTH_SPLIT_DEPTH = 1
+
 # 구조화 reduce가 컨텍스트를 넘을 때 그룹 요약을 한 단계 더 묶어 다시 시도하는 횟수.
 # 2회면 마지막 레벨을 1/4 이하로 줄인다 — 그래도 안 되면 입력이 아니라 다른 문제다.
 MAX_REDUCE_ADAPT = 2
@@ -660,6 +668,18 @@ def _is_input_too_large(exc: Exception) -> bool:
     )
 
 
+def _salvageable_text(exc: Exception) -> str | None:
+    """계약을 넘겼다는 이유로 거절된 출력 중, 잘라서라도 쓸 수 있는 값.
+
+    분할이 통하지 않는 모델일 때의 바닥이다. 이 값이 없으면(공급자가 아무것도 주지
+    못한 경우) 지어내지 않고 그대로 실패시킨다 — 실패 범주도 덮지 않는다.
+    """
+    if not isinstance(exc, SummaryNetworkError):
+        return None
+    text = (exc.oversized_text or "").strip()
+    return text or None
+
+
 @dataclass
 class _AdaptiveResult:
     """적응 요약 결과.
@@ -718,6 +738,21 @@ async def _summarize_adaptively(
             text=summary.summary_text, degraded=False, covered_ids=all_ids
         )
     except Exception as exc:
+        # 출력이 길어서 거절된 경우엔 얕게만 나눠 본다. 계속 넘기는 모델이면 더 나눠도
+        # 같은 결과라, 남은 유일한 수단인 '잘라 쓰기'로 내려간다.
+        salvage = _salvageable_text(exc)
+        if salvage is not None and depth >= MAX_OUTPUT_LENGTH_SPLIT_DEPTH:
+            logger.info(
+                "summary_group_length_truncated",
+                document_id=str(document_id),
+                group_id=request.group_id,
+                depth=depth,
+                # 원문은 남기지 않는다 — 길이만.
+                oversized_chars=len(salvage),
+            )
+            return _AdaptiveResult(
+                text=_truncate_on_boundary(salvage), degraded=True, covered_ids=all_ids
+            )
         if not _is_input_too_large(exc) or depth >= MAX_SPLIT_DEPTH:
             raise
         if len(chunks) < 2:
@@ -774,10 +809,16 @@ async def _summarize_adaptively(
         degraded = degraded or child.degraded
 
     if not parts:
-        # 어느 조각도 요약하지 못했다 — 지어내지 않고 실패로 올린다. 원래 예외를 그대로
-        # 올린다: 범주를 context_overflow로 덮으면 출력 길이 계약 위반 같은 메모리와
-        # 무관한 실패에 "메모리를 확보하라"는 실행 불가 안내가 뜨고, 로그의 실제
-        # failure_reason도 사라진다.
+        # 조각이 전부 길이 계약 위반으로 거절됐다면 그 출력을 잘라서라도 남긴다.
+        salvage = _salvageable_text(last_failure) if last_failure else None
+        if salvage is not None:
+            return _AdaptiveResult(
+                text=_truncate_on_boundary(salvage), degraded=True, covered_ids=all_ids
+            )
+        # 어느 조각도 요약하지 못했고 건질 출력도 없다 — 지어내지 않고 실패로 올린다.
+        # 원래 예외를 그대로 올린다: 범주를 context_overflow로 덮으면 출력 길이 계약
+        # 위반 같은 메모리와 무관한 실패에 "메모리를 확보하라"는 실행 불가 안내가 뜨고,
+        # 로그의 실제 failure_reason도 사라진다.
         raise last_failure or SummaryNetworkError("context_overflow", "map_context_overflow")
 
     covered = _merge_ids(parts)

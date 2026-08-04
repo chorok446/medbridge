@@ -636,7 +636,13 @@ class OpenAICompatibleSummaryProvider:
         if not summary.strip():
             raise SummaryNetworkError("bad_response", "map_summary_empty")
         if len(summary.strip()) > GROUP_SUMMARY_MAX_CHARS:
-            raise SummaryNetworkError("bad_response", "map_summary_too_long")
+            # 실행기가 입력을 나눠 다시 시도할 수 있게 예외로 올린다. 다만 출력을 함께
+            # 실어 보낸다 — 나눠도 계속 넘기는 모델(스키마 강제가 없는 경로에서 흔하다)
+            # 이면 실행기가 이 값을 잘라 쓰는 것 말고 할 수 있는 게 없고, 그러지 못하면
+            # 그룹 하나의 계약 위반으로 문서 전체 요약이 사라진다.
+            raise SummaryNetworkError(
+                "bad_response", "map_summary_too_long", oversized_text=summary.strip()
+            )
         source_ids = list(dict.fromkeys(c.chunk_id for c in request.chunks))
         return GroupSummary(
             group_id=request.group_id,

@@ -95,10 +95,20 @@ class SummaryNetworkError(Exception):
     reason에는 문서·질문·모델 출력 원문을 절대 담지 않는다(분류값·수치만).
     """
 
-    def __init__(self, category: str, reason: str | None = None) -> None:
+    def __init__(
+        self,
+        category: str,
+        reason: str | None = None,
+        *,
+        oversized_text: str | None = None,
+    ) -> None:
         super().__init__(category if reason is None else f"{category}:{reason}")
         self.category = category
         self.reason = reason
+        # 계약 길이를 넘겨서 거절된 모델 출력. 실행기가 마지막 수단으로 잘라 쓰기 위한
+        # 값이라 예외에 들고 다닌다 — 문서 전체 요약을 잃는 것보다 한 그룹이 잘리는
+        # 편이 낫다. **로그·사용자 메시지에는 절대 넣지 않는다**(reason과 달리 원문이다).
+        self.oversized_text = oversized_text
 
     @property
     def user_message(self) -> str:

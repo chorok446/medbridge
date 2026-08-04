@@ -28,7 +28,11 @@ from app.services.summary.executor import (
     execute_hierarchical_summary,
 )
 from app.services.summary.provider import DeterministicSummaryProvider, GroupSummary
-from app.services.summary.settings import PROMPT_VERSION, SCHEMA_VERSION
+from app.services.summary.settings import (
+    GROUP_SUMMARY_MAX_CHARS,
+    PROMPT_VERSION,
+    SCHEMA_VERSION,
+)
 from app.services.tasks.summary_job import _job_is_current
 from tests import extraction_fixtures as fx
 from tests.integration.conftest import drain_jobs
@@ -507,6 +511,86 @@ class TestAdaptiveSplitOnContextOverflow:
             assert node.summary_text.strip()
             assert node.source_chunk_ids_json
             assert node.status == "succeeded", "병합에 성공했는데 열화로 저장됐다"
+
+    async def test_model_that_always_overshoots_still_yields_a_summary(
+        self, client, monkeypatch
+    ):
+        """길이 계약을 계속 어기는 모델이 문서 전체 요약을 죽이면 안 된다.
+
+        400자 초과는 **출력** 계약 위반이라 입력을 쪼개도 낫지 않는다. schema 강제가
+        걸리지 않는 경로(외부 OpenAI 호환·비-Ollama 로컬 서버)의 모델은 입력 크기와
+        무관하게 계속 넘긴다. 그런데도 분할만 반복하다 깊이 한계에서 raise하면, 그룹당
+        20회 넘는 모델 호출을 지불한 끝에 노드가 죽고 문서 요약 전체가 사라진다.
+        한 그룹의 요약이 잘리는 손실이 문서 전체를 잃는 것보다 낫다.
+        """
+        monkeypatch.setattr(grouping_mod, "GROUP_MAX_CHARS", 4000)
+        monkeypatch.setattr(grouping_mod, "GROUP_MIN_CHARS", 4000)
+        doc_id = await _upload_chunked(client, fx.single_column_korean(pages=6))
+
+        class AlwaysTooLong(CountingProvider):
+            """입력이 아무리 짧아도 계약 길이를 넘겨 답한다.
+
+            길이 계약은 executor가 아니라 실제 공급자 안에서 강제되므로(provider.py의
+            map_summary_too_long), 그 거절을 그대로 흉내낸다 — 긴 문자열을 그냥
+            돌려주면 아무 예외도 나지 않아 이 경로를 전혀 밟지 않는다.
+            """
+
+            def summarize_group(self, request):
+                with self._counter_lock:
+                    self.group_calls += 1
+                raise SummaryNetworkError(
+                    "bad_response",
+                    "map_summary_too_long",
+                    oversized_text="가" * (GROUP_SUMMARY_MAX_CHARS + 120),
+                )
+
+        provider = AlwaysTooLong()
+        run_id, job_id, rev, chash = await _make_run(doc_id, provider)
+
+        drafts = await _run_executor(doc_id, run_id, job_id, rev, chash, provider)
+
+        assert drafts, "계약 위반을 이유로 문서 요약 전체가 사라졌다"
+        async with get_session_factory()() as s:
+            nodes = (
+                await s.execute(
+                    select(SummaryNode).where(SummaryNode.summary_run_id == run_id)
+                )
+            ).scalars().all()
+        assert nodes
+        for node in nodes:
+            assert len(node.summary_text) <= GROUP_SUMMARY_MAX_CHARS, "계약을 넘겨 저장됐다"
+            assert node.summary_text.strip()
+            # 모델이 만든 완결 요약이 아니라 잘라낸 결과다 — 재사용되면 사용자가
+            # 설정을 고쳐도 더 나은 요약을 영영 받지 못한다.
+            assert node.status == "degraded"
+
+    async def test_overshooting_model_is_not_retried_to_death(
+        self, client, monkeypatch
+    ):
+        """출력이 긴 것은 입력을 쪼개도 낫지 않는다 — 무한히 쪼개며 비용을 태우면 안 된다."""
+        monkeypatch.setattr(grouping_mod, "GROUP_MAX_CHARS", 4000)
+        monkeypatch.setattr(grouping_mod, "GROUP_MIN_CHARS", 4000)
+        doc_id = await _upload_chunked(client, fx.single_column_korean(pages=4))
+        groups = max(1, len(await _load_chunks(doc_id)) // 4)
+
+        class AlwaysTooLong(CountingProvider):
+            def summarize_group(self, request):
+                with self._counter_lock:
+                    self.group_calls += 1
+                raise SummaryNetworkError(
+                    "bad_response",
+                    "map_summary_too_long",
+                    oversized_text="나" * (GROUP_SUMMARY_MAX_CHARS + 50),
+                )
+
+        provider = AlwaysTooLong()
+        run_id, job_id, rev, chash = await _make_run(doc_id, provider)
+        await _run_executor(doc_id, run_id, job_id, rev, chash, provider)
+
+        # 분할 재귀는 그룹당 20회를 넘길 수 있다. 출력 길이 위반에는 그 재귀를 태우지 않는다.
+        assert provider.group_calls <= groups * 6, (
+            f"길이 초과에 분할을 반복했다: {provider.group_calls}회 / 그룹 {groups}개"
+        )
 
     async def test_dropped_part_is_not_claimed_as_a_source(self, client, monkeypatch):
         """요약에 반영되지 않은 청크가 출처로 남으면 '근거 보기'가 거짓말을 한다.
