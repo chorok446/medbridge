@@ -412,7 +412,12 @@ async def execute_hierarchical_summary(
                     group_summaries=as_group_summaries(level_nodes),
                     learner_level=learner_level,
                     language=language,
-                    include_sections=include_sections,
+                    # 섹션은 아래에서 section_nodes로 통째로 덮어쓴다 — 모델에게
+                    # 요구하지 않는다. 요구하면 매 호출 버릴 출력을 생성해 reduce 출력
+                    # 예산을 먹고(절단 위험을 키우고), 그 안의 group id 하나가 어긋나면
+                    # reduce_group_ids_unknown으로 저장되지도 않는 값 때문에 문서 전체
+                    # 요약이 영구 실패한다.
+                    include_sections=False,
                     include_prerequisites=include_prerequisites,
                 ),
             )

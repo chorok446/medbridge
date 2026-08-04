@@ -398,6 +398,51 @@ class TestMultiLevelReduce:
             f"섹션이 최상위 레벨({by_level[top_level]}개)에 갇혔다"
         )
 
+    async def test_model_is_not_asked_for_sections_it_will_never_use(
+        self, client, monkeypatch
+    ):
+        """섹션을 서버가 만드는데 모델에게도 요구하면, 버릴 값 때문에 문서가 죽는다.
+
+        구조화 reduce 응답의 sections는 곧바로 section_nodes 기반 값으로 통째로
+        덮어써진다. 그런데도 모델에게 요구하면 (1) 매 호출 버릴 출력을 생성해 예산을
+        먹고 (2) 그 안의 group id 하나가 어긋나면 reduce_group_ids_unknown으로 문서
+        전체 요약이 영구 실패한다 — 저장되지도 않는 값 때문에.
+        """
+        monkeypatch.setattr(executor_mod, "REDUCE_FAN_IN", 2)
+        monkeypatch.setattr(grouping_mod, "GROUP_MAX_CHARS", 400)
+        monkeypatch.setattr(grouping_mod, "GROUP_MIN_CHARS", 400)
+        doc_id = await _upload_chunked(client, fx.single_column_korean(pages=6))
+
+        class SectionsWithBogusIds(CountingProvider):
+            """존재하지 않는 group id를 단 sections를 함께 돌려주는 모델."""
+
+            def __init__(self) -> None:
+                super().__init__()
+                self.asked_for_sections: list[bool] = []
+
+            def summarize_document(self, request):
+                self.asked_for_sections.append(request.include_sections)
+                result = super().summarize_document(request)
+                result["sections"] = [
+                    {"title": "가짜", "summary": "가짜", "sourceGroupIds": ["g99"]}
+                ]
+                return result
+
+        provider = SectionsWithBogusIds()
+        run_id, job_id, rev, chash = await _make_run(doc_id, provider)
+
+        drafts = await _run_executor(doc_id, run_id, job_id, rev, chash, provider)
+
+        assert provider.asked_for_sections, "구조화 reduce가 호출되지 않았다"
+        assert not any(provider.asked_for_sections), "버릴 sections를 모델에게 요구했다"
+        assert drafts, "저장되지도 않는 sections 때문에 문서 요약이 죽었다"
+        # 사용자가 켜 둔 구역 요약은 서버가 만든 값으로 그대로 나온다.
+        sections = [
+            d for d in drafts if d.artifact_type == SummaryArtifactType.SECTION_SUMMARY
+        ]
+        assert sections, "서버가 만드는 구역 요약까지 사라졌다"
+        assert all("가짜" not in (d.title or "") for d in sections)
+
     async def test_sections_keep_real_chunk_sources(self, client, monkeypatch):
         """섹션 출처는 노드 id가 아니라 실제 청크 id여야 한다.
 
