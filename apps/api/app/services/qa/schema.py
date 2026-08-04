@@ -216,11 +216,20 @@ def sanitize_followups(raw) -> list[str]:
 
     이 값은 DB에 저장된 뒤 버튼으로 그대로 재전송된다. 길이를 안 자르면 질문 상한을 넘는
     제안이 칩으로 그려지고, 누르는 순간 422로 죽는다 — 사용자에겐 그냥 고장으로 보인다.
+
+    리스트가 아니면 통째로 버린다. 형이 맞는지 보지 않고 순회하면 문자열이 글자 단위로
+    쪼개져 ["복","용","량"]이 저장되고, 답변 아래 한 글자짜리 칩 세 개가 그려진다.
+    누르면 한 글자 질문이 전송돼 모델 호출을 한 번 다 쓰고 엉뚱한 답이 나온다.
+    (dict도 마찬가지로 키 이름이 제안으로 올라온다.)
+
+    리스트 안의 항목도 문자열만 받는다. str()로 강제하면 42나 None이 그대로 질문이 된다.
     """
+    if not isinstance(raw, list):
+        return []
     return [
-        str(f).strip()[:FOLLOWUP_MAX_CHARS]
-        for f in (raw or [])
-        if str(f).strip()
+        item.strip()[:FOLLOWUP_MAX_CHARS]
+        for item in raw
+        if isinstance(item, str) and item.strip()
     ][:MAX_FOLLOWUPS]
 
 

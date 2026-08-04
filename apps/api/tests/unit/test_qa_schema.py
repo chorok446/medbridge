@@ -488,3 +488,38 @@ class TestCitationEdges:
             lookup, had_results=True,
         )
         assert len(out.followups[0]) == FOLLOWUP_MAX_CHARS
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            "복용량은 얼마인가요?",  # 배열 대신 문자열 — 흔한 계약 위반
+            {"q1": "복용량은?", "q2": "부작용은?"},  # 객체
+            123,
+        ],
+    )
+    def test_non_list_followups_are_rejected_not_iterated(self, payload):
+        """리스트가 아니면 버린다 — 순회하면 글자 하나짜리 제안이 저장된다.
+
+        문자열을 순회하면 ["복","용","량"]이 되고, 그 값이 DB에 저장돼 답변 아래
+        한 글자짜리 칩 세 개로 그려진다. 누르면 한 글자 질문이 전송돼 모델 호출을
+        한 번 다 쓰고 엉뚱한 답이 나온다.
+        """
+        lookup = _lookup(("c1", "본문 내용"))
+        out = verify(
+            {"answer": "x", "answerStatus": "answered",
+             "claims": [{"text": "본문 내용", "sourceChunkIds": ["c1"]}],
+             "followUpSuggestions": payload},
+            lookup, had_results=True,
+        )
+        assert out.followups == []
+
+    def test_non_string_items_inside_a_list_are_dropped(self):
+        """리스트 안의 이물질도 문자열로 강제하지 않는다."""
+        lookup = _lookup(("c1", "본문 내용"))
+        out = verify(
+            {"answer": "x", "answerStatus": "answered",
+             "claims": [{"text": "본문 내용", "sourceChunkIds": ["c1"]}],
+             "followUpSuggestions": ["정상 질문?", 42, None, {"a": 1}]},
+            lookup, had_results=True,
+        )
+        assert out.followups == ["정상 질문?"]
