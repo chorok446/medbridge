@@ -591,10 +591,19 @@ class OpenAICompatibleSummaryProvider:
         )
         from app.services.summary.endpoint import SummaryNetworkError
 
+        # 오류 형태를 막는 지시를 프롬프트에도 넣는다. 스키마로만 표현하면 Ollama
+        # native 경로에만 적용되고, OpenAI 호환 경로(_chat)는 schema를 보내지 않아
+        # 재질의가 첫 호출과 바이트 단위로 같은 요청이 된다 — 로컬 서버는 temperature
+        # 0이라 같은 error가 그대로 돌아오고, 주석이 약속한 구제가 닿지 않는다.
+        no_error_clause = (
+            "\n\n앞선 시도에서 error 객체를 받았다. 이번에는 error 형태로 답하지 말고 "
+            '반드시 {"summary":"..."} 형태로만 답하라.'
+        )
+
         def call(max_tokens: int, *, allow_error: bool = True) -> str:
             return self._chat_for(
                 system,
-                user,
+                user if allow_error else user + no_error_clause,
                 max_tokens=max_tokens,
                 schema=_map_schema(allow_error=allow_error),
                 external_max_tokens=max_tokens,

@@ -227,6 +227,27 @@ class TestContextOverflow:
         assert code == "SUMMARY_CONTEXT_OVERFLOW"
         assert category == "context_overflow"
 
+    def test_error_object_retry_actually_differs_on_openai_compatible_path(self):
+        """복구 재질의가 첫 호출과 같은 요청이면 같은 답만 다시 받는다.
+
+        모델이 초과 징후 없는 error 객체를 주면 '오류 형태를 뺀 문법'으로 한 번 더
+        묻는다. 그 구분은 JSON schema로만 표현돼 있는데, OpenAI 호환 경로는 schema를
+        보내지 않고 response_format=json_object만 보낸다. LM Studio·llama.cpp·vLLM
+        같은 로컬 서버는 temperature 0(그리디)이라 두 번째 호출이 바이트 단위로 같은
+        요청이 되고, 같은 error가 돌아와 노드가 죽는다 — 주석이 약속한 구제가 이
+        사용자들에게는 닿지 않고 실패할 때마다 호출 비용만 2배가 된다.
+        """
+        provider, capture = _provider(
+            _chat_response(json.dumps({"error": "model refused"}))
+        )
+
+        with pytest.raises(SummaryNetworkError):
+            provider.summarize_group(_group_request())
+
+        assert len(capture.payloads) == 2, "복구 재질의 자체가 나가지 않았다"
+        first, second = capture.payloads
+        assert first != second, "재질의가 첫 호출과 동일한 요청이다 — 같은 답만 받는다"
+
     def test_unrelated_error_object_is_not_mislabelled_as_overflow(self):
         """모든 error 응답을 컨텍스트 초과로 몰아가면 진짜 원인을 가린다."""
         provider, _ = _provider(_chat_response(json.dumps({"error": "model not loaded"})))
