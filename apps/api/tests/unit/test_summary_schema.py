@@ -256,6 +256,21 @@ class TestNumbers:
         assert max(positions) > 150, f"뒤쪽 청크가 전혀 뽑히지 않았다: {max(positions)}"
         assert min(positions) < 50, f"앞쪽 청크가 전혀 뽑히지 않았다: {min(positions)}"
 
+    def test_short_document_keeps_its_numbers(self):
+        """수치가 한두 청크에 몰린 짧은 문서에서 청크당 상한이 목록을 잘라선 안 된다.
+
+        용량표 한 장짜리 학습자료는 청크가 1~2개뿐인데 투여 용량이 20개 적혀 있다.
+        청크당 3개로 자르면 3~6개만 남고 나머지는 로그 한 줄 없이 사라진다 —
+        사용자는 그 목록을 문서의 용량 목록으로 믿는다. 청크당 상한은 여럿이 경쟁할 때
+        고르게 나누기 위한 것이지, 경쟁이 없을 때 버리기 위한 것이 아니다.
+        """
+        doses = " ".join(f"{i} mg" for i in range(1, 21))
+        lookup = {"only": _chunk("only", f"투여 용량은 다음과 같다. {doses}")}
+
+        arts = extract_number_artifacts(lookup, start_position=0)
+
+        assert len(arts) >= 20, f"짧은 문서의 수치가 잘렸다: {len(arts)}개"
+
     def test_one_chunk_cannot_monopolize(self):
         """한 청크가 목록 전체를 차지하지 못한다 — 문서 전체가 대표돼야 한다."""
         dense = " ".join(f"{i} mmHg" for i in range(1, 40))
@@ -292,6 +307,24 @@ class TestPopulations:
         lookup = {"c1": _chunk("c1", "중환자: 이진우\n호흡기: 김철수\n")}
         arts = extract_population_artifacts(lookup, start_position=0)
         assert arts == []
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "포함 기준: 만 19세 이상 성인 환자",
+            "제외 기준: 임신 중이거나 수유 중인 환자",
+            "대상 환자: 중등도 이상의 만성 신장질환자",
+        ],
+    )
+    def test_keeps_list_style_criteria_without_a_final_period(self, line):
+        """개조식 포함·제외 기준은 마침표 없이 명사로 끝난다 — 그게 정상 표기다.
+
+        종결어미·문장부호를 요구하면 PDF·OCR 본문에서 매우 흔한 이 형태가 전부
+        탈락해, 논문·프로토콜 자료의 '대상 집단'이 통째로 빈 목록이 된다.
+        """
+        lookup = {"c1": _chunk("c1", line + "\n")}
+        arts = extract_population_artifacts(lookup, start_position=0)
+        assert [a.content_json["text"] for a in arts] == [line]
 
     def test_keeps_real_population_sentence(self):
         lookup = {

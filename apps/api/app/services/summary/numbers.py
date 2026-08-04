@@ -50,6 +50,18 @@ _TOC_LINE_RE = re.compile(r"\.{3,}|…|[\s/]\d{2,4}\s*$|^Part\s+\d+|^제?\s?\d+\
 # 표제어("급성 관동맥 증후군")는 서술이 아니다.
 _SENTENCE_END_RE = re.compile(r"(?:[.!?。]|다|음|함|됨)\s*$")
 
+# 개조식 기준 표기. "포함 기준: 만 19세 이상 성인 환자"처럼 마침표 없이 명사로 끝나는
+# 줄은 PDF·OCR 본문에서 매우 흔한 정상 표기다. 종결어미만 요구하면 논문·프로토콜
+# 자료의 대상 집단이 통째로 빈 목록이 된다.
+_CRITERIA_MARKERS = (
+    "포함 기준",
+    "제외 기준",
+    "선정 기준",
+    "대상 환자",
+    "대상자",
+    "대상군",
+)
+
 _MAX_NUMBERS = 30
 _MAX_POPULATIONS = 15
 # 한 청크가 목록을 독점하지 못하게 한다. 표 한 장에 수치가 수십 개 몰린 페이지가
@@ -97,6 +109,7 @@ def _pick(candidates: list[_Candidate], limit: int, per_chunk: int) -> list[_Can
 
     per_chunk_count: dict[str, int] = {}
     chosen: list[_Candidate] = []
+    deferred: list[_Candidate] = []
     while len(chosen) < limit:
         progressed = False
         for bucket in buckets:
@@ -105,6 +118,7 @@ def _pick(candidates: list[_Candidate], limit: int, per_chunk: int) -> list[_Can
             while bucket:
                 cand = bucket.pop(0)
                 if per_chunk_count.get(cand.chunk_id, 0) >= per_chunk:
+                    deferred.append(cand)
                     continue
                 per_chunk_count[cand.chunk_id] = per_chunk_count.get(cand.chunk_id, 0) + 1
                 chosen.append(cand)
@@ -112,6 +126,17 @@ def _pick(candidates: list[_Candidate], limit: int, per_chunk: int) -> list[_Can
                 break
         if not progressed:  # 남은 후보가 청크 상한에 다 걸렸다
             break
+
+    # 아직 자리가 남았으면 청크당 상한에 걸려 미뤄둔 후보로 채운다.
+    #
+    # 청크당 상한은 **여럿이 경쟁할 때 고르게 나누기 위한 것**이지, 경쟁이 없을 때
+    # 버리기 위한 것이 아니다. 용량표 한 장짜리 자료는 청크가 1~2개뿐인데 용량이
+    # 20개 적혀 있어, 상한을 그대로 적용하면 3~6개만 남고 나머지가 로그 한 줄 없이
+    # 사라진다 — 사용자는 그 목록을 문서의 용량 목록으로 믿는다.
+    if len(chosen) < limit and deferred:
+        deferred.extend(c for bucket in buckets for c in bucket)
+        deferred.sort(key=lambda c: (-c.score, c.order))
+        chosen.extend(deferred[: limit - len(chosen)])
     return sorted(chosen, key=lambda c: c.order)
 
 
@@ -163,7 +188,9 @@ def _looks_like_population_sentence(s: str) -> bool:
         return False
     if _TOC_LINE_RE.search(s):
         return False
-    if not _SENTENCE_END_RE.search(s):
+    # 서술문이거나, 개조식 기준 표기여야 한다. 둘 다 아니면 목차 표제어·머리말
+    # 조각처럼 힌트 단어만 스친 줄이다.
+    if not _SENTENCE_END_RE.search(s) and not any(m in s for m in _CRITERIA_MARKERS):
         return False
     return any(h in s for h in _POPULATION_HINTS)
 
