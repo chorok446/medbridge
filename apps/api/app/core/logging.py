@@ -10,7 +10,11 @@ correlation_id_var: ContextVar[str] = ContextVar("correlation_id", default="-")
 # 화면이 진행 중인 작업을 1~1.5초마다 폴링하는 엔드포인트들. 성공한 폴링은 로그에
 # 남기지 않는다 — 실기기 오류 보고서에서 logTail 200줄 중 163줄이 폴링이었고 진단에
 # 쓸 수 있는 줄은 1줄뿐이었다. 작업이 몇 분만 돌아도 창이 폴링으로 가득 찬다.
-_POLL_PATH_SUFFIXES = ("/status", "/jobs")
+#
+# `-status`도 함께 본다. 가장 시끄러운 두 경로가 하이픈이다(`/{id}/ocr-status`,
+# `/{id}/extraction-status` — 각각 1초마다 폴링한다). 슬래시 형태만 보면 정작 잡아야
+# 할 잡음을 그대로 두게 된다.
+_POLL_PATH_SUFFIXES = ("/status", "-status", "/jobs")
 
 
 class _AccessLogNoiseFilter(logging.Filter):

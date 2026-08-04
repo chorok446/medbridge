@@ -35,13 +35,37 @@ class TestAccessLogNoise:
         doc = "/api/documents/5fb5885d-e7b1-459d-b402-a36b5bc321ab"
         for path in (
             f"{doc}/summaries/status",
-            f"{doc}/ocr/status",
             f"{doc}/chunks/status",
-            f"{doc}/extraction/status",
+            # 실제 라우트는 하이픈이다. 슬래시로 적으면 존재하지 않는 경로를 검사해
+            # 필터가 망가져도 테스트가 통과한다(이 파일이 실제로 그랬다).
+            f"{doc}/ocr-status",
+            f"{doc}/extraction-status",
             f"{doc}/jobs",
         ):
             record = _access_record(f"GET|{path}|1.1|200")
             assert not _passes("uvicorn.access", record), f"폴링이 남았다: {path}"
+
+    def test_every_status_route_in_the_app_is_covered(self):
+        """경로를 손으로 적으면 라우트가 바뀔 때 조용히 어긋난다.
+
+        실제로 어긋났다 — 필터는 `/status`만 보는데 라우트는 `-status`였고, 테스트는
+        존재하지 않는 `ocr/status`를 검사해 통과했다. 오류 보고서의 logTail은 여전히
+        폴링으로 가득 찼는데 CI는 초록이었다. 라우트 표에서 직접 뽑아 그 구멍을 막는다.
+        """
+        from app.api.routes import extraction, ocr, search, summary
+
+        paths = [
+            route.path
+            for module in (ocr, extraction, search, summary)
+            for route in module.router.routes
+            if getattr(route, "path", "").endswith("status")
+        ]
+        assert paths, "status 라우트를 하나도 찾지 못했다 — 이 단언이 공허하다"
+
+        for path in paths:
+            concrete = path.replace("{document_id}", "5fb5885d-e7b1-459d-b402-a36b5bc321ab")
+            record = _access_record(f"GET|/api/documents{concrete}|1.1|200")
+            assert not _passes("uvicorn.access", record), f"필터가 놓친 폴링 경로: {path}"
 
     def test_drops_successful_preflight(self):
         record = _access_record("OPTIONS|/api/profile|1.1|200")
