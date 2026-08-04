@@ -361,7 +361,19 @@ async def execute_hierarchical_summary(
             ],
         )
 
+    # 섹션은 최상위가 아니라 **마지막으로 접히기 직전 레벨**에서 뽑는다.
+    #
+    # 최상위 레벨은 정의상 REDUCE_FAN_IN개 이하다. 거기서 섹션을 만들면 1,060페이지
+    # 문서도 10페이지 문서도 똑같이 최대 8개 섹션을 받고, 구조화 요약이 참고하는 원문은
+    # 8 x GROUP_SUMMARY_MAX_CHARS로 고정된다(실기기: 16,226청크 문서가 섹션 4개·580자로
+    # 끝났다). 축약 트리는 문서가 클수록 깊어지므로 최상위만 보면 **큰 문서일수록 요약이
+    # 짧아지는** 역전이 생긴다.
+    #
+    # 직전 레벨은 자연스럽게 유계다: 마지막 reduce가 그걸 fan-in개 이하로 접었으므로
+    # 노드 수는 REDUCE_FAN_IN^2(=64)를 넘지 않는다. 별도 상한이 필요 없다.
+    section_nodes = level_nodes
     while len(level_nodes) > REDUCE_FAN_IN:
+        section_nodes = level_nodes
         level_nodes = await reduce_round(level_nodes, REDUCE_FAN_IN, level)
         level += 1
 
@@ -426,6 +438,28 @@ async def execute_hierarchical_summary(
             level += 1
     if structured is None:  # 위 루프는 성공하거나 raise한다 — 도달하면 계약이 깨진 것이다
         raise SummaryNetworkError("bad_response", "reduce_no_result")
+
+    # 섹션은 모델 출력이 아니라 직전 레벨 노드에서 결정론적으로 만든다.
+    #
+    # 모델에 그 노드들을 다 넣어 섹션을 받아내려면 입력이 컨텍스트를 넘는다(예: 27노드
+    # x 400자 ≈ 8,500토큰 > LOCAL_NUM_CTX). 노드는 이미 요약문·제목·출처를 들고 있으므로
+    # 모델을 한 번 더 부를 이유가 없다. 출처도 서버가 계산한 값을 그대로 쓴다.
+    if include_sections:
+        structured["sections"] = [
+            {
+                "title": node.section_title,
+                "summary": node.summary_text,
+                "sourceChunkIds": node.source_chunk_ids,
+            }
+            for node in section_nodes
+            if node.summary_text and node.source_chunk_ids
+        ]
+        logger.info(
+            "summary_sections_from_level",
+            document_id=str(document_id),
+            sections=len(structured["sections"]),
+            top_level_nodes=len(level_nodes),
+        )
     return finalize_artifacts(
         structured,
         lookup,

@@ -3,7 +3,10 @@
 import pytest
 
 from app.models.enums import SummaryArtifactType
-from app.services.summary.numbers import extract_number_artifacts
+from app.services.summary.numbers import (
+    extract_number_artifacts,
+    extract_population_artifacts,
+)
 from app.services.summary.provider import (
     ChunkInput,
     DeterministicSummaryProvider,
@@ -12,6 +15,22 @@ from app.services.summary.provider import (
     GroupRequest,
 )
 from app.services.summary.schema import ChunkRef, build_artifacts
+
+
+def _chunk(cid: str, text: str, page: int = 1) -> ChunkRef:
+    return ChunkRef(
+        chunk_id=cid,
+        source_refs=[
+            {
+                "pageNumber": page,
+                "blockId": f"b-{cid}",
+                "bbox": [1.0, 2.0, 3.0, 4.0],
+                "readingOrder": 0,
+                "sourceMethod": "digital",
+            }
+        ],
+        text=text,
+    )
 
 
 def _lookup(*ids: str) -> dict[str, ChunkRef]:
@@ -135,6 +154,121 @@ class TestNumbers:
             # 추출된 수치는 반드시 원문에 존재한다
             assert a.content_json["value"] in lookup["c1"].text
             assert a.source_refs  # 출처 있음
+
+    def test_scans_whole_document_not_just_the_front(self):
+        """상한에 닿아도 문서 앞부분에서 멈추지 않는다.
+
+        실기기: 1,060페이지 교재에서 뽑힌 수치 30개가 전부 2~19페이지(판권지·머리말·목차)
+        에서 나왔다. 문서 순서로 훑다가 상한에서 곧바로 return하면 본문에 영영 닿지 않는다.
+        """
+        lookup = {}
+        # 앞쪽 청크: 목차처럼 수치가 빽빽하다. 상한(30)을 확실히 넘기고도 남는 양이라,
+        # 앞에서 멈추는 구현이면 본문 청크에는 절대 닿지 못한다.
+        for i in range(40):
+            lookup[f"front{i}"] = _chunk(
+                f"front{i}", f"제{i + 1}장 ... {100 + i}-{200 + i} 쪽"
+            )
+        # 본문 청크: 진짜 임상 수치
+        lookup["body"] = _chunk("body", "목표 혈압은 140 mmHg 미만이며 초기 용량은 250mg이다.")
+
+        values = {
+            a.content_json["value"]
+            for a in extract_number_artifacts(lookup, start_position=0)
+        }
+        assert "140 mmHg" in values, "본문 수치가 앞부분에 밀려 잘렸다"
+        assert "250mg" in values
+
+    def test_drops_publication_years(self):
+        """판권지의 발행 연도는 임상 수치가 아니다."""
+        lookup = {
+            "c1": _chunk("c1", "1993년 초판, 2022년 6판 발행. 5년 생존율은 70%이다.")
+        }
+        values = {
+            a.content_json["value"]
+            for a in extract_number_artifacts(lookup, start_position=0)
+        }
+        assert "1993년" not in values
+        assert "2022년" not in values
+        # 임상적 기간·비율은 남는다
+        assert "5년" in values
+        assert "70%" in values
+
+    def test_does_not_span_line_breaks_or_split_thousands(self):
+        """OCR 줄바꿈과 천단위 쉼표에서 값이 망가지지 않는다.
+
+        실기기에서 "3.0\\nmg", "000 ml"(1,000 ml의 뒷동강)이 그대로 저장됐다.
+        """
+        lookup = {
+            "c1": _chunk("c1", "용량은 3.0\nmg 기준이며 총 1,000 ml를 투여한다."),
+        }
+        values = {
+            a.content_json["value"]
+            for a in extract_number_artifacts(lookup, start_position=0)
+        }
+        assert not any("\n" in v for v in values), f"개행을 넘어 매치됐다: {values}"
+        assert "000 ml" not in values
+        assert "1,000 ml" in values
+
+    def test_spreads_across_the_whole_document(self):
+        """뽑힌 수치는 문서 앞뒤에 고르게 퍼진다.
+
+        앞쪽에도 뒤쪽에도 똑같이 좋은 후보가 있으면 앞쪽이 목록을 독점해선 안 된다.
+        """
+        lookup = {
+            f"c{i}": _chunk(f"c{i}", f"용량은 {i + 1} mg이다.") for i in range(200)
+        }
+        arts = extract_number_artifacts(lookup, start_position=0)
+        positions = [int(a.source_chunk_ids[0][1:]) for a in arts]
+        assert max(positions) > 150, f"뒤쪽 청크가 전혀 뽑히지 않았다: {max(positions)}"
+        assert min(positions) < 50, f"앞쪽 청크가 전혀 뽑히지 않았다: {min(positions)}"
+
+    def test_one_chunk_cannot_monopolize(self):
+        """한 청크가 목록 전체를 차지하지 못한다 — 문서 전체가 대표돼야 한다."""
+        dense = " ".join(f"{i} mmHg" for i in range(1, 40))
+        lookup = {"dense": _chunk("dense", dense), "other": _chunk("other", "용량 750mg")}
+        arts = extract_number_artifacts(lookup, start_position=0)
+        by_chunk = [a.source_chunk_ids[0] for a in arts]
+        assert "other" in by_chunk, "다른 청크가 통째로 밀려났다"
+
+
+class TestPopulations:
+    def test_rejects_table_of_contents_lines(self):
+        """목차 줄은 대상 집단이 아니다.
+
+        실기기에서 "쿠싱증후군 555", "Part 10 중환자 /901" 같은 목차 줄이 쪽번호까지
+        달린 채 TARGET_POPULATION으로 저장됐다.
+        """
+        lookup = {
+            "c1": _chunk(
+                "c1",
+                "급성 관동맥 증후군 485\n"
+                "쿠싱증후군 555\n"
+                "Part 10 중환자 /901\n"
+                "발열 환자에 대한 접근 763\n",
+            )
+        }
+        texts = {
+            a.content_json["text"]
+            for a in extract_population_artifacts(lookup, start_position=0)
+        }
+        assert texts == set(), f"목차 줄이 저장됐다: {texts}"
+
+    def test_rejects_staff_listing(self):
+        """집필진 명단은 대상 집단이 아니다 ('중환자: 이진우'가 실제로 저장됐다)."""
+        lookup = {"c1": _chunk("c1", "중환자: 이진우\n호흡기: 김철수\n")}
+        arts = extract_population_artifacts(lookup, start_position=0)
+        assert arts == []
+
+    def test_keeps_real_population_sentence(self):
+        lookup = {
+            "c1": _chunk(
+                "c1", "이 지침의 대상 환자는 65세 이상 성인 입원 환자로 한정한다."
+            )
+        }
+        arts = extract_population_artifacts(lookup, start_position=0)
+        assert len(arts) == 1
+        assert "65세 이상" in arts[0].content_json["text"]
+        assert arts[0].source_refs
 
 
 class TestProviders:

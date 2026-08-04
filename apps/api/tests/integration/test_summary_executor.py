@@ -9,7 +9,12 @@ from sqlalchemy import func, select
 
 from app.db.session import get_session_factory
 from app.models.document import Document, DocumentJob
-from app.models.enums import JobStatus, JobType, SummaryRunStatus
+from app.models.enums import (
+    JobStatus,
+    JobType,
+    SummaryArtifactType,
+    SummaryRunStatus,
+)
 from app.models.summary import SummaryNode, SummaryRun
 from app.services.search.chunking import rebuild_chunks
 from app.services.summary import executor as executor_mod
@@ -115,7 +120,9 @@ async def _make_run(document_id: uuid.UUID, provider) -> tuple[uuid.UUID, uuid.U
         return run.id, job.id, doc.content_revision, start_hash
 
 
-async def _run_executor(document_id, run_id, job_id, revision, chunk_hash, provider):
+async def _run_executor(
+    document_id, run_id, job_id, revision, chunk_hash, provider, *, include_sections=True
+):
     return await execute_hierarchical_summary(
         get_session_factory(),
         document_id=document_id,
@@ -125,7 +132,7 @@ async def _run_executor(document_id, run_id, job_id, revision, chunk_hash, provi
         chunks=await _load_chunks(document_id),
         learner_level="nursing_student",
         language="ko",
-        include_sections=True,
+        include_sections=include_sections,
         include_prerequisites=True,
         start_revision=revision,
         start_hash=chunk_hash,
@@ -345,6 +352,99 @@ class TestMultiLevelReduce:
                     if cid not in expected:
                         expected.append(cid)
             assert parent.source_chunk_ids_json == expected
+
+    async def test_sections_scale_with_document_not_fan_in(self, client, monkeypatch):
+        """섹션은 최상위 레벨이 아니라 그 아래 레벨에서 나온다.
+
+        최상위만 쓰면 섹션 수가 REDUCE_FAN_IN에 갇혀, 1,060페이지 문서도 10페이지
+        문서도 똑같이 최대 8개 섹션을 받는다(실기기: 16,226청크 문서가 섹션 4개·580자로
+        끝났다). 축약 트리는 문서가 클수록 깊어지므로, 최상위만 보면 큰 문서일수록
+        요약이 짧아지는 역전이 생긴다.
+        """
+        monkeypatch.setattr(executor_mod, "REDUCE_FAN_IN", 2)
+        monkeypatch.setattr(grouping_mod, "GROUP_MAX_CHARS", 400)
+        monkeypatch.setattr(grouping_mod, "GROUP_MIN_CHARS", 400)
+        doc_id = await _upload_chunked(client, fx.single_column_korean(pages=6))
+        provider = CountingProvider()
+        run_id, job_id, rev, chash = await _make_run(doc_id, provider)
+
+        drafts = await _run_executor(doc_id, run_id, job_id, rev, chash, provider)
+
+        async with get_session_factory()() as s:
+            nodes = (
+                await s.execute(
+                    select(SummaryNode).where(SummaryNode.summary_run_id == run_id)
+                )
+            ).scalars().all()
+        by_level: dict[int, int] = {}
+        for node in nodes:
+            by_level[node.level] = by_level.get(node.level, 0) + 1
+        levels = sorted(by_level)
+        assert len(levels) >= 2, f"reduce 레벨이 생기지 않았다: {by_level}"
+
+        top_level, section_level = levels[-1], levels[-2]
+        sections = [
+            d for d in drafts if d.artifact_type == SummaryArtifactType.SECTION_SUMMARY
+        ]
+        assert len(sections) == by_level[section_level], (
+            f"섹션이 {section_level}레벨({by_level[section_level]}개)이 아니라 "
+            f"다른 곳에서 나왔다: 섹션 {len(sections)}개"
+        )
+        assert len(sections) > by_level[top_level], (
+            f"섹션이 최상위 레벨({by_level[top_level]}개)에 갇혔다"
+        )
+
+    async def test_sections_keep_real_chunk_sources(self, client, monkeypatch):
+        """섹션 출처는 노드 id가 아니라 실제 청크 id여야 한다.
+
+        출처가 어긋나면 인용을 눌렀을 때 엉뚱한 페이지로 간다.
+        """
+        monkeypatch.setattr(executor_mod, "REDUCE_FAN_IN", 2)
+        monkeypatch.setattr(grouping_mod, "GROUP_MAX_CHARS", 400)
+        monkeypatch.setattr(grouping_mod, "GROUP_MIN_CHARS", 400)
+        doc_id = await _upload_chunked(client, fx.single_column_korean(pages=6))
+        provider = CountingProvider()
+        run_id, job_id, rev, chash = await _make_run(doc_id, provider)
+
+        drafts = await _run_executor(doc_id, run_id, job_id, rev, chash, provider)
+
+        async with get_session_factory()() as s:
+            leaf_ids = {
+                cid
+                for node in (
+                    await s.execute(
+                        select(SummaryNode).where(
+                            SummaryNode.summary_run_id == run_id,
+                            SummaryNode.level == 0,
+                        )
+                    )
+                ).scalars().all()
+                for cid in node.source_chunk_ids_json
+            }
+        sections = [
+            d for d in drafts if d.artifact_type == SummaryArtifactType.SECTION_SUMMARY
+        ]
+        assert sections
+        for section in sections:
+            assert section.source_chunk_ids, "출처 없는 섹션이 저장됐다"
+            assert set(section.source_chunk_ids) <= leaf_ids
+            assert section.source_refs, "인용 렌더용 ref가 없다"
+
+    async def test_sections_dropped_when_user_turns_them_off(self, client, monkeypatch):
+        """사용자가 끈 구역 요약은 결정론적 경로에서도 만들지 않는다."""
+        monkeypatch.setattr(executor_mod, "REDUCE_FAN_IN", 2)
+        monkeypatch.setattr(grouping_mod, "GROUP_MAX_CHARS", 400)
+        monkeypatch.setattr(grouping_mod, "GROUP_MIN_CHARS", 400)
+        doc_id = await _upload_chunked(client, fx.single_column_korean(pages=6))
+        provider = CountingProvider()
+        run_id, job_id, rev, chash = await _make_run(doc_id, provider)
+
+        drafts = await _run_executor(
+            doc_id, run_id, job_id, rev, chash, provider, include_sections=False
+        )
+        assert not [
+            d for d in drafts if d.artifact_type == SummaryArtifactType.SECTION_SUMMARY
+        ]
 
 
 class TestAdaptiveSplitOnContextOverflow:

@@ -89,7 +89,9 @@ async def error_report(db: AsyncSession = Depends(get_db)) -> dict:
     log_tail: list[str] = []
     log_file = get_path_provider().logs_dir / "sidecar.log"
     if log_file.is_file():
-        log_tail = log_file.read_text(errors="replace").splitlines()[-200:]
+        # encoding을 지정하지 않으면 Windows에서 로케일 기본값(CP949)으로 읽어
+        # UTF-8로 쓴 한글 로그가 전부 깨진다 — 오류 메시지를 못 읽게 된다.
+        log_tail = log_file.read_text(encoding="utf-8", errors="replace").splitlines()[-200:]
 
     report: dict[str, Any] = {
         "sidecarVersion": __version__,

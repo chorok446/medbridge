@@ -68,6 +68,21 @@ class TestErrorReport:
         raw = json.dumps(report, ensure_ascii=False)
         assert "환자기록_비밀문서" not in raw
 
+    async def test_log_tail_reads_utf8(self, client):
+        """로그 꼬리를 UTF-8로 읽는다.
+
+        인코딩을 지정하지 않으면 Windows가 로케일(CP949)로 읽어 한글 오류 메시지가
+        전부 깨진 채 보고서에 들어간다 — 실기기 보고서에서 확인된 증상이다.
+        """
+        log_file = get_path_provider().logs_dir / "sidecar.log"
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        korean = "ConnectionResetError: 현재 연결은 원격 호스트에 의해 강제로 끊겼습니다"
+        with log_file.open("a", encoding="utf-8") as fh:
+            fh.write(korean + "\n")
+
+        report = (await client.get("/api/system/error-report")).json()["data"]
+        assert korean in report["logTail"]
+
 
 class TestSingleInstance:
     def test_duplicate_lock_is_rejected(self):
