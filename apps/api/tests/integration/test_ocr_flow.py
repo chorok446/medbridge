@@ -603,6 +603,74 @@ class TestLowConfidenceIsolation:
             ).scalar_one()
         assert survived == 1, "빈 결과를 만들면서 기존 청크를 지웠다"
 
+    async def test_blank_page_does_not_fail_the_whole_document(
+        self, client, monkeypatch
+    ):
+        """백지·도판 페이지는 정상적으로 0~2단어가 나온다 — 그게 실패는 아니다.
+
+        스캔 교재에는 백지 뒷면과 장 구분 페이지가 반드시 섞여 있다. 그 한 장 때문에
+        나머지가 전부 정상 인식된 문서에도 'OCR 실패'가 뜨고 오류 보고서에 실패
+        기록이 남으면, 사용자는 손댈 것이 없는 실패를 계속 보게 된다.
+        """
+
+        class MixedEngine(FakeEngine):
+            """첫 페이지는 정상, 나머지는 백지."""
+
+            def recognize_page(self, pdf_path, page_number, *, language="kor+eng", dpi=0):
+                self.calls.append(page_number)
+                if page_number == 1:
+                    return OcrResult(
+                        page_number=page_number,
+                        words=fake_words(["정상", "인식", "결과", "확인"], conf=0.95),
+                        mean_confidence=0.95,
+                    )
+                return OcrResult(page_number=page_number)  # 단어 0개 = OCR_EMPTY
+
+        monkeypatch.setattr(ocr_service, "engine", lambda: MixedEngine())
+        doc = await upload_extracted(client, fx.blank_image_page(pages=3))
+        await client.post(f"/api/documents/{doc['id']}/ocr")
+        await drain_jobs()
+
+        async with get_session_factory()() as session:
+            job = (
+                await session.execute(
+                    select(DocumentJob)
+                    .where(
+                        DocumentJob.document_id == uuid.UUID(doc["id"]),
+                        DocumentJob.job_type == JobType.OCR_DOCUMENT,
+                    )
+                    .order_by(DocumentJob.created_at.desc())
+                    .limit(1)
+                )
+            ).scalars().one()
+        assert job.status == JobStatus.SUCCEEDED, (
+            f"백지 한 장으로 문서 전체가 실패했다: {job.failure_reason}"
+        )
+
+    async def test_document_with_nothing_readable_is_still_a_failure(
+        self, client, monkeypatch
+    ):
+        """한 글자도 못 읽었으면 그건 보고해야 할 실패다."""
+        monkeypatch.setattr(ocr_service, "engine", lambda: FakeEngine())
+        doc = await upload_extracted(client, fx.blank_image_page(pages=2))
+        await client.post(f"/api/documents/{doc['id']}/ocr")
+        await drain_jobs()
+
+        async with get_session_factory()() as session:
+            job = (
+                await session.execute(
+                    select(DocumentJob)
+                    .where(
+                        DocumentJob.document_id == uuid.UUID(doc["id"]),
+                        DocumentJob.job_type == JobType.OCR_DOCUMENT,
+                    )
+                    .order_by(DocumentJob.created_at.desc())
+                    .limit(1)
+                )
+            ).scalars().one()
+        assert job.status == JobStatus.FAILED
+        assert job.failure_reason == "no_text_found"
+
     async def test_engine_errors_and_noise_get_different_reasons(
         self, client, monkeypatch
     ):

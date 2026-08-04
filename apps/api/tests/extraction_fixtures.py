@@ -199,8 +199,9 @@ def mixed_digital_and_scanned() -> bytes:
     return _to_bytes(a)
 
 
-def blank_image_page() -> bytes:
+def blank_image_page(pages: int = 1) -> bytes:
     """빈(내용 없는) 전면 이미지 페이지."""
     doc = _new_doc()
-    doc.new_page(width=PAGE_W, height=PAGE_H)
+    for _ in range(pages):
+        doc.new_page(width=PAGE_W, height=PAGE_H)
     return _rasterize(_to_bytes(doc))

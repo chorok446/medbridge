@@ -92,6 +92,11 @@ async def run_ocr_job(
     # 마감하지는 않는다 — 조용히 SUCCEEDED로 끝나면 오류 리포트에 흔적이 남지 않고,
     # 사용자는 본문이 빠진 문서를 '다 읽었다'로 받는다.
     unreliable = 0
+    # 읽을 글자가 없던 페이지. 노이즈(unreliable)와 **따로 센다** — 스캔 교재의 백지
+    # 뒷면·장 구분·도판 전용 페이지는 정상적으로 0~2단어가 나오고, 그건 사용자가
+    # 손댈 수 있는 실패가 아니다. 한 장이라도 섞였다고 문서 전체를 실패로 마감하면
+    # 멀쩡히 읽힌 문서마다 'OCR 실패'가 뜬다.
+    empty = 0
     # 본문이 실제로 달라진 페이지 수. 결과가 같은 재실행까지 revision을 올리면 이미
     # 만들어 둔 요약 노드 수백 개가 재사용 키에서 무효가 된다.
     changed = 0
@@ -156,11 +161,10 @@ async def run_ocr_job(
                 await session.commit()
                 processed += 1
                 changed += int(page_changed)
-                if run_row.status in (
-                    OcrRunStatus.OCR_LOW_CONFIDENCE,
-                    OcrRunStatus.OCR_EMPTY,
-                ):
+                if run_row.status == OcrRunStatus.OCR_LOW_CONFIDENCE:
                     unreliable += 1
+                elif run_row.status == OcrRunStatus.OCR_EMPTY:
+                    empty += 1
                 logger.info(
                     "ocr_page_done",
                     document_id=str(document_id),
@@ -221,16 +225,26 @@ async def run_ocr_job(
         job = await session.get(DocumentJob, job_id)
         doc = await session.get(Document, document_id)
         if job is not None:
+            # 빈 페이지는 그 자체로 실패가 아니다. 다만 **전부** 비었다면 OCR이 한 것이
+            # 없다는 뜻이라 보고해야 한다 — 그건 사용자가 스캔 품질로 대응할 수 있다.
+            nothing_read = processed > 0 and empty == processed
             incomplete = failed + unreliable
-            job.status = JobStatus.SUCCEEDED if incomplete == 0 else JobStatus.FAILED
-            if incomplete:
+            job.status = (
+                JobStatus.FAILED if incomplete or nothing_read else JobStatus.SUCCEEDED
+            )
+            if incomplete or nothing_read:
                 job.failure_code = "OCR_PARTIAL_FAILURE"
                 # 같은 코드라도 대응이 다르다. "엔진이 죽었다"는 설치·경로 문제고,
-                # "읽긴 읽었는데 노이즈다"는 원본 스캔 품질 문제다.
+                # "읽긴 읽었는데 노이즈다"는 원본 스캔 품질 문제다. "한 글자도 못 읽었다"는
+                # 또 다르다 — 스캔이 아예 비었거나 인식 언어가 맞지 않는 경우다.
                 job.failure_reason = (
                     "page_errors_and_unreliable"
                     if failed and unreliable
-                    else ("page_errors" if failed else "unreliable_pages")
+                    else (
+                        "page_errors"
+                        if failed
+                        else ("unreliable_pages" if unreliable else "no_text_found")
+                    )
                 )
             job.completed_at = datetime.now(UTC)
         if doc is not None:
@@ -248,6 +262,9 @@ async def run_ocr_job(
             failed=failed,
             # 형식만 성공한 페이지 수 — failed=0인데 본문이 비는 이유가 여기서만 보인다.
             unreliable=unreliable,
+            # 읽을 글자가 없던 페이지 수. 노이즈와 구분해 남긴다 — 백지가 몇 장인지
+            # 모르면 "왜 본문이 적은가"를 로그만으로 좁힐 수 없다.
+            empty=empty,
             changed=changed,
         )
 
