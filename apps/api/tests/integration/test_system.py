@@ -7,6 +7,7 @@ import pytest
 
 from app.core.paths import get_path_provider
 from app.services.system import runtime
+from app.services.system.backups import BACKUP_KEEP
 from tests.conftest import make_pdf
 from tests.integration.conftest import drain_jobs
 
@@ -44,6 +45,24 @@ class TestPrepareUpdate:
         assert backup_file.startswith("pre-update-")
         after = set(p.name for p in backups.glob("pre-update-*.db"))
         assert backup_file in after - before
+
+    async def test_prunes_old_backups(self, client):
+        """백업 생성 경로가 오래된 사본을 정리한다.
+
+        정리 코드가 없어 실기기에서 백업 6개가 11.5GB까지 쌓였다(같은 기기의 실제
+        PDF는 0.99GB였다). 헬퍼만 검증하면 배선이 빠져도 테스트가 통과한다.
+        """
+        backups = get_path_provider().backups_dir
+        backups.mkdir(parents=True, exist_ok=True)
+        for stamp in ("20200101-000000", "20200102-000000", "20200103-000000"):
+            (backups / f"pre-update-0.1.0-{stamp}.db").write_bytes(b"old")
+
+        await client.post("/api/system/prepare-update")
+
+        left = sorted(p.name for p in backups.glob("pre-update-*.db"))
+        assert len(left) == BACKUP_KEEP, f"정리되지 않았다: {left}"
+        # 방금 만든 백업은 반드시 남는다
+        assert not any(name.startswith("pre-update-0.1.0-20200101") for name in left)
 
 
 class TestErrorReport:

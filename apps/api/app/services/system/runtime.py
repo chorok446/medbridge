@@ -19,6 +19,7 @@ from app import __version__
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.core.paths import get_path_provider
+from app.services.system.backups import prune_backups
 
 logger = get_logger(__name__)
 
@@ -149,4 +150,7 @@ def checkpoint_and_backup() -> str | None:
         suffix += 1
     shutil.copy2(db_path, backup)
     logger.info("pre_update_backup_created", backup=backup.name)
+    # 새 백업이 자리 잡은 뒤에 정리한다 — 먼저 지우면 복사가 실패했을 때
+    # 되돌릴 사본만 없앤 꼴이 된다.
+    prune_backups(provider.backups_dir, "pre-update-")
     return backup.name

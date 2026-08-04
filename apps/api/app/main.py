@@ -13,6 +13,7 @@ from app.core.config import get_settings
 from app.core.errors import AppError, ErrorCode
 from app.core.logging import configure_logging, correlation_id_var, get_logger
 from app.core.paths import get_path_provider
+from app.services.system.backups import prune_backups
 
 logger = get_logger(__name__)
 
@@ -88,6 +89,9 @@ def run_migrations() -> None:
             suffix += 1
         _backup_sqlite_database(db_path, backup)
         logger.info("db_backup_created", backup=backup.name)
+        # 새 백업이 자리 잡은 뒤에 정리한다 — 먼저 지우면 백업이 실패했을 때
+        # 되돌릴 사본만 없앤 꼴이 된다.
+        prune_backups(provider.backups_dir, "pre-migration-")
     elif db_path is None:
         logger.warning("db_backup_skipped_non_sqlite_url")
 
