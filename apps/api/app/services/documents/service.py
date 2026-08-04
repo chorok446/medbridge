@@ -65,19 +65,6 @@ async def _find_duplicate(db: AsyncSession, user_id: uuid.UUID, sha256: str) -> 
     return (await db.execute(stmt)).scalar_one_or_none()
 
 
-def _reject_if_updating() -> None:
-    """업데이트 준비 중에는 새 문서 작업을 시작하지 않는다."""
-    from app.services.system import runtime
-
-    if runtime.is_updating():
-        raise AppError(
-            ErrorCode.INTERNAL_ERROR,
-            "업데이트를 준비하는 중입니다. 잠시 후 다시 시도해 주세요.",
-            status_code=503,
-            retryable=True,
-        )
-
-
 def _enqueue_validate(document_id: uuid.UUID, correlation_id: str) -> None:
     from app.services.tasks.runner import get_task_runner
 
@@ -100,9 +87,13 @@ async def create_document(
     """
     from app.services.system import runtime
 
-    _reject_if_updating()
+    runtime.reject_if_updating()
     # 대용량 업로드 메모리를 묶기 위해 읽기·저장 구간을 직렬화한다
     async with _upload_gate:
+        # 게이트 대기(await) 중 업데이트 준비가 시작됐을 수 있다 — 카운터 등록과 같은
+        # 틱에서 재검사하지 않으면 wait_for_quiescence가 이 업로드를 못 보고 통과해
+        # 백업에 없는 문서가 업데이트 도중 생긴다.
+        runtime.reject_if_updating()
         with runtime.operation():  # 업데이트 정지 지점 계산용 (검사 직후 같은 틱에 등록)
             return await _create_document_inner(db, user, file, title, correlation_id)
 
@@ -290,7 +281,7 @@ async def delete_document(db: AsyncSession, user: User, document_id: uuid.UUID) 
             ) from exc
 
     # 파생 추출 데이터 정리 (soft delete라 FK cascade가 돌지 않으므로 명시 삭제;
-    # pages 삭제가 blocks/lines/words/tables로 cascade된다)
+    # pages 삭제가 blocks/lines/tables로 cascade된다)
     from sqlalchemy import delete as sa_delete
     from sqlalchemy import text as sa_text
 
@@ -308,20 +299,10 @@ async def delete_document(db: AsyncSession, user: User, document_id: uuid.UUID) 
     # 요약 run·artifact도 documents.id를 직접 FK로 참조 — 명시 삭제 필요
     await db.execute(sa_delete(SummaryArtifact).where(SummaryArtifact.document_id == doc.id))
     await db.execute(sa_delete(SummaryRun).where(SummaryRun.document_id == doc.id))
-    # Q&A 스레드·메시지·claim (soft delete라 FK cascade가 안 돎 — 명시 정리)
-    from app.models.qa import QaClaim, QaMessage, QaThread
+    # Q&A 스레드·메시지·claim (soft delete라 FK cascade가 안 돎 — qa 쪽 헬퍼와 공유)
+    from app.services.qa.service import delete_threads_for_document
 
-    thread_ids = (
-        await db.execute(select(QaThread.id).where(QaThread.document_id == doc.id))
-    ).scalars().all()
-    if thread_ids:
-        msg_ids = (
-            await db.execute(select(QaMessage.id).where(QaMessage.thread_id.in_(thread_ids)))
-        ).scalars().all()
-        if msg_ids:
-            await db.execute(sa_delete(QaClaim).where(QaClaim.message_id.in_(msg_ids)))
-        await db.execute(sa_delete(QaMessage).where(QaMessage.thread_id.in_(thread_ids)))
-        await db.execute(sa_delete(QaThread).where(QaThread.document_id == doc.id))
+    await delete_threads_for_document(db, doc.id)
     transition(doc, ProcessingStatus.DELETED)
     doc.deleted_at = datetime.now(UTC)
     doc.storage_key = None
@@ -333,7 +314,9 @@ async def delete_document(db: AsyncSession, user: User, document_id: uuid.UUID) 
 async def retry_document(
     db: AsyncSession, user: User, document_id: uuid.UUID, correlation_id: str
 ) -> Document:
-    _reject_if_updating()
+    from app.services.system import runtime
+
+    runtime.reject_if_updating()
     doc = await get_owned_document(db, user, document_id)
     if doc.processing_status != ProcessingStatus.FAILED:
         raise AppError(

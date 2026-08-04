@@ -11,7 +11,6 @@ from app.api.deps import get_current_user
 from app.core.errors import AppError, ErrorCode
 from app.core.logging import correlation_id_var
 from app.db.session import get_db
-from app.models.document import DocumentJob
 from app.models.enums import JobStatus, JobType, OcrRunStatus
 from app.models.extraction import DocumentPage
 from app.models.ocr import OcrRun
@@ -20,6 +19,7 @@ from app.schemas.common import CamelModel, Envelope
 from app.schemas.document import DocumentOut
 from app.services.documents.service import get_owned_document
 from app.services.ocr import service as ocr_service
+from app.services.tasks.jobs import latest_job
 from app.utils.responses import wrap
 
 router = APIRouter(prefix="/api/documents", tags=["ocr"])
@@ -139,17 +139,7 @@ async def ocr_status(
             select(DocumentPage).where(DocumentPage.document_id == document_id)
         )
     ).scalars().all()
-    job = (
-        await db.execute(
-            select(DocumentJob)
-            .where(
-                DocumentJob.document_id == document_id,
-                DocumentJob.job_type == JobType.OCR_DOCUMENT,
-            )
-            .order_by(DocumentJob.created_at.desc())
-            .limit(1)
-        )
-    ).scalars().first()
+    job = await latest_job(db, document_id, JobType.OCR_DOCUMENT)
     in_progress = [p for p in pages if p.ocr_status in ("pending", "running")]
     # 진행률은 최근 잡 범위로 한정한다 — 과거 실행의 완료 페이지를 합산하지 않는다
     done_page_ids: set[uuid.UUID] = set()

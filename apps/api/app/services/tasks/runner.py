@@ -7,6 +7,7 @@
 
 import asyncio
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import Protocol
 
 from sqlalchemy import select
@@ -71,6 +72,30 @@ class LocalTaskRunner:
             )
         )
 
+    async def _run_guarded(
+        self,
+        job_name: str,
+        document_id: uuid.UUID,
+        run: Callable[[], Awaitable[None]],
+        mark_crashed: Callable[[], Awaitable[None]],
+    ) -> None:
+        """세마포어 → 실행 → 크래시 로그 → 실패 확정 — 모든 잡 유형이 공유하는 가드.
+
+        크래시 시 문서가 진행 중 상태에 고착되지 않도록 실패로 확정한다. 로그 이벤트
+        이름은 잡 유형과 무관하게 고정해 오류 보고서에서 grep 하나로 찾을 수 있게 한다.
+        """
+        async with self._semaphore:
+            try:
+                await run()
+            except Exception:
+                logger.error("task_crashed", job=job_name, document_id=str(document_id))
+                try:
+                    await mark_crashed()
+                except Exception:
+                    logger.error(
+                        "mark_crashed_failed", job=job_name, document_id=str(document_id)
+                    )
+
     async def _run_summary(
         self,
         document_id: uuid.UUID,
@@ -82,22 +107,19 @@ class LocalTaskRunner:
     ) -> None:
         from app.services.tasks.summary_job import mark_summary_crashed, run_summary_job
 
-        async with self._semaphore:
-            try:
-                await run_summary_job(
-                    document_id,
-                    correlation_id,
-                    run_id=run_id,
-                    job_id=job_id,
-                    include_sections=include_sections,
-                    include_prerequisites=include_prerequisites,
-                )
-            except Exception:
-                logger.error("summary_task_crashed", document_id=str(document_id))
-                try:
-                    await mark_summary_crashed(document_id, job_id=job_id)
-                except Exception:
-                    logger.error("mark_summary_crashed_failed", document_id=str(document_id))
+        await self._run_guarded(
+            "summary",
+            document_id,
+            lambda: run_summary_job(
+                document_id,
+                correlation_id,
+                run_id=run_id,
+                job_id=job_id,
+                include_sections=include_sections,
+                include_prerequisites=include_prerequisites,
+            ),
+            lambda: mark_summary_crashed(document_id, job_id=job_id),
+        )
 
     async def _run_chunk_rebuild(self, document_id: uuid.UUID, correlation_id: str) -> None:
         from app.services.tasks.chunk_job import (
@@ -105,34 +127,26 @@ class LocalTaskRunner:
             run_chunk_rebuild_job,
         )
 
-        async with self._semaphore:
-            try:
-                await run_chunk_rebuild_job(document_id, correlation_id)
-            except Exception:
-                logger.error("chunk_rebuild_task_crashed", document_id=str(document_id))
-                try:
-                    await mark_chunk_rebuild_crashed(document_id)
-                except Exception:
-                    logger.error(
-                        "mark_chunk_rebuild_crashed_failed", document_id=str(document_id)
-                    )
+        await self._run_guarded(
+            "chunk_rebuild",
+            document_id,
+            lambda: run_chunk_rebuild_job(document_id, correlation_id),
+            lambda: mark_chunk_rebuild_crashed(document_id),
+        )
 
     async def _run_ocr(
         self, document_id: uuid.UUID, correlation_id: str, language: str, quality: str
     ) -> None:
         from app.services.tasks.ocr_job import mark_ocr_job_crashed, run_ocr_job
 
-        async with self._semaphore:
-            try:
-                await run_ocr_job(
-                    document_id, correlation_id, language=language, quality=quality
-                )
-            except Exception:
-                logger.error("ocr_job_crashed", document_id=str(document_id))
-                try:
-                    await mark_ocr_job_crashed(document_id)
-                except Exception:
-                    logger.error("mark_ocr_crashed_failed", document_id=str(document_id))
+        await self._run_guarded(
+            "ocr",
+            document_id,
+            lambda: run_ocr_job(
+                document_id, correlation_id, language=language, quality=quality
+            ),
+            lambda: mark_ocr_job_crashed(document_id),
+        )
 
     def _spawn(self, coro) -> None:
         task = asyncio.get_running_loop().create_task(coro)
@@ -142,29 +156,22 @@ class LocalTaskRunner:
     async def _run_extract(self, document_id: uuid.UUID, correlation_id: str) -> None:
         from app.services.tasks.extract import extract_document, mark_extraction_crashed
 
-        async with self._semaphore:
-            try:
-                await extract_document(document_id, correlation_id)
-            except Exception:
-                logger.error("extract_task_crashed", document_id=str(document_id))
-                try:
-                    await mark_extraction_crashed(document_id)
-                except Exception:
-                    logger.error("mark_extract_crashed_failed", document_id=str(document_id))
+        await self._run_guarded(
+            "extract",
+            document_id,
+            lambda: extract_document(document_id, correlation_id),
+            lambda: mark_extraction_crashed(document_id),
+        )
 
     async def _run_validate(self, document_id: uuid.UUID, correlation_id: str) -> None:
         from app.services.tasks.validate import mark_validation_crashed, validate_document
 
-        async with self._semaphore:
-            try:
-                await validate_document(document_id, correlation_id)
-            except Exception:
-                logger.error("validate_task_crashed", document_id=str(document_id))
-                # 크래시 시 문서가 validating에 고착되지 않도록 실패로 확정한다
-                try:
-                    await mark_validation_crashed(document_id)
-                except Exception:
-                    logger.error("mark_crashed_failed", document_id=str(document_id))
+        await self._run_guarded(
+            "validate",
+            document_id,
+            lambda: validate_document(document_id, correlation_id),
+            lambda: mark_validation_crashed(document_id),
+        )
 
     async def recover_interrupted(self) -> int:
         """앱 재시작 시 중단 작업 복구.
@@ -225,7 +232,11 @@ class LocalTaskRunner:
 
         # 중단된 OCR 복구: pending/running 페이지가 남은 문서를 다시 실행
         from app.models.extraction import DocumentPage
+        from app.models.ocr import OcrRun
+        from app.services.ocr.settings import QUALITY_DPI
 
+        dpi_to_quality = {dpi: quality for quality, dpi in QUALITY_DPI.items()}
+        ocr_options: dict[uuid.UUID, tuple[str, str]] = {}
         async with get_session_factory()() as session:
             rows = (
                 await session.execute(
@@ -243,67 +254,61 @@ class LocalTaskRunner:
                     page = await session.get(DocumentPage, page_id)
                     if page is not None:
                         page.ocr_status = "pending"  # 중단된 페이지 재시도
+            # 원래 실행의 언어·품질로 재개한다 — 기본값으로 다시 돌리면 한 문서 안에
+            # DPI가 섞이고, 사용자가 고른 고품질/저메모리 선택이 조용히 무시된다.
+            for doc_id in ocr_docs:
+                last = (
+                    await session.execute(
+                        select(OcrRun.language, OcrRun.render_dpi)
+                        .where(OcrRun.document_id == doc_id)
+                        .order_by(OcrRun.created_at.desc())
+                        .limit(1)
+                    )
+                ).first()
+                if last is not None:
+                    ocr_options[doc_id] = (
+                        last[0],
+                        dpi_to_quality.get(last[1], "standard"),
+                    )
             await session.commit()
         for doc_id in ocr_docs:
-            self.enqueue_ocr(doc_id, f"recovery-{uuid.uuid4().hex[:8]}")
+            language, quality = ocr_options.get(doc_id, ("kor+eng", "standard"))
+            self.enqueue_ocr(
+                doc_id,
+                f"recovery-{uuid.uuid4().hex[:8]}",
+                language=language,
+                quality=quality,
+            )
         to_enqueue.extend(ocr_docs)
 
-        # 대기 페이지 없이 RUNNING/QUEUED로 남은 stale OCR 잡 정리 (H5: 영구 차단 방지)
+        # RUNNING/QUEUED로 남은 stale 잡 정리 — OCR은 위에서 재개한 문서를 제외하고,
+        # 청크·요약은 재개 지점이 없어 실패로 확정해 사용자가 다시 요청하게 한다.
         from datetime import UTC as _UTC
         from datetime import datetime as _dt
 
         from app.models.document import DocumentJob
-        from app.models.enums import JobStatus, JobType
+        from app.models.enums import JobStatus, JobType, SummaryRunStatus
+        from app.models.summary import SummaryRun
 
         async with get_session_factory()() as session:
             stale_stmt = select(DocumentJob).where(
-                DocumentJob.job_type == JobType.OCR_DOCUMENT,
+                DocumentJob.job_type.in_(
+                    [JobType.OCR_DOCUMENT, JobType.CHUNK_REBUILD, JobType.SUMMARIZE]
+                ),
                 DocumentJob.status.in_([JobStatus.QUEUED, JobStatus.RUNNING]),
             )
             if ocr_docs:
-                stale_stmt = stale_stmt.where(DocumentJob.document_id.notin_(ocr_docs))
+                # 방금 재개한 OCR 문서의 잡은 살아 있어야 한다
+                stale_stmt = stale_stmt.where(
+                    (DocumentJob.job_type != JobType.OCR_DOCUMENT)
+                    | DocumentJob.document_id.notin_(ocr_docs)
+                )
             stale_jobs = (await session.execute(stale_stmt)).scalars().all()
             for job in stale_jobs:
                 job.status = JobStatus.FAILED
                 job.failure_code = "INTERRUPTED"
                 job.completed_at = _dt.now(_UTC)
-            await session.commit()
-
-        # 청크 재생성은 페이지 단위 재개 지점이 없다 — 중단된 잡은 실패로 확정하고
-        # 사용자가 다시 요청하게 한다(OCR stale job과 동일 원칙).
-        async with get_session_factory()() as session:
-            stale_chunk_jobs = (
-                await session.execute(
-                    select(DocumentJob).where(
-                        DocumentJob.job_type == JobType.CHUNK_REBUILD,
-                        DocumentJob.status.in_([JobStatus.QUEUED, JobStatus.RUNNING]),
-                    )
-                )
-            ).scalars().all()
-            for job in stale_chunk_jobs:
-                job.status = JobStatus.FAILED
-                job.failure_code = "INTERRUPTED"
-                job.completed_at = _dt.now(_UTC)
-            await session.commit()
-
-        # 중단된 요약 잡·run도 실패로 확정한다 — 모델 호출은 재개 지점이 없어 사용자가
-        # 다시 실행하게 한다(청크·OCR과 동일 원칙).
-        from app.models.enums import SummaryRunStatus
-        from app.models.summary import SummaryRun
-
-        async with get_session_factory()() as session:
-            stale_summary_jobs = (
-                await session.execute(
-                    select(DocumentJob).where(
-                        DocumentJob.job_type == JobType.SUMMARIZE,
-                        DocumentJob.status.in_([JobStatus.QUEUED, JobStatus.RUNNING]),
-                    )
-                )
-            ).scalars().all()
-            for job in stale_summary_jobs:
-                job.status = JobStatus.FAILED
-                job.failure_code = "INTERRUPTED"
-                job.completed_at = _dt.now(_UTC)
+            # 중단된 요약 run도 잡과 같은 원칙으로 실패 확정한다.
             stale_runs = (
                 await session.execute(
                     select(SummaryRun).where(

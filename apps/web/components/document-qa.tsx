@@ -10,6 +10,7 @@ import {
   hasCitations,
   tokenizeCitations,
 } from "@/lib/citations";
+import { usePdfNavigation } from "@/hooks/use-pdf-navigation";
 import { useQaStream } from "@/hooks/use-qa-stream";
 import {
   createThread,
@@ -19,8 +20,7 @@ import {
   retryAnswer,
 } from "@/lib/api/qa";
 import type { DocumentSummary } from "@/types/api";
-import type { Rect } from "@/types/extraction";
-import type { QaClaim, QaMessage } from "@/types/qa";
+import type { QaMessage } from "@/types/qa";
 
 type NavigateRef = { pageNumber: number; bbox: [number, number, number, number] };
 
@@ -76,9 +76,7 @@ function statusNotice(status: QaMessage["status"]): string | null {
 
 export function DocumentQa({ doc, fileUrl }: Props) {
   const queryClient = useQueryClient();
-  const [page, setPage] = useState(1);
-  const [highlights, setHighlights] = useState<Rect[]>([]);
-  const [flashKey, setFlashKey] = useState(0);
+  const nav = usePdfNavigation();
   const [input, setInput] = useState("");
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
@@ -145,11 +143,7 @@ export function DocumentQa({ doc, fileUrl }: Props) {
     !notReady;
   const busy = stream.active || retryMutation.isPending;
 
-  function navigate(ref: NavigateRef) {
-    setPage(ref.pageNumber);
-    setHighlights([{ x0: ref.bbox[0], y0: ref.bbox[1], x1: ref.bbox[2], y1: ref.bbox[3] }]);
-    setFlashKey((k) => k + 1);
-  }
+  const navigate = nav.navigate;
 
   function chooseLevel(next: LearnerLevel) {
     setLevel(next);
@@ -189,14 +183,11 @@ export function DocumentQa({ doc, fileUrl }: Props) {
       <div className="h-[640px]">
         <PdfViewer
           fileUrl={fileUrl}
-          page={page}
+          page={nav.page}
           pageCount={pageCount}
-          onPageChange={(p) => {
-            setPage(p);
-            setHighlights([]);
-          }}
-          highlights={highlights}
-          flashKey={flashKey}
+          onPageChange={nav.changePage}
+          highlights={nav.highlights}
+          flashKey={nav.flashKey}
         />
       </div>
 
@@ -285,7 +276,7 @@ export function DocumentQa({ doc, fileUrl }: Props) {
                     {stream.state.claims.map((c) => (
                       <li key={c.claimIndex} className="border-t border-slate-200 pt-1.5 first:border-0 first:pt-0">
                         <p className="text-xs leading-snug text-slate-700">{c.text}</p>
-                        <StreamSources sources={c.sources} onNavigate={navigate} />
+                        <SourceBadges sources={c.sources} onNavigate={navigate} />
                       </li>
                     ))}
                   </ul>
@@ -474,6 +465,7 @@ function AssistantMessage({
           <CitedText
             content={message.content}
             sources={sources}
+            tokens={tokens}
             onNavigate={(s) => onNavigate({ pageNumber: s.pageNumber, bbox: s.bbox })}
           />
           <SourceList
@@ -494,7 +486,7 @@ function AssistantMessage({
               {supportedClaims.map((c, i) => (
                 <li key={i} className="border-t border-slate-200 pt-1.5">
                   <p className="text-sm leading-snug text-slate-600">{c.text}</p>
-                  <ClaimSources claim={c} onNavigate={onNavigate} />
+                  <SourceBadges sources={c.sourceRefs} onNavigate={onNavigate} />
                 </li>
               ))}
             </ul>
@@ -514,13 +506,9 @@ function SourceBadges({
   sources: SourceRef[];
   onNavigate: (ref: NavigateRef) => void;
 }) {
-  const seen = new Set<string>();
-  const refs = sources.filter((r) => {
-    const key = `${r.pageNumber}-${r.blockId}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
+  // 출처 목록(SourceList 경유)과 같은 기준으로 접는다 — 기준이 갈라지면 같은 답변에서
+  // 한쪽엔 출처가 두 개, 다른 쪽엔 한 개로 보인다.
+  const refs = dedupeRefs(sources);
   if (refs.length === 0) return null;
   return (
     <div className="mt-1 flex flex-wrap gap-1">
@@ -539,22 +527,3 @@ function SourceBadges({
   );
 }
 
-function ClaimSources({
-  claim,
-  onNavigate,
-}: {
-  claim: QaClaim;
-  onNavigate: (ref: NavigateRef) => void;
-}) {
-  return <SourceBadges sources={claim.sourceRefs} onNavigate={onNavigate} />;
-}
-
-function StreamSources({
-  sources,
-  onNavigate,
-}: {
-  sources: SourceRef[];
-  onNavigate: (ref: NavigateRef) => void;
-}) {
-  return <SourceBadges sources={sources} onNavigate={onNavigate} />;
-}

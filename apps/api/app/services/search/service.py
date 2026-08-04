@@ -21,17 +21,9 @@ SEARCH_MODES = ("keyword", "vector", "hybrid")
 
 
 async def _latest_chunk_job(db: AsyncSession, document_id: uuid.UUID) -> DocumentJob | None:
-    return (
-        await db.execute(
-            select(DocumentJob)
-            .where(
-                DocumentJob.document_id == document_id,
-                DocumentJob.job_type == JobType.CHUNK_REBUILD,
-            )
-            .order_by(DocumentJob.created_at.desc())
-            .limit(1)
-        )
-    ).scalars().first()
+    from app.services.tasks.jobs import latest_job
+
+    return await latest_job(db, document_id, JobType.CHUNK_REBUILD)
 
 
 async def start_chunk_rebuild(

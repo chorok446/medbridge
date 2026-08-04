@@ -370,6 +370,35 @@ def post_json(
         raise SummaryNetworkError("bad_response") from exc
 
 
+# finish_reason 값을 로그에 남길 때 모델이 준 임의 문자열을 그대로 쓰지 않는다.
+KNOWN_FINISH_REASONS = frozenset({"length", "content_filter", "tool_calls", "function_call"})
+
+
+def parse_chat_content(data: dict) -> str:
+    """OpenAI 호환 chat/completions envelope에서 완결된 텍스트 content를 꺼낸다.
+
+    length/content_filter 등 stop이 아닌 finish_reason은 완결된 JSON 계약이 아니므로
+    파싱 전에 명시적으로 거부한다. 요약·Q&A 두 파서가 이 한 곳을 공유한다 —
+    갈라지면 같은 절단 응답이 한쪽에서만 원인 불명(bad_response)으로 남는다.
+    """
+    from app.services.model_output import strip_thinking
+
+    try:
+        choice = data["choices"][0]
+        content = choice["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise SummaryNetworkError("bad_response", "envelope_shape") from exc
+    finish_reason = choice.get("finish_reason")
+    if finish_reason not in (None, "stop"):
+        # 토큰 상한 절단(length)인지 다른 중단인지 구분해 둔다 — 대응이 다르다.
+        safe = finish_reason if finish_reason in KNOWN_FINISH_REASONS else "other"
+        raise SummaryNetworkError("bad_response", f"finish_{safe}")
+    if not isinstance(content, str):
+        raise SummaryNetworkError("bad_response", "content_not_text")
+    # thinking 흔적은 UI·저장·로그에 남기지 않는다(JSON 파싱 전에 제거).
+    return strip_thinking(content)
+
+
 def stream_lines(
     url: str,
     payload: dict,

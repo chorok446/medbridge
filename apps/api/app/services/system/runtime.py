@@ -11,7 +11,6 @@ import os
 import shutil
 import sqlite3
 import sys
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import IO
 
@@ -19,7 +18,7 @@ from app import __version__
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.core.paths import get_path_provider
-from app.services.system.backups import prune_backups
+from app.services.system.backups import next_backup_path, prune_backups
 
 logger = get_logger(__name__)
 
@@ -95,11 +94,27 @@ def set_updating(value: bool) -> None:
     _updating = value
 
 
+def reject_if_updating() -> None:
+    """업데이트 준비 중에는 새 문서 작업(업로드·추출·OCR)을 시작하지 않는다.
+
+    문구·상태코드가 호출부마다 갈라지지 않게 여기 한 곳에서만 정의한다.
+    """
+    from app.core.errors import AppError, ErrorCode
+
+    if _updating:
+        raise AppError(
+            ErrorCode.INTERNAL_ERROR,
+            "업데이트를 준비하는 중입니다. 잠시 후 다시 시도해 주세요.",
+            status_code=503,
+            retryable=True,
+        )
+
+
 @contextlib.contextmanager
 def operation():
     """진행 중인 문서 작업(업로드 등) 추적 — 업데이트 정지 지점 계산에 사용.
 
-    수락 검사(_reject_if_updating)와 카운터 증가는 같은 이벤트 루프 틱에서 일어나므로
+    수락 검사(reject_if_updating)와 카운터 증가는 같은 이벤트 루프 틱에서 일어나므로
     게이트를 닫은 뒤 카운터가 0이 되면 새 변경이 없음이 보장된다.
     """
     global _active_operations
@@ -141,13 +156,8 @@ def checkpoint_and_backup() -> str | None:
     with sqlite3.connect(db_path) as conn:
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
-    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     provider.backups_dir.mkdir(parents=True, exist_ok=True)
-    backup = provider.backups_dir / f"pre-update-{__version__}-{stamp}.db"
-    suffix = 1
-    while backup.exists():  # 같은 초에 재실행돼도 기존 백업을 덮어쓰지 않는다
-        backup = provider.backups_dir / f"pre-update-{__version__}-{stamp}-{suffix}.db"
-        suffix += 1
+    backup = next_backup_path(provider.backups_dir, "pre-update-", __version__)
     shutil.copy2(db_path, backup)
     logger.info("pre_update_backup_created", backup=backup.name)
     # 새 백업이 자리 잡은 뒤에 정리한다 — 먼저 지우면 복사가 실패했을 때

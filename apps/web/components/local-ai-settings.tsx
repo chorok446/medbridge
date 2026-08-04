@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { type ReactNode, useRef, useState } from "react";
 import { useModelDownload } from "@/hooks/use-model-download";
 import { ApiError } from "@/lib/api/client";
 import {
@@ -71,10 +71,31 @@ export function LocalAiSection() {
   const recheck = () => statusQuery.refetch();
 
   if (status === "not_running") {
-    return <NotRunning onRecheck={recheck} />;
+    return (
+      <InstallGuide
+        onRecheck={recheck}
+        message={
+          <>
+            로컬 AI를 사용하려면 먼저 <b>로컬 AI 실행 프로그램</b>이 필요합니다. 아래에서
+            설치 안내를 열어 설치한 뒤 “다시 확인”을 눌러 주세요.
+          </>
+        }
+        note="설치 파일은 공식 페이지에서만 받으세요. MedBridge가 대신 내려받지 않습니다."
+      />
+    );
   }
   if (status === "incompatible") {
-    return <Incompatible onRecheck={recheck} />;
+    return (
+      <InstallGuide
+        onRecheck={recheck}
+        message={
+          <>
+            설치된 로컬 AI 실행 프로그램이 오래된 버전이에요. 최신 버전으로 업데이트한 뒤
+            “다시 확인”을 눌러 주세요.
+          </>
+        }
+      />
+    );
   }
   if (status === "error" || statusQuery.isError) {
     return <StatusError onRecheck={recheck} />;
@@ -82,13 +103,19 @@ export function LocalAiSection() {
   return <ReadyPanel onRecheck={recheck} />;
 }
 
-function NotRunning({ onRecheck }: { onRecheck: () => void }) {
+/** 미설치·구버전 공통 안내 — 문구만 다르고 버튼·레이아웃은 같다. */
+function InstallGuide({
+  onRecheck,
+  message,
+  note,
+}: {
+  onRecheck: () => void;
+  message: ReactNode;
+  note?: string;
+}) {
   return (
     <div aria-live="polite" className="flex flex-col gap-3 text-sm">
-      <p className="text-slate-700">
-        로컬 AI를 사용하려면 먼저 <b>로컬 AI 실행 프로그램</b>이 필요합니다. 아래에서 설치
-        안내를 열어 설치한 뒤 “다시 확인”을 눌러 주세요.
-      </p>
+      <p className="text-slate-700">{message}</p>
       <div className="flex flex-wrap gap-2">
         <button
           type="button"
@@ -105,36 +132,7 @@ function NotRunning({ onRecheck }: { onRecheck: () => void }) {
           다시 확인
         </button>
       </div>
-      <p className="text-xs text-slate-400">
-        설치 파일은 공식 페이지에서만 받으세요. MedBridge가 대신 내려받지 않습니다.
-      </p>
-    </div>
-  );
-}
-
-function Incompatible({ onRecheck }: { onRecheck: () => void }) {
-  return (
-    <div aria-live="polite" className="flex flex-col gap-3 text-sm">
-      <p className="text-slate-700">
-        설치된 로컬 AI 실행 프로그램이 오래된 버전이에요. 최신 버전으로 업데이트한 뒤 “다시
-        확인”을 눌러 주세요.
-      </p>
-      <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
-          onClick={() => void openExternalUrl(OLLAMA_INSTALL_URL)}
-          className="rounded bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700"
-        >
-          설치 안내 열기
-        </button>
-        <button
-          type="button"
-          onClick={onRecheck}
-          className="rounded border border-slate-300 px-4 py-2 hover:bg-slate-50"
-        >
-          다시 확인
-        </button>
-      </div>
+      {note && <p className="text-xs text-slate-400">{note}</p>}
     </div>
   );
 }

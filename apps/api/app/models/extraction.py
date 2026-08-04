@@ -63,7 +63,14 @@ class DocumentPage(Base):
         _str_enum(ScanVerdict, "scan_verdict"), default=ScanVerdict.UNKNOWN
     )
     text_character_count: Mapped[int] = mapped_column(Integer, default=0)
+    # 현재 본문의 단어 수. OCR을 돌리면 digital + ocr 합계로 덮인다.
     word_count: Mapped[int] = mapped_column(Integer, default=0)
+    # 추출 시점의 디지털 단어 수. OCR이 덮지 않는 기준선이다 — 재실행 때 word_count는
+    # 이미 합계로 바뀌어 있어 디지털 몫을 되찾을 수 없다. 예전에는 document_words를
+    # COUNT(*)해서 다시 셌는데, 그 353만 행(1.27GB)의 유일한 독자가 그 쿼리였다.
+    digital_word_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0"
+    )
     image_area_ratio: Mapped[float] = mapped_column(Float, default=0.0)
     requires_ocr: Mapped[bool] = mapped_column(Boolean, default=False)
     ocr_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
@@ -124,31 +131,6 @@ class DocumentLine(Base):
     y1: Mapped[float] = mapped_column(Float)
     text: Mapped[str] = mapped_column(Text, default="")
     reading_order: Mapped[int] = mapped_column(Integer, default=0)
-    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
-
-
-class DocumentWord(Base):
-    __tablename__ = "document_words"
-
-    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
-    page_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("document_pages.id", ondelete="CASCADE"), index=True
-    )
-    block_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("document_blocks.id", ondelete="CASCADE"), nullable=True, index=True
-    )
-    line_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("document_lines.id", ondelete="SET NULL"), nullable=True, index=True
-    )
-    word_index: Mapped[int] = mapped_column(Integer)
-    x0: Mapped[float] = mapped_column(Float)
-    y0: Mapped[float] = mapped_column(Float)
-    x1: Mapped[float] = mapped_column(Float)
-    y1: Mapped[float] = mapped_column(Float)
-    text: Mapped[str] = mapped_column(Text, default="")
-    normalized_text: Mapped[str] = mapped_column(Text, default="")
-    confidence: Mapped[float] = mapped_column(Float, default=1.0)
-    source_method: Mapped[str] = mapped_column(String(10), default="digital")  # digital | ocr
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
 
 

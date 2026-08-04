@@ -109,18 +109,36 @@ async def update_thread(
     return thread
 
 
-async def delete_thread(db: AsyncSession, thread: QaThread) -> None:
-    # 메시지·claim 명시 삭제(스레드 CASCADE FK가 있으나 순서 보장 위해 명시)
-    msg_ids = (
-        await db.execute(select(QaMessage.id).where(QaMessage.thread_id == thread.id))
-    ).scalars().all()
+async def _delete_thread_rows(db: AsyncSession, thread_ids: list[uuid.UUID]) -> None:
+    """claim → message → thread 순서로 명시 삭제한다(커밋은 호출자).
+
+    스레드 삭제와 문서 삭제가 이 한 곳을 공유한다 — Q&A에 테이블이 늘 때 한쪽만
+    고쳐져 개인정보(질문 원문)가 남는 사고를 막는다.
+    """
     from sqlalchemy import delete as sa_delete
 
+    if not thread_ids:
+        return
+    msg_ids = (
+        await db.execute(select(QaMessage.id).where(QaMessage.thread_id.in_(thread_ids)))
+    ).scalars().all()
     if msg_ids:
         await db.execute(sa_delete(QaClaim).where(QaClaim.message_id.in_(msg_ids)))
-    await db.execute(sa_delete(QaMessage).where(QaMessage.thread_id == thread.id))
-    await db.execute(sa_delete(QaThread).where(QaThread.id == thread.id))
+    await db.execute(sa_delete(QaMessage).where(QaMessage.thread_id.in_(thread_ids)))
+    await db.execute(sa_delete(QaThread).where(QaThread.id.in_(thread_ids)))
+
+
+async def delete_thread(db: AsyncSession, thread: QaThread) -> None:
+    await _delete_thread_rows(db, [thread.id])
     await db.commit()
+
+
+async def delete_threads_for_document(db: AsyncSession, document_id: uuid.UUID) -> None:
+    """문서의 모든 Q&A 스레드·메시지·claim 삭제(커밋은 호출자) — 문서 삭제 경로용."""
+    thread_ids = (
+        await db.execute(select(QaThread.id).where(QaThread.document_id == document_id))
+    ).scalars().all()
+    await _delete_thread_rows(db, list(thread_ids))
 
 
 # --- 질문 → 답변 ---
@@ -175,6 +193,18 @@ async def _recent_history(
     return turns
 
 
+def require_available_provider(provider, user: User, doc: Document) -> None:
+    """QA 공급자 연결 확인(501) + 외부 전송 동의 검사 — 동기·재시도·스트림 경로가 공유한다."""
+    if not provider.available:
+        raise AppError(
+            ErrorCode.INTERNAL_ERROR,
+            "질문 기능을 사용하려면 앱 설정에서 요약 모델을 연결해 주세요.",
+            status_code=501,
+        )
+    if provider_is_external(provider):
+        ensure_external_consent(user, doc)
+
+
 def _validate_question(question: str) -> str:
     q = (question or "").strip()
     if not q:
@@ -205,14 +235,7 @@ async def ask(
     q = _validate_question(question)
 
     provider = await get_qa_provider(db)
-    if not provider.available:
-        raise AppError(
-            ErrorCode.INTERNAL_ERROR,
-            "질문 기능을 사용하려면 앱 설정에서 요약 모델을 연결해 주세요.",
-            status_code=501,
-        )
-    if provider_is_external(provider):
-        ensure_external_consent(user, doc)
+    require_available_provider(provider, user, doc)
 
     # 시작 revision 스냅샷
     start_content_rev = doc.content_revision
@@ -271,16 +294,18 @@ async def retry_last(
     learner_level: str = "nursing_student",
 ) -> AnswerOutcome:
     """마지막 실패/변경 assistant 메시지를 재시도한다(직전 user 질문으로)."""
-    messages = list(
-        (
-            await db.execute(
-                select(QaMessage)
-                .where(QaMessage.thread_id == thread.id)
-                .order_by(QaMessage.sequence_number.desc())
+    # 필요한 건 두 행뿐이다 — 수백 턴짜리 스레드 전체를 메모리로 끌어오지 않는다.
+    last_assistant = (
+        await db.execute(
+            select(QaMessage)
+            .where(
+                QaMessage.thread_id == thread.id,
+                QaMessage.role == QaMessageRole.ASSISTANT,
             )
-        ).scalars()
-    )
-    last_assistant = next((m for m in messages if m.role == QaMessageRole.ASSISTANT), None)
+            .order_by(QaMessage.sequence_number.desc())
+            .limit(1)
+        )
+    ).scalars().first()
     if last_assistant is None or last_assistant.status not in (
         QaMessageStatus.FAILED,
         QaMessageStatus.REVISION_CHANGED,
@@ -289,23 +314,23 @@ async def retry_last(
             ErrorCode.INVALID_STATE, "다시 시도할 답변이 없습니다.", status_code=409
         )
     # 직전 user 질문 찾기
-    last_user = next(
-        (m for m in messages if m.role == QaMessageRole.USER
-         and m.sequence_number < last_assistant.sequence_number),
-        None,
-    )
+    last_user = (
+        await db.execute(
+            select(QaMessage)
+            .where(
+                QaMessage.thread_id == thread.id,
+                QaMessage.role == QaMessageRole.USER,
+                QaMessage.sequence_number < last_assistant.sequence_number,
+            )
+            .order_by(QaMessage.sequence_number.desc())
+            .limit(1)
+        )
+    ).scalars().first()
     if last_user is None:
         raise AppError(ErrorCode.INVALID_STATE, "다시 시도할 질문이 없습니다.", status_code=409)
 
     provider = await get_qa_provider(db)
-    if not provider.available:
-        raise AppError(
-            ErrorCode.INTERNAL_ERROR,
-            "질문 기능을 사용하려면 앱 설정에서 요약 모델을 연결해 주세요.",
-            status_code=501,
-        )
-    if provider_is_external(provider):
-        ensure_external_consent(user, doc)
+    require_available_provider(provider, user, doc)
 
     # 실패한 assistant 메시지를 pending으로 되돌린다(부분 유니크 인덱스가 동시 재시도를 막는다).
     start_content_rev = doc.content_revision

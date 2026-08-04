@@ -9,7 +9,7 @@ from sqlalchemy import func, select, text
 from app.db.session import get_session_factory
 from app.models.document import Document, DocumentJob
 from app.models.enums import JobStatus, JobType, ProcessingStatus
-from app.models.extraction import DocumentBlock, DocumentPage, DocumentWord
+from app.models.extraction import DocumentBlock, DocumentPage
 from tests import extraction_fixtures as fx
 from tests.integration.conftest import drain_jobs
 
@@ -232,15 +232,14 @@ class TestExtractionFlow:
         doc = await upload_extracted(client, fx.single_column_korean(pages=1))
         doc_uuid = uuid.UUID(doc["id"])
         async with get_session_factory()() as session:
-            words_before = (
+            blocks_before = (
                 await session.execute(
                     select(func.count())
-                    .select_from(DocumentWord)
-                    .join(DocumentPage, DocumentPage.id == DocumentWord.page_id)
-                    .where(DocumentPage.document_id == doc_uuid)
+                    .select_from(DocumentBlock)
+                    .where(DocumentBlock.document_id == doc_uuid)
                 )
             ).scalar_one()
-        assert words_before > 0
+        assert blocks_before > 0
 
         assert (await client.delete(f"/api/documents/{doc['id']}")).status_code == 200
         async with get_session_factory()() as session:

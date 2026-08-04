@@ -161,7 +161,11 @@ class OpenAICompatibleQaProvider:
         )
 
     def answer(self, request: QaRequest) -> dict:
-        from app.services.summary.endpoint import SummaryNetworkError, post_json
+        from app.services.summary.endpoint import (
+            SummaryNetworkError,
+            parse_chat_content,
+            post_json,
+        )
         from app.services.summary.settings import (
             LOCAL_MAX_TOKENS,
             LOCAL_REASONING_EFFORT,
@@ -197,17 +201,11 @@ class OpenAICompatibleQaProvider:
                 timeout=self._timeout or SUMMARY_REQUEST_TIMEOUT_SEC,
                 max_response_bytes=SUMMARY_MAX_RESPONSE_BYTES,
             )
+        # 요약과 같은 envelope 파서 — finish_reason(length 절단 등) 검사·thinking 제거 포함.
+        content = parse_chat_content(data)
         try:
-            content = data["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError) as exc:
-            raise SummaryNetworkError("bad_response") from exc
-        if isinstance(content, str):
-            from app.services.model_output import strip_thinking
-
-            content = strip_thinking(content)  # thinking 흔적 제거 후 JSON 파싱
-        try:
-            return json.loads(content) if isinstance(content, str) else content
-        except (ValueError, TypeError) as exc:
+            return json.loads(content)
+        except ValueError as exc:
             raise SummaryNetworkError("bad_response") from exc
 
 

@@ -43,13 +43,7 @@ async def start_extraction(
     from app.services.system import runtime
     from app.services.tasks.runner import get_task_runner
 
-    if runtime.is_updating():
-        raise AppError(
-            ErrorCode.INTERNAL_ERROR,
-            "업데이트를 준비하는 중입니다. 잠시 후 다시 시도해 주세요.",
-            status_code=503,
-            retryable=True,
-        )
+    runtime.reject_if_updating()
     if doc.processing_status == ProcessingStatus.EXTRACTING:
         return doc, False  # 이미 진행 중 (idempotent)
     if doc.processing_status not in EXTRACTABLE_STATES:

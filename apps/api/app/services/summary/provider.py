@@ -9,15 +9,14 @@ import json
 from dataclasses import dataclass, field
 from typing import Protocol
 
+# finish_reason/done_reason 분류값은 endpoint.parse_chat_content와 공유한다.
+from app.services.summary.endpoint import KNOWN_FINISH_REASONS as _KNOWN_FINISH_REASONS
 from app.services.summary.settings import (
     GROUP_SUMMARY_MAX_CHARS,
     SUMMARY_MAP_MAX_TOKENS,
     SUMMARY_MAP_RETRY_MAX_TOKENS,
     SUMMARY_REDUCE_MAX_TOKENS,
 )
-
-# finish_reason 값을 로그에 남길 때 모델이 준 임의 문자열을 그대로 쓰지 않는다.
-_KNOWN_FINISH_REASONS = frozenset({"length", "content_filter", "tool_calls", "function_call"})
 
 # 프롬프트가 잘렸을 때 모델이 낼 수 있어야 하는 대안 형태. 이걸 스키마에서 배제하면
 # 잘린 프롬프트가 "정상 요약"으로 통과해 버린다(실측: strict 스키마 + num_ctx 부족 →
@@ -370,7 +369,6 @@ class OpenAICompatibleSummaryProvider:
         max_tokens: int | None = None,
         local_max_tokens: int | None = None,
     ) -> str:
-        from app.services.model_output import strip_thinking
         from app.services.summary.endpoint import SummaryNetworkError, post_json
         from app.services.summary.settings import (
             LOCAL_MAX_TOKENS,
@@ -418,21 +416,9 @@ class OpenAICompatibleSummaryProvider:
                 )
         except (json.JSONDecodeError, TypeError) as exc:
             raise SummaryNetworkError("bad_response", "envelope_not_json") from exc
-        try:
-            choice = data["choices"][0]
-            content = choice["message"]["content"]
-        except (KeyError, IndexError, TypeError) as exc:
-            raise SummaryNetworkError("bad_response", "envelope_shape") from exc
-        # length/content_filter 등은 완결된 JSON 계약이 아니므로 파싱 전에 명시적으로 거부한다.
-        finish_reason = choice.get("finish_reason")
-        if finish_reason not in (None, "stop"):
-            # 토큰 상한 절단(length)인지 다른 중단인지 구분해 둔다 — 대응이 다르다.
-            safe = finish_reason if finish_reason in _KNOWN_FINISH_REASONS else "other"
-            raise SummaryNetworkError("bad_response", f"finish_{safe}")
-        if not isinstance(content, str):
-            raise SummaryNetworkError("bad_response", "content_not_text")
-        # thinking 흔적은 UI·저장·로그에 남기지 않는다(JSON 파싱 전에 제거).
-        return strip_thinking(content)
+        from app.services.summary.endpoint import parse_chat_content
+
+        return parse_chat_content(data)
 
     def _native_url(self) -> str:
         """OpenAI 호환 base(.../v1)에서 Ollama native chat 주소를 만든다."""

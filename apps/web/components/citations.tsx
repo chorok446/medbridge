@@ -1,6 +1,6 @@
 "use client";
 
-import { type CitationSource, tokenizeCitations } from "@/lib/citations";
+import { type CitationSource, type CitationToken, tokenizeCitations } from "@/lib/citations";
 
 /** 인용 번호 i가 가리키는 출처들. null이면 그 번호는 화면에 내보내지 않는다 —
  *  검증에 실패했거나 출처가 아예 없는 주장이다. 배열 자리는 비워둔 채로 유지한다:
@@ -22,12 +22,16 @@ export function CitedText({
   content,
   sources,
   onNavigate,
+  tokens: precomputed,
 }: {
   content: string;
   sources: CitationSlots;
   onNavigate: (source: CitationSource) => void;
+  /** 호출자가 이미 토크나이즈했다면 재사용한다 — 같은 인자로 두 번 돌리면
+   *  claimCount 기준이 갈라졌을 때 인용 pill과 출처 목록이 어긋난다. */
+  tokens?: CitationToken[];
 }) {
-  const tokens = tokenizeCitations(content, sources.length);
+  const tokens = precomputed ?? tokenizeCitations(content, sources.length);
   return (
     <p className="max-w-[68ch] whitespace-pre-wrap text-[17px] leading-[1.7] text-slate-900">
       {tokens.map((t, i) => {

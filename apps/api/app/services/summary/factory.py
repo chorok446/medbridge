@@ -3,6 +3,7 @@
 get_embedding_provider()·ocr_service.engine()과 동일한 단일 주입 지점.
 """
 
+import asyncio
 from dataclasses import dataclass
 
 from sqlalchemy import select
@@ -84,6 +85,7 @@ async def get_summary_provider(session: AsyncSession) -> SummaryProvider:
         endpoint=row.endpoint,
         model_name=row.model_name,
         is_local=row.is_local,
-        api_key=secrets.get_api_key(),
+        # keyring 읽기는 OS 자격증명 저장소를 치는 동기 I/O — 이벤트 루프를 막지 않게 위임.
+        api_key=await asyncio.to_thread(secrets.get_api_key),
     )
     return build_summary_provider(config)

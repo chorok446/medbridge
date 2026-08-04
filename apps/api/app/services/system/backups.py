@@ -36,6 +36,23 @@ def _sort_key(path: Path) -> tuple:
     return (1, int(date), int(time), int(suffix or 0))
 
 
+def next_backup_path(directory: Path, prefix: str, version: str) -> Path:
+    """`{prefix}{version}-{stamp}.db` 형식의 미사용 백업 경로를 만든다.
+
+    이름 형식은 _STAMP_RE 파싱(보존 정렬)과 한 몸이다 — 형식을 바꾸려면 여기 한 곳만
+    고치면 되고, 흩어진 복사본이 어긋나 보존 정렬이 mtime 폴백으로 떨어지는 일을 막는다.
+    """
+    from datetime import UTC, datetime
+
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    backup = directory / f"{prefix}{version}-{stamp}.db"
+    suffix = 1
+    while backup.exists():  # 같은 초에 재실행돼도 기존 백업을 덮어쓰지 않는다
+        backup = directory / f"{prefix}{version}-{stamp}-{suffix}.db"
+        suffix += 1
+    return backup
+
+
 def prune_backups(directory: Path, prefix: str, keep: int = BACKUP_KEEP) -> list[str]:
     """`prefix`로 시작하는 백업 중 최신 `keep`개만 남긴다. 지운 파일명을 돌려준다.
 

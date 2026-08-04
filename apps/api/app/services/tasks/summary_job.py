@@ -24,6 +24,7 @@ from app.services.summary.executor import (
     execute_hierarchical_summary,
 )
 from app.services.summary.factory import get_summary_provider
+from app.services.tasks.jobs import latest_job
 
 logger = get_logger(__name__)
 
@@ -34,17 +35,7 @@ SUMMARY_PARTIAL_CODE = "SUMMARY_PARTIAL"
 
 async def _job_is_current(session, document_id: uuid.UUID, job_id: uuid.UUID) -> bool:
     """이 job_id가 여전히 이 문서의 최신 요약 잡이며 활성 상태인지 — 취소·교체 감지."""
-    latest = (
-        await session.execute(
-            select(DocumentJob)
-            .where(
-                DocumentJob.document_id == document_id,
-                DocumentJob.job_type == JobType.SUMMARIZE,
-            )
-            .order_by(DocumentJob.created_at.desc())
-            .limit(1)
-        )
-    ).scalars().first()
+    latest = await latest_job(session, document_id, JobType.SUMMARIZE)
     if latest is None or latest.id != job_id:
         return False
     job = await session.get(DocumentJob, job_id)

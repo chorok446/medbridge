@@ -15,7 +15,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from app.models.document import Document, DocumentJob
+from app.models.document import Document
 from app.models.enums import (
     BlockType,
     JobType,
@@ -27,7 +27,6 @@ from app.models.extraction import (
     DocumentLine,
     DocumentPage,
     DocumentTable,
-    DocumentWord,
 )
 from app.services.documents import storage
 from app.services.extraction import engine as engine_mod
@@ -36,7 +35,6 @@ from app.services.extraction.geometry import overlap_ratio, vertical_distance
 from app.services.extraction.headers import _fingerprint, _zone
 from app.services.extraction.normalize import (
     is_page_number_line,
-    normalize_text,
     page_normalized_text,
 )
 from app.services.extraction.reading_order import compute_reading_order
@@ -80,7 +78,7 @@ class _PreparedPage:
     page_row: DocumentPage
     block_rows: list[DocumentBlock]
     line_rows: list[DocumentLine]
-    tail_rows: list[DocumentWord | DocumentTable]
+    tail_rows: list[DocumentTable]
     requires_ocr: bool
 
 
@@ -97,18 +95,10 @@ async def run_is_active(
         return False
     if job_id is None:
         return True
-    latest = (
-        await session.execute(
-            select(DocumentJob.id)
-            .where(
-                DocumentJob.document_id == document_id,
-                DocumentJob.job_type == JobType.EXTRACT_DOCUMENT,
-            )
-            .order_by(DocumentJob.created_at.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    return latest == job_id
+    from app.services.tasks.jobs import latest_job
+
+    latest = await latest_job(session, document_id, JobType.EXTRACT_DOCUMENT)
+    return latest is not None and latest.id == job_id
 
 
 def _mark_caption_blocks(page: PageData) -> set[int]:
@@ -214,6 +204,8 @@ def _prepare_page_rows(document_id: uuid.UUID, page: PageData) -> _PreparedPage:
             scan_verdict=scan.verdict,
             text_character_count=char_count,
             word_count=len(page.words),
+            # OCR이 덮지 않는 기준선 — 재실행 때 디지털 몫을 되찾는 유일한 값이다.
+            digital_word_count=len(page.words),
             image_area_ratio=round(page.image_area_ratio, 4),
             requires_ocr=scan.requires_ocr,
     )
@@ -267,25 +259,7 @@ def _prepare_page_rows(document_id: uuid.UUID, page: PageData) -> _PreparedPage:
                 )
             )
 
-    tail_rows: list = []
-    tail_rows.extend(
-        DocumentWord(
-            page_id=page_id,
-            block_id=block_ids.get(word.block_index),
-            line_id=line_ids.get((word.block_index, word.line_index)),
-            word_index=word.word_index,
-            x0=word.bbox[0],
-            y0=word.bbox[1],
-            x1=word.bbox[2],
-            y1=word.bbox[3],
-            text=word.text,
-            normalized_text=normalize_text(word.text),
-            confidence=1.0,
-            metadata_json={},
-        )
-        for word in page.words
-    )
-    tail_rows.extend(
+    tail_rows: list[DocumentTable] = [
         DocumentTable(
             page_id=page_id,
             table_index=i,
@@ -302,7 +276,7 @@ def _prepare_page_rows(document_id: uuid.UUID, page: PageData) -> _PreparedPage:
             metadata_json={},
         )
         for i, t in enumerate(page.tables)
-    )
+    ]
 
     return _PreparedPage(
         page_number=page.page_number,

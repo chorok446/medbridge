@@ -4,7 +4,6 @@ import asyncio
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError, ErrorCode
@@ -14,21 +13,13 @@ from app.models.document import Document, DocumentJob
 from app.models.enums import JobStatus, JobType, ProcessingStatus
 from app.services.documents import storage, validation
 from app.services.documents.state_machine import transition
+from app.services.tasks.jobs import latest_job
 
 logger = get_logger(__name__)
 
 
 async def _latest_job(session: AsyncSession, document_id: uuid.UUID) -> DocumentJob | None:
-    stmt = (
-        select(DocumentJob)
-        .where(
-            DocumentJob.document_id == document_id,
-            DocumentJob.job_type == JobType.VALIDATE_FILE,
-        )
-        .order_by(DocumentJob.created_at.desc())
-        .limit(1)
-    )
-    return (await session.execute(stmt)).scalars().first()
+    return await latest_job(session, document_id, JobType.VALIDATE_FILE)
 
 
 def _mark_failed(doc: Document, job: DocumentJob | None, code: str, message: str) -> None:

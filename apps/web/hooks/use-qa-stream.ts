@@ -126,16 +126,27 @@ export function useQaStream(documentId: string) {
 
   const cancel = useCallback(async () => {
     const active = activeRef.current;
+    // 취소 시점의 연결만 끊는다 — 대기 중 새 질문이 시작되면 그 연결은 건드리지 않는다.
+    const controller = abortRef.current;
     setState((s) => ({ ...s, phase: "cancelling" }));
+    // started 이벤트 전에 취소하면 messageId가 아직 없다 — 서버는 이미 메시지를 만들었을
+    // 수 있으므로 바로 끊지 말고 잠깐 기다려 서버 취소를 전달한다. 안 그러면 서버가
+    // CANCELLED 대신 CONNECTION_LOST로 확정해 "연결이 끊겼다"는 오류로 표시된다.
+    if (active && !active.messageId) {
+      const deadline = Date.now() + 3000;
+      while (!active.messageId && Date.now() < deadline && activeRef.current === active) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    }
     // 서버에 취소를 알린다(멱등). 그다음 로컬 연결을 끊는다.
-    if (active?.messageId) {
+    if (active?.messageId && activeRef.current === active) {
       try {
         await cancelStream(documentId, active.threadId, active.messageId);
       } catch {
         // 취소 API 실패는 무시 — 연결을 끊는 것만으로도 클라이언트는 종료된다.
       }
     }
-    abortRef.current?.abort();
+    controller?.abort();
     setState((s) => (s.phase === "cancelling" ? { ...s, phase: "cancelled" } : s));
   }, [documentId]);
 

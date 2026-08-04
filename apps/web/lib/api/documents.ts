@@ -62,8 +62,14 @@ export function uploadDocument(
   onProgress: (percent: number) => void,
 ): UploadHandle {
   const xhr = new XMLHttpRequest();
+  let aborted = false;
   const promise = new Promise<DocumentCreated>((resolve, reject) => {
-    void getApiConfig().then(({ base, token }) => {
+    getApiConfig().then(({ base, token }) => {
+      // 설정 해석 중(xhr.open 전)의 취소 — xhr.abort()는 이 시점엔 abort 이벤트를 못 낸다.
+      if (aborted) {
+        reject(new Error("업로드를 취소했습니다."));
+        return;
+      }
       const form = new FormData();
       form.append("file", file);
       if (title) form.append("title", title);
@@ -96,7 +102,14 @@ export function uploadDocument(
       xhr.open("POST", `${base}/api/documents`);
       if (token) xhr.setRequestHeader("X-MedBridge-Token", token);
       xhr.send(form);
-    });
+      // 설정 해석 실패를 삼키면 promise가 영원히 pending — 업로드 UI 전체가 먹통이 된다.
+    }, reject);
   });
-  return { promise, abort: () => xhr.abort() };
+  return {
+    promise,
+    abort: () => {
+      aborted = true;
+      xhr.abort();
+    },
+  };
 }

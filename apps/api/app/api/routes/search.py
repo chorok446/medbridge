@@ -10,7 +10,7 @@ from app.api.deps import get_current_user
 from app.core.logging import correlation_id_var
 from app.db.session import get_db
 from app.models.user import User
-from app.schemas.common import CamelModel, Envelope
+from app.schemas.common import CamelModel, Envelope, utc_isoformat
 from app.services.documents.service import get_owned_document
 from app.services.search import service as search_service
 from app.utils.responses import wrap
@@ -81,7 +81,7 @@ async def chunk_status_route(
     return wrap(
         ChunkStatusOut(
             chunk_count=status.chunk_count,
-            last_rebuilt_at=status.last_rebuilt_at.isoformat() if status.last_rebuilt_at else None,
+            last_rebuilt_at=utc_isoformat(status.last_rebuilt_at),
             job_status=status.job_status,
             embedding_available=status.embedding_available,
             failure_code=status.failure_code,

@@ -9,7 +9,7 @@ from app.core.paths import get_path_provider
 from app.services.system import runtime
 from app.services.system.backups import BACKUP_KEEP
 from tests.conftest import make_pdf
-from tests.integration.conftest import drain_jobs
+from tests.integration.conftest import drain_jobs, head_revision
 
 
 def upload_kwargs(data: bytes, filename: str = "test.pdf"):
@@ -81,7 +81,7 @@ class TestErrorReport:
         report = res.json()["data"]
         assert "김민준" not in json.dumps(report, ensure_ascii=False)
         assert report["sidecarVersion"]
-        assert report["migrationRevision"] == "0012"
+        assert report["migrationRevision"] == head_revision()
         assert "documentStatusCounts" in report
         # 원본 파일명·PDF 내용은 보고서에 포함되지 않는다
         raw = json.dumps(report, ensure_ascii=False)

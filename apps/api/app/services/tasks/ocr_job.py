@@ -16,6 +16,7 @@ from app.services.documents import storage
 from app.services.ocr import service as ocr_service
 from app.services.ocr.service import PENDING
 from app.services.ocr.settings import QUALITY_DPI
+from app.services.tasks.jobs import latest_job
 
 logger = get_logger(__name__)
 
@@ -26,17 +27,7 @@ def _detail(exc: Exception, limit: int = 300) -> str:
 
 
 async def _job_is_current(session, document_id: uuid.UUID, job_id: uuid.UUID) -> bool:
-    latest = (
-        await session.execute(
-            select(DocumentJob)
-            .where(
-                DocumentJob.document_id == document_id,
-                DocumentJob.job_type == JobType.OCR_DOCUMENT,
-            )
-            .order_by(DocumentJob.created_at.desc())
-            .limit(1)
-        )
-    ).scalars().first()
+    latest = await latest_job(session, document_id, JobType.OCR_DOCUMENT)
     return (
         latest is not None
         and latest.id == job_id
@@ -59,17 +50,7 @@ async def run_ocr_job(
         doc = await session.get(Document, document_id)
         if doc is None or doc.deleted_at is not None or doc.storage_key is None:
             return
-        job = (
-            await session.execute(
-                select(DocumentJob)
-                .where(
-                    DocumentJob.document_id == document_id,
-                    DocumentJob.job_type == JobType.OCR_DOCUMENT,
-                )
-                .order_by(DocumentJob.created_at.desc())
-                .limit(1)
-            )
-        ).scalars().first()
+        job = await latest_job(session, document_id, JobType.OCR_DOCUMENT)
         if job is None:
             return
         job_id = job.id
@@ -286,17 +267,7 @@ async def mark_ocr_job_crashed(document_id: uuid.UUID) -> None:
     """크래시 경계 — RUNNING으로 남은 OCR 잡을 실패로 확정해 영구 차단을 막는다 (H5)."""
     factory = get_session_factory()
     async with factory() as session:
-        job = (
-            await session.execute(
-                select(DocumentJob)
-                .where(
-                    DocumentJob.document_id == document_id,
-                    DocumentJob.job_type == JobType.OCR_DOCUMENT,
-                )
-                .order_by(DocumentJob.created_at.desc())
-                .limit(1)
-            )
-        ).scalars().first()
+        job = await latest_job(session, document_id, JobType.OCR_DOCUMENT)
         if job is not None and job.status in (JobStatus.QUEUED, JobStatus.RUNNING):
             job.status = JobStatus.FAILED
             job.failure_code = "OCR_CRASHED"

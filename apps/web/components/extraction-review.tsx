@@ -15,8 +15,9 @@ import {
   retryExtraction,
 } from "@/lib/api/extraction";
 import { getOcrStatus, startPageOcr } from "@/lib/api/ocr";
+import { usePdfNavigation } from "@/hooks/use-pdf-navigation";
 import type { DocumentSummary } from "@/types/api";
-import type { ExtractionBlock, Rect } from "@/types/extraction";
+import type { ExtractionBlock } from "@/types/extraction";
 
 type PanelTab = "text" | "blocks" | "tables" | "search" | "notes";
 
@@ -28,11 +29,10 @@ interface Props {
 /** 추출 결과 검수 화면 — 왼쪽 원문(PDF), 오른쪽 추출 텍스트. 블록 클릭 ↔ 원문 하이라이트. */
 export function ExtractionReview({ doc, fileUrl }: Props) {
   const queryClient = useQueryClient();
-  const [page, setPage] = useState(1);
+  const nav = usePdfNavigation();
+  const { page } = nav;
   const [tab, setTab] = useState<PanelTab>("text");
   const [includeBands, setIncludeBands] = useState(false);
-  const [highlights, setHighlights] = useState<Rect[]>([]);
-  const [flashKey, setFlashKey] = useState(0);
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
   const [showRaw, setShowRaw] = useState(false);
 
@@ -114,8 +114,7 @@ export function ExtractionReview({ doc, fileUrl }: Props) {
   );
 
   function focusBlock(block: ExtractionBlock) {
-    setHighlights([{ x0: block.x0, y0: block.y0, x1: block.x1, y1: block.y1 }]);
-    setFlashKey((k) => k + 1);
+    nav.highlight({ x0: block.x0, y0: block.y0, x1: block.x1, y1: block.y1 });
     setSelectedBlockId(block.id);
   }
 
@@ -202,12 +201,11 @@ export function ExtractionReview({ doc, fileUrl }: Props) {
           page={page}
           pageCount={pageCount}
           onPageChange={(p) => {
-            setPage(p);
-            setHighlights([]);
+            nav.changePage(p);
             setSelectedBlockId(null);
           }}
-          highlights={highlights}
-          flashKey={flashKey}
+          highlights={nav.highlights}
+          flashKey={nav.flashKey}
           onPagePointerDown={handlePdfClick}
         />
       </div>
@@ -334,9 +332,10 @@ export function ExtractionReview({ doc, fileUrl }: Props) {
                     <button
                       type="button"
                       onClick={() => {
-                        setPage(t.pageNumber);
-                        setHighlights([{ x0: t.x0, y0: t.y0, x1: t.x1, y1: t.y1 }]);
-                        setFlashKey((k) => k + 1);
+                        nav.navigate({ pageNumber: t.pageNumber, bbox: [t.x0, t.y0, t.x1, t.y1] });
+                        // 다른 이동 경로와 동일하게 이전 블록 선택을 지운다 — 화면마다
+                        // 잔여 선택 상태가 다르면 같은 동작이 다르게 보인다.
+                        setSelectedBlockId(null);
                       }}
                       className="text-blue-700 hover:underline"
                     >
@@ -366,9 +365,7 @@ export function ExtractionReview({ doc, fileUrl }: Props) {
             <DocumentSearch
               documentId={doc.id}
               onNavigate={(pageNumber, bbox) => {
-                setPage(pageNumber);
-                setHighlights([{ x0: bbox[0], y0: bbox[1], x1: bbox[2], y1: bbox[3] }]);
-                setFlashKey((k) => k + 1);
+                nav.navigate({ pageNumber, bbox });
                 setSelectedBlockId(null);
               }}
             />

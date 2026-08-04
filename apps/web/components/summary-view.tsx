@@ -1,14 +1,13 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
 import { SourceList } from "@/components/citations";
 import { dedupeRefs } from "@/lib/citations";
 import { ErrorReportButton } from "@/components/error-report-button";
 import { PdfViewer } from "@/components/pdf-viewer";
+import { usePdfNavigation } from "@/hooks/use-pdf-navigation";
 import { createSummary, getSummaries, getSummaryStatus, retrySummary } from "@/lib/api/summary";
 import type { DocumentSummary } from "@/types/api";
-import type { Rect } from "@/types/extraction";
 import type {
   SummaryArtifact,
   SummaryArtifactType,
@@ -66,9 +65,7 @@ function summaryFailureGuide(category: SummaryFailureCategory | null): string {
  */
 export function SummaryView({ doc, fileUrl }: Props) {
   const queryClient = useQueryClient();
-  const [page, setPage] = useState(1);
-  const [highlights, setHighlights] = useState<Rect[]>([]);
-  const [flashKey, setFlashKey] = useState(0);
+  const nav = usePdfNavigation();
 
   const statusQuery = useQuery({
     queryKey: ["summary-status", doc.id],
@@ -93,11 +90,7 @@ export function SummaryView({ doc, fileUrl }: Props) {
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["summary-status", doc.id] }),
   });
 
-  function navigate(ref: { pageNumber: number; bbox: [number, number, number, number] }) {
-    setPage(ref.pageNumber);
-    setHighlights([{ x0: ref.bbox[0], y0: ref.bbox[1], x1: ref.bbox[2], y1: ref.bbox[3] }]);
-    setFlashKey((k) => k + 1);
-  }
+  const navigate = nav.navigate;
 
   const status = statusQuery.data;
   const pageCount = doc.pageCount ?? 0;
@@ -114,14 +107,11 @@ export function SummaryView({ doc, fileUrl }: Props) {
       <div className="h-[640px]">
         <PdfViewer
           fileUrl={fileUrl}
-          page={page}
+          page={nav.page}
           pageCount={pageCount}
-          onPageChange={(p) => {
-            setPage(p);
-            setHighlights([]);
-          }}
-          highlights={highlights}
-          flashKey={flashKey}
+          onPageChange={nav.changePage}
+          highlights={nav.highlights}
+          flashKey={nav.flashKey}
         />
       </div>
 

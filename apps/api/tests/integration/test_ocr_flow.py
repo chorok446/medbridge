@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from app.db.session import get_session_factory
 from app.models.document import Document, DocumentJob
 from app.models.enums import JobStatus, JobType, OcrRunStatus
-from app.models.extraction import DocumentBlock, DocumentPage, DocumentWord
+from app.models.extraction import DocumentBlock, DocumentPage
 from app.models.ocr import OcrRun
 from app.models.search import DocumentChunk
 from app.services.extraction.ocr import OcrResult, OcrWord
@@ -98,18 +98,16 @@ class TestOcrRealEngine:
         after = (await client.get(f"/api/documents/{doc['id']}")).json()["data"]
         assert after["processingStatus"] == "extracted"
         async with get_session_factory()() as session:
-            ocr_words = (
+            page = (
                 await session.execute(
-                    select(func.count())
-                    .select_from(DocumentWord)
-                    .join(DocumentPage, DocumentPage.id == DocumentWord.page_id)
-                    .where(
+                    select(DocumentPage).where(
                         DocumentPage.document_id == uuid.UUID(doc["id"]),
-                        DocumentWord.source_method == "ocr",
+                        DocumentPage.page_number == 1,
                     )
                 )
-            ).scalar_one()
-        assert ocr_words > 0
+            ).scalars().one()
+        # OCR이 실제로 단어를 읽어냈다 — 디지털 기준선 위로 늘어난 만큼이 OCR 몫이다.
+        assert page.word_count > page.digital_word_count
 
         # 블록이 생겨 기존 하이라이트 경로로 조회 가능
         blocks = (
@@ -125,18 +123,15 @@ class TestOcrRealEngine:
         assert doc["processingStatus"] == "partially_extracted"
 
         async with get_session_factory()() as session:
-            digital_before = (
+            before = (
                 await session.execute(
-                    select(func.count())
-                    .select_from(DocumentWord)
-                    .join(DocumentPage, DocumentPage.id == DocumentWord.page_id)
-                    .where(
+                    select(DocumentPage).where(
                         DocumentPage.document_id == uuid.UUID(doc["id"]),
                         DocumentPage.page_number == 1,
-                        DocumentWord.source_method == "digital",
                     )
                 )
-            ).scalar_one()
+            ).scalars().one()
+            digital_before = before.word_count
 
         await client.post(f"/api/documents/{doc['id']}/ocr")
         await drain_jobs()
@@ -145,18 +140,6 @@ class TestOcrRealEngine:
         assert status["remainingOcrPages"] == []
         # 디지털 페이지 1은 OCR 대상이 아니었고 단어 수 불변
         async with get_session_factory()() as session:
-            digital_after = (
-                await session.execute(
-                    select(func.count())
-                    .select_from(DocumentWord)
-                    .join(DocumentPage, DocumentPage.id == DocumentWord.page_id)
-                    .where(
-                        DocumentPage.document_id == uuid.UUID(doc["id"]),
-                        DocumentPage.page_number == 1,
-                        DocumentWord.source_method == "digital",
-                    )
-                )
-            ).scalar_one()
             page1 = (
                 await session.execute(
                     select(DocumentPage).where(
@@ -165,7 +148,7 @@ class TestOcrRealEngine:
                     )
                 )
             ).scalar_one()
-        assert digital_after == digital_before
+        assert page1.word_count == digital_before, "OCR이 디지털 페이지를 건드렸다"
         assert page1.extraction_method == "digital"
 
     @needs_tesseract
@@ -302,17 +285,17 @@ class TestOcrControlPaths:
         await drain_jobs()
 
         async with get_session_factory()() as session:
-            words = (
+            # OCR 본문은 블록에 담긴다 — 교체 여부는 거기서 본다(단어 테이블은 없앴다).
+            blocks = (
                 await session.execute(
-                    select(DocumentWord.text)
-                    .join(DocumentPage, DocumentPage.id == DocumentWord.page_id)
-                    .where(
-                        DocumentPage.document_id == uuid.UUID(doc["id"]),
-                        DocumentWord.source_method == "ocr",
-                    )
+                    select(DocumentBlock)
+                    .join(DocumentPage, DocumentPage.id == DocumentBlock.page_id)
+                    .where(DocumentPage.document_id == uuid.UUID(doc["id"]))
                 )
-            ).all()
-            texts = [w[0] for w in words]
+            ).scalars().all()
+            texts = " ".join(
+                b.text or "" for b in blocks if (b.metadata_json or {}).get("source") == "ocr"
+            )
             runs = (
                 await session.execute(
                     select(func.count())
@@ -320,8 +303,10 @@ class TestOcrControlPaths:
                     .where(OcrRun.document_id == uuid.UUID(doc["id"]))
                 )
             ).scalar_one()
-        assert "두번째" in texts and "첫번째" not in texts
-        assert len(texts) == 4  # 교체, 누적 아님
+        assert "두번째" in texts and "첫번째" not in texts  # 교체, 누적 아님
+        # 최종 실행분이 두 번 저장되는 회귀(부분 삭제 실패·블록 재추가)도 잡는다 —
+        # 포함 여부만 보면 같은 실행분의 중복은 통과해 버린다.
+        assert texts.count("두번째") == 1
         assert runs == 2  # 실행 기록은 누적 보존
 
     async def test_rerun_does_not_accumulate_text_and_word_count(self, client, monkeypatch):

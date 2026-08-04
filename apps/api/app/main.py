@@ -1,7 +1,6 @@
 import sqlite3
 import uuid
 from contextlib import asynccontextmanager, closing
-from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -13,7 +12,7 @@ from app.core.config import get_settings
 from app.core.errors import AppError, ErrorCode
 from app.core.logging import configure_logging, correlation_id_var, get_logger
 from app.core.paths import get_path_provider
-from app.services.system.backups import prune_backups
+from app.services.system.backups import next_backup_path, prune_backups
 
 logger = get_logger(__name__)
 
@@ -36,6 +35,27 @@ def _backup_sqlite_database(db_path: Path, backup_path: Path) -> None:
     except Exception:
         backup_path.unlink(missing_ok=True)
         raise
+
+
+def _vacuum_sqlite_database(db_path: Path) -> None:
+    """마이그레이션으로 비운 공간을 OS에 돌려준다.
+
+    SQLite는 지운 페이지를 freelist에 넣어두고 파일을 줄이지 않는다(auto_vacuum=NONE).
+    실기기에서 문서 6개(11,260페이지)를 지운 뒤에도 0.60GB가 파일에 그대로 남아 있었고,
+    그 상태의 DB가 마이그레이션마다 통째로 백업돼 낭비가 증폭됐다.
+
+    마이그레이션이 실제로 적용된 직후에만 부른다 — 매 기동마다 2.5GB를 통째로 다시
+    쓰면 시작이 느려진다. VACUUM은 트랜잭션 안에서 돌 수 없어 alembic 밖에서 부른다.
+
+    실패해도 삼킨다. 공간 회수는 부수적인 청소이고, 여기서 터지면 앱이 기동하지 못한다.
+    """
+    try:
+        with closing(sqlite3.connect(str(db_path), isolation_level=None)) as conn:
+            conn.execute("VACUUM")
+        # stat()도 삼킴 안에 둔다 — 로그 한 줄의 실패가 앱 기동을 막으면 안 된다.
+        logger.info("db_vacuumed", size_bytes=db_path.stat().st_size)
+    except Exception:
+        logger.warning("db_vacuum_failed")
 
 
 def _current_and_head_revision() -> tuple[str | None, str]:
@@ -78,15 +98,7 @@ def run_migrations() -> None:
     if db_path is not None and db_path.is_file() and current != head:
         from app import __version__
 
-        stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-        backup = provider.backups_dir / f"pre-migration-{__version__}-{stamp}.db"
-        suffix = 1
-        while backup.exists():
-            backup = (
-                provider.backups_dir
-                / f"pre-migration-{__version__}-{stamp}-{suffix}.db"
-            )
-            suffix += 1
+        backup = next_backup_path(provider.backups_dir, "pre-migration-", __version__)
         _backup_sqlite_database(db_path, backup)
         logger.info("db_backup_created", backup=backup.name)
         # 새 백업이 자리 잡은 뒤에 정리한다 — 먼저 지우면 백업이 실패했을 때
@@ -102,6 +114,8 @@ def run_migrations() -> None:
     cfg.attributes["configure_logger"] = False
     command.upgrade(cfg, "head")
     logger.info("migrations_applied", revision=head)
+    if db_path is not None and current != head:
+        _vacuum_sqlite_database(db_path)
 
 
 @asynccontextmanager

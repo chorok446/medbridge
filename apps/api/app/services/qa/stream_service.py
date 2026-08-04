@@ -47,9 +47,10 @@ from app.services.qa.service import (
     _recent_history,
     _validate_question,
     compute_chunk_hash,
+    require_available_provider,
 )
 from app.services.qa.settings import REVISION_RECHECK_EVERY_CLAIMS, STREAM_POLL_INTERVAL_SEC
-from app.services.summary.service import ensure_external_consent, provider_is_external
+from app.services.summary.service import provider_is_external
 
 logger = get_logger(__name__)
 
@@ -70,14 +71,7 @@ async def prepare_stream(
     q = _validate_question(question)
 
     provider = await get_qa_streaming_provider(db)
-    if not provider.available:
-        raise AppError(
-            ErrorCode.INTERNAL_ERROR,
-            "질문 기능을 사용하려면 앱 설정에서 요약 모델을 연결해 주세요.",
-            status_code=501,
-        )
-    if provider_is_external(provider):
-        ensure_external_consent(user, doc)
+    require_available_provider(provider, user, doc)
 
     from sqlalchemy import func
 

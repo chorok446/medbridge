@@ -4,7 +4,6 @@ from app.models.extraction import (
     DocumentLine,
     DocumentPage,
     DocumentTable,
-    DocumentWord,
 )
 from app.models.ocr import OcrRun
 from app.models.qa import QaClaim, QaMessage, QaThread
@@ -19,7 +18,6 @@ __all__ = [
     "DocumentPage",
     "DocumentBlock",
     "DocumentLine",
-    "DocumentWord",
     "DocumentTable",
     "OcrRun",
     "DocumentChunk",

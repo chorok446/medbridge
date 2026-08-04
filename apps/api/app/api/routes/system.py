@@ -1,5 +1,6 @@
 """업데이트 준비·오류 보고 데이터 — Tauri 셸 전용 표면 (사용자 GUI에 원문 비노출)."""
 
+import asyncio
 import platform
 from typing import Any
 
@@ -12,7 +13,7 @@ from app.core.logging import get_logger
 from app.core.paths import get_path_provider
 from app.db.session import get_db
 from app.models.document import Document, DocumentJob
-from app.schemas.common import CamelModel, Envelope
+from app.schemas.common import CamelModel, Envelope, utc_isoformat
 from app.services.system import runtime
 from app.utils.responses import wrap
 
@@ -30,7 +31,9 @@ async def prepare_update() -> dict:
     """업데이트 직전 호출: 새 작업 차단 → 진행 중 요청·작업 완전 종료 대기 → checkpoint+백업."""
     runtime.set_updating(True)
     await runtime.wait_for_quiescence()
-    backup = runtime.checkpoint_and_backup()
+    # 수 GB DB의 checkpoint+복사를 루프 위에서 돌리면 그동안 조회·스트림 heartbeat까지
+    # 전부 멈춘다 — 준비 구간에도 새 작업만 막고 서비스는 계속돼야 한다.
+    backup = await asyncio.to_thread(runtime.checkpoint_and_backup)
     return wrap(PrepareUpdateOut(ready=True, backup_file=backup))
 
 
@@ -68,7 +71,7 @@ async def error_report(db: AsyncSession = Depends(get_db)) -> dict:
             # 이게 없으면 보고서만으로는 SUMMARY_INVALID_RESPONSE의 7가지 원인을
             # 하나도 구분할 수 없다(로그 꼬리 200줄을 벗어나면 단서가 사라진다).
             "failureReason": row[1],
-            "occurredAt": row[2].isoformat() if row[2] else None,
+            "occurredAt": utc_isoformat(row[2]) if row[2] else None,
         }
         for row in (
             await db.execute(

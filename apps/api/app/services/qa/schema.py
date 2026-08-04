@@ -92,14 +92,6 @@ def classify_claim_event(
     ), None
 
 
-def verify_claim_event(
-    event: dict, lookup: dict[str, QaChunkRef], *, claim_index: int
-) -> VerifiedClaim | None:
-    """스트리밍 claim 이벤트 하나를 검증한다. 지원(supported)일 때만 반환, 아니면 None."""
-    vc, _reason = classify_claim_event(event, lookup, claim_index=claim_index)
-    return vc  # unsupported → 스트림으로 내보내지 않는다
-
-
 def _valid_ids(raw_ids, lookup: dict[str, QaChunkRef]) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []

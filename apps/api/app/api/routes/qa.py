@@ -15,7 +15,7 @@ from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.qa import QaClaim, QaMessage, QaThread
 from app.models.user import User
-from app.schemas.common import CamelModel, Envelope
+from app.schemas.common import CamelModel, Envelope, utc_isoformat
 from app.services.documents.service import get_owned_document
 from app.services.qa import service as qa_service
 from app.services.qa import stream_protocol as sp
@@ -86,8 +86,8 @@ def _thread_out(t: QaThread) -> ThreadOut:
         id=t.id,
         title=t.title,
         archived=t.archived_at is not None,
-        created_at=t.created_at.isoformat(),
-        updated_at=t.updated_at.isoformat(),
+        created_at=utc_isoformat(t.created_at),
+        updated_at=utc_isoformat(t.updated_at),
     )
 
 
@@ -266,25 +266,13 @@ async def stream_message(
     start_content_rev = doc.content_revision
     start_chunk_rev = doc.chunk_revision
 
-    async def _gen():
-        total = 0
-        async for event in qa_stream.run_stream(
-            document_id, thread_id, aid, user_content, request_id,
-            start_content_rev, start_chunk_rev, request,
-            learner_level=learner_level,
-        ):
-            chunk = sp.encode_event(event)
-            if len(chunk) > sp.MAX_EVENT_BYTES:
-                continue  # 개별 이벤트가 상한 초과 → 건너뛴다(폭주 방지)
-            total += len(chunk)
-            if total > sp.MAX_STREAM_BYTES:
-                # 총 스트림 상한 초과 → 에러로 마무리(run_stream finally가 메시지를 terminal 확정)
-                yield sp.encode_event(sp.error_event("QA_STREAM_TOO_LARGE", "답변이 너무 깁니다."))
-                return
-            yield chunk
-
+    events = qa_stream.run_stream(
+        document_id, thread_id, aid, user_content, request_id,
+        start_content_rev, start_chunk_rev, request,
+        learner_level=learner_level,
+    )
     return StreamingResponse(
-        _gen(),
+        sp.bounded(events),
         media_type=sp.CONTENT_TYPE,
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

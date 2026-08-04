@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 import type { Rect } from "@/types/extraction";
 
 /**
@@ -58,17 +59,44 @@ export function PdfViewer({
   const [userRotate, setUserRotate] = useState<0 | 90 | 180 | 270>(0);
   const [rendered, setRendered] = useState<RenderedPage | null>(null);
   const [error, setError] = useState(false);
+  const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
 
+  // 문서 로드는 fileUrl에만 묶는다 — 페이지·배율·회전 변경마다 수백 MB짜리 문서를
+  // 다시 열면 이전 문서가 해제되지 않아 웹뷰 메모리가 페이지 넘김마다 누적된다.
   useEffect(() => {
     let cancelled = false;
-    async function render() {
+    let task: PDFDocumentLoadingTask | null = null;
+    async function load() {
       try {
         const pdfjs = await import("pdfjs-dist");
         pdfjs.GlobalWorkerOptions.workerSrc = new URL(
           "pdfjs-dist/build/pdf.worker.min.mjs",
           import.meta.url,
         ).toString();
-        const doc = await pdfjs.getDocument({ url: fileUrl }).promise;
+        if (cancelled) return;
+        task = pdfjs.getDocument({ url: fileUrl });
+        const d = await task.promise;
+        if (!cancelled) setDoc(d);
+      } catch {
+        if (!cancelled) setError(true);
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+      setDoc(null);
+      // 진행 중 로드 중단 + 문서·워커 해제까지 한 번에 담당한다.
+      void task?.destroy().catch(() => undefined);
+    };
+  }, [fileUrl]);
+
+  useEffect(() => {
+    if (!doc) return;
+    let cancelled = false;
+    let renderTask: RenderTask | null = null;
+    async function render() {
+      try {
+        if (!doc) return;
         const pdfPage = await doc.getPage(page);
         // 기본 회전(페이지 자체 회전) + 사용자 추가 회전
         const viewport = pdfPage.getViewport({
@@ -82,7 +110,8 @@ export function PdfViewer({
         if (!ctx) return;
         canvas.width = viewport.width;
         canvas.height = viewport.height;
-        await pdfPage.render({ canvas, canvasContext: ctx, viewport }).promise;
+        renderTask = pdfPage.render({ canvas, canvasContext: ctx, viewport });
+        await renderTask.promise;
         if (!cancelled) {
           setRendered({
             width: viewport.width,
@@ -99,8 +128,10 @@ export function PdfViewer({
     void render();
     return () => {
       cancelled = true;
+      // 같은 캔버스에 렌더가 겹치면 pdf.js가 예외를 던진다 — 이전 렌더를 명시적으로 끊는다.
+      renderTask?.cancel();
     };
-  }, [fileUrl, page, scale, userRotate]);
+  }, [doc, page, scale, userRotate]);
 
   const toScreen = (rect: Rect): Rect | null => {
     if (!rendered) return null;

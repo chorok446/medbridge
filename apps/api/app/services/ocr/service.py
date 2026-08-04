@@ -22,7 +22,7 @@ from app.models.enums import (
     OcrRunStatus,
     ProcessingStatus,
 )
-from app.models.extraction import DocumentBlock, DocumentLine, DocumentPage, DocumentWord
+from app.models.extraction import DocumentBlock, DocumentLine, DocumentPage
 from app.models.ocr import OcrRun
 from app.services.documents.state_machine import transition
 from app.services.extraction.geometry import overlap_ratio
@@ -78,13 +78,7 @@ async def start_ocr(
     from app.services.system import runtime
     from app.services.tasks.runner import get_task_runner
 
-    if runtime.is_updating():
-        raise AppError(
-            ErrorCode.INTERNAL_ERROR,
-            "업데이트를 준비하는 중입니다. 잠시 후 다시 시도해 주세요.",
-            status_code=503,
-            retryable=True,
-        )
+    runtime.reject_if_updating()
     if not engine().available:
         raise AppError(
             ErrorCode.INTERNAL_ERROR,
@@ -147,17 +141,9 @@ async def cancel_ocr(db: AsyncSession, doc: Document) -> Document:
 
 
 async def _latest_ocr_job(db: AsyncSession, document_id: uuid.UUID) -> DocumentJob | None:
-    return (
-        await db.execute(
-            select(DocumentJob)
-            .where(
-                DocumentJob.document_id == document_id,
-                DocumentJob.job_type == JobType.OCR_DOCUMENT,
-            )
-            .order_by(DocumentJob.created_at.desc())
-            .limit(1)
-        )
-    ).scalars().first()
+    from app.services.tasks.jobs import latest_job
+
+    return await latest_job(db, document_id, JobType.OCR_DOCUMENT)
 
 
 def classify_result(result: OcrResult) -> tuple[OcrRunStatus, float, float]:
@@ -192,26 +178,13 @@ async def _digital_text_bboxes(
 
 async def _delete_ocr_rows(db: AsyncSession, page_id: uuid.UUID) -> None:
     """OCR 출처 행만 제거 — 디지털 결과는 보존한다."""
-    ocr_block_ids = [
-        row[0]
-        for row in (
-            await db.execute(
-                select(DocumentBlock.id).where(DocumentBlock.page_id == page_id)
-            )
-        ).all()
-    ]
     # 블록 metadata로 필터 (JSON 조회는 파이썬에서)
     blocks = (
-        await db.execute(select(DocumentBlock).where(DocumentBlock.id.in_(ocr_block_ids)))
+        await db.execute(select(DocumentBlock).where(DocumentBlock.page_id == page_id))
     ).scalars()
     ocr_ids = [b.id for b in blocks if (b.metadata_json or {}).get("source") == "ocr"]
     if ocr_ids:
         await db.execute(delete(DocumentBlock).where(DocumentBlock.id.in_(ocr_ids)))
-    await db.execute(
-        delete(DocumentWord).where(
-            DocumentWord.page_id == page_id, DocumentWord.source_method == "ocr"
-        )
-    )
 
 
 async def _digital_normalized_text(db: AsyncSession, page_id: uuid.UUID) -> str:
@@ -270,20 +243,16 @@ async def apply_ocr_result(
         )
     ]
 
-    max_order = (
+    max_order, max_block_index = (
         await db.execute(
-            select(func.max(DocumentBlock.reading_order)).where(
-                DocumentBlock.page_id == page.id
-            )
+            select(
+                func.max(DocumentBlock.reading_order),
+                func.max(DocumentBlock.block_index),
+            ).where(DocumentBlock.page_id == page.id)
         )
-    ).scalar_one_or_none() or 0
-    max_block_index = (
-        await db.execute(
-            select(func.max(DocumentBlock.block_index)).where(
-                DocumentBlock.page_id == page.id
-            )
-        )
-    ).scalar_one_or_none() or 0
+    ).one()
+    max_order = max_order or 0
+    max_block_index = max_block_index or 0
 
     # TSV 계층으로 블록·줄 재구성
     by_block: dict[int, list] = {}
@@ -292,7 +261,6 @@ async def apply_ocr_result(
 
     block_rows: list[DocumentBlock] = []
     line_rows: list[DocumentLine] = []
-    word_rows: list[DocumentWord] = []
     order = max_order
     for bi, block_words in sorted(by_block.items()):
         order += 1
@@ -342,42 +310,16 @@ async def apply_ocr_result(
                     metadata_json={"source": "ocr", "paragraph_index": pi},
                 )
             )
-            word_rows.extend(
-                DocumentWord(
-                    page_id=page.id,
-                    block_id=block_id,
-                    line_id=line_id,
-                    word_index=w.word_index,
-                    x0=w.bbox[0],
-                    y0=w.bbox[1],
-                    x1=w.bbox[2],
-                    y1=w.bbox[3],
-                    text=w.text,
-                    normalized_text=normalize_text(w.text),
-                    confidence=w.confidence,
-                    source_method="ocr",
-                    metadata_json={},
-                )
-                for w in ws
-            )
 
     db.add_all(block_rows)
     await db.flush()
     db.add_all(line_rows)
     await db.flush()
-    db.add_all(word_rows)
 
     status, low_ratio, median = classify_result(result)
     ocr_text = normalize_text("\n".join(b.text for b in block_rows))
     # 재실행 누적 방지: 항상 디지털 기준에서 다시 조립한다
     digital_text = await _digital_normalized_text(db, page.id)
-    digital_word_count = (
-        await db.execute(
-            select(func.count())
-            .select_from(DocumentWord)
-            .where(DocumentWord.page_id == page.id, DocumentWord.source_method == "digital")
-        )
-    ).scalar_one()
     had_digital = bool(digital_text.strip())
     if ocr_text and had_digital:
         page.normalized_text = f"{digital_text}\n\n{ocr_text}"
@@ -390,7 +332,9 @@ async def apply_ocr_result(
     page.requires_ocr = False
     page.ocr_status = status.value
     page.ocr_mean_confidence = result.mean_confidence
-    page.word_count = digital_word_count + len(word_rows)
+    # 디지털 기준선은 추출 시점 값 그대로 두고 OCR 몫만 더한다. word_count는 재실행
+    # 때마다 덮이므로 여기서 기준선으로 쓸 수 없다.
+    page.word_count = page.digital_word_count + len(kept)
 
     run.status = status
     run.mean_confidence = result.mean_confidence

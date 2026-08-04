@@ -1,26 +1,18 @@
-"""계층형 요약 파이프라인 (순수 로직, DB 없음).
+"""계층형 요약 파이프라인의 공용 순수 로직 (DB 없음).
 
-그룹 생성 → map 요약 → reduce 구조화 → 출처 검증 → 수치·대상 결정론적 추출.
-저장과 revision 게이트는 서비스 계층이 담당한다. 이 모듈은 chunk 스냅샷만 받는다.
-
-대형 문서는 체크포인트가 필요해 `app.services.tasks.summary_job`의 실행기가 map/reduce를
-단계별로 저장하며 돌린다. 그 경로도 여기의 `build_chunk_lookup`·`build_chunk_inputs`·
-`finalize_artifacts`를 그대로 써서 출처 검증·수치 추출 규칙이 갈라지지 않게 한다.
+실행은 `app.services.tasks.summary_job`의 체크포인트 실행기가 map/reduce를 단계별로
+저장하며 담당하고, 이 모듈은 그 경로가 쓰는 `build_chunk_lookup`·`build_chunk_inputs`·
+`finalize_artifacts`(출처 검증·수치 추출 규칙)만 제공한다. 저장과 revision 게이트는
+서비스 계층이 담당한다.
 """
 
 from dataclasses import dataclass
 
-from app.services.summary.grouping import build_groups
 from app.services.summary.numbers import (
     extract_number_artifacts,
     extract_population_artifacts,
 )
-from app.services.summary.provider import (
-    ChunkInput,
-    DocumentRequest,
-    GroupRequest,
-    SummaryProvider,
-)
+from app.services.summary.provider import ChunkInput
 from app.services.summary.schema import ArtifactDraft, ChunkRef, build_artifacts
 
 
@@ -85,47 +77,3 @@ def finalize_artifacts(
 
     # 최종 안전장치: 출처 없는 artifact는 절대 남기지 않는다
     return [d for d in drafts if d.source_chunk_ids and d.source_refs]
-
-
-def run_summary(
-    provider: SummaryProvider,
-    chunks: list[ChunkSnapshot],
-    *,
-    learner_level: str,
-    language: str,
-    include_sections: bool = True,
-    include_prerequisites: bool = True,
-) -> list[ArtifactDraft]:
-    """단발 실행 경로 — 체크포인트 없이 map 전체 + reduce 1회.
-
-    그룹 수가 REDUCE_FAN_IN 이하인 작은 문서와 결정론적 공급자 테스트에서 쓴다. 대형
-    문서는 summary_job의 체크포인트 실행기가 처리한다.
-    """
-    lookup = build_chunk_lookup(chunks)
-    groups = build_groups(build_chunk_inputs(chunks))
-
-    # map: 그룹별 요약. 원본 chunk id를 유지한다.
-    group_summaries = [
-        provider.summarize_group(
-            GroupRequest(
-                group_id=g.group_id,
-                section_title=g.section_title,
-                chunks=g.chunks,
-                learner_level=learner_level,
-                language=language,
-            )
-        )
-        for g in groups
-    ]
-
-    # reduce: 문서 전체 구조화. chunk id 연결이 최종 결과까지 이어진다.
-    structured = provider.summarize_document(
-        DocumentRequest(
-            group_summaries=group_summaries,
-            learner_level=learner_level,
-            language=language,
-            include_sections=include_sections,
-            include_prerequisites=include_prerequisites,
-        )
-    )
-    return finalize_artifacts(structured, lookup, learner_level=learner_level)

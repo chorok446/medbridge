@@ -1,11 +1,12 @@
 """Q&A 스트리밍 공급자·프로토콜 단위 테스트 (네트워크 없이)."""
 
+import asyncio
 import json
 
 from app.services.qa import stream_protocol as sp
 from app.services.qa.context import QaChunkRef
 from app.services.qa.provider import QaContextChunk, QaRequest
-from app.services.qa.schema import verify_claim_event
+from app.services.qa.schema import classify_claim_event
 from app.services.qa.streaming import (
     DeterministicStreamingQaProvider,
     OpenAICompatibleStreamingQaProvider,
@@ -37,6 +38,46 @@ class TestProtocol:
         assert raw.count(b"\n") == 1
         parsed = json.loads(raw.decode("utf-8"))
         assert parsed["text"] == "줄1\n줄2"
+
+
+def _drain(events: list[dict]) -> list[dict]:
+    async def _run() -> list[dict]:
+        async def _gen():
+            for e in events:
+                yield e
+
+        return [
+            json.loads(chunk.decode("utf-8"))
+            async for chunk in sp.bounded(_gen())
+        ]
+
+    return asyncio.run(_run())
+
+
+class TestBounded:
+    def test_oversized_terminal_event_is_still_forwarded(self):
+        # 출처가 많은 completed 한 줄이 MAX_EVENT_BYTES를 넘어도 버리면 안 된다 —
+        # 버리면 스트림이 terminal 없이 닫혀 완료된 답변이 연결 끊김으로 표시된다.
+        huge = sp.completed({"content": "가" * sp.MAX_EVENT_BYTES})
+        assert len(sp.encode_event(huge)) > sp.MAX_EVENT_BYTES
+        out = _drain([sp.phase("answering"), huge])
+        assert [e["type"] for e in out] == ["phase", "completed"]
+
+    def test_oversized_non_terminal_event_is_dropped(self):
+        huge_claim = sp.claim_event(1, 0, "가" * sp.MAX_EVENT_BYTES, [])
+        out = _drain([huge_claim, sp.completed({"content": "done"})])
+        assert [e["type"] for e in out] == ["completed"]
+
+    def test_stream_total_cap_finishes_with_error_event(self):
+        # 개별 이벤트는 상한 이하("가"는 UTF-8 3바이트), 총합만 MAX_STREAM_BYTES를 넘긴다.
+        big = "가" * (sp.MAX_EVENT_BYTES // 6)
+        claim = sp.claim_event(0, 0, big, [])
+        assert len(sp.encode_event(claim)) <= sp.MAX_EVENT_BYTES
+        count = sp.MAX_STREAM_BYTES // len(sp.encode_event(claim)) + 2
+        claims = [sp.claim_event(i, i, big, []) for i in range(count)]
+        out = _drain(claims + [sp.completed({"content": "done"})])
+        assert out[-1]["type"] == "error"
+        assert out[-1]["code"] == "QA_STREAM_TOO_LARGE"
 
     def test_public_source_ref_drops_internal(self):
         ref = sp.public_source_ref(
@@ -87,24 +128,26 @@ class TestClaimVerification:
 
     def test_grounded_claim_supported(self):
         lookup = self._lookup("심장은 혈액을 온몸으로 보낸다")
-        vc = verify_claim_event(
+        vc, reason = classify_claim_event(
             {"text": "심장은 혈액을 보낸다", "sourceChunkIds": ["c1"]}, lookup, claim_index=0
         )
         assert vc is not None
+        assert reason is None
 
     def test_negation_flip_not_supported(self):
         # 원문은 긍정("보낸다")인데 claim이 부정("보내지 않는다")으로 뒤집힘 → 미검증
         lookup = self._lookup("심장은 혈액을 온몸으로 보낸다")
-        vc = verify_claim_event(
+        vc, reason = classify_claim_event(
             {"text": "심장은 혈액을 보내지 않는다", "sourceChunkIds": ["c1"]}, lookup, claim_index=0
         )
         assert vc is None
+        assert reason is not None
 
     def test_negation_allowed_when_source_also_negates(self):
         # 원문에도 부정이 있으면 부정 claim 허용
         lookup = self._lookup("이 약은 통증을 줄이지 않는다")
         event = {"text": "이 약은 통증을 줄이지 않는다", "sourceChunkIds": ["c1"]}
-        vc = verify_claim_event(event, lookup, claim_index=0)
+        vc, _reason = classify_claim_event(event, lookup, claim_index=0)
         assert vc is not None
 
 

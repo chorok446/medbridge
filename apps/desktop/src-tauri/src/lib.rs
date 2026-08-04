@@ -219,21 +219,16 @@ fn sidecar_status(state: tauri::State<SidecarState>) -> &'static str {
 
 /// 오류 보고서 zip 생성 — 저장 위치는 사용자가 대화상자로 선택한다.
 /// PDF 원문·토큰·DB 전체는 포함하지 않는다 (sidecar가 정제한 데이터만 사용).
+/// async 커맨드로 워커에서 돌린다 — 동기 커맨드는 메인 스레드에서 실행돼
+/// 네트워크 대기(최대 10초) 동안 창 전체(입력·렌더링)가 얼어붙는다.
 #[tauri::command]
-fn save_error_report(app: tauri::AppHandle, state: tauri::State<SidecarState>) -> Result<bool, String> {
+async fn save_error_report(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SidecarState>,
+) -> Result<bool, String> {
     use tauri_plugin_dialog::DialogExt;
 
-    let report_body = fetch_error_report(&state).unwrap_or_else(|e| {
-        // sidecar가 죽어 있어도 최소 정보는 저장한다
-        format!("{{\"error\":\"sidecar unavailable\",\"detail\":\"{e}\"}}")
-    });
-    let meta = serde_json::json!({
-        "appVersion": app.package_info().version.to_string(),
-        "os": std::env::consts::OS,
-        "arch": std::env::consts::ARCH,
-    })
-    .to_string();
-
+    // 저장 위치부터 고른다 — 취소하면 네트워크 대기를 아예 지불하지 않는다.
     let picked = app
         .dialog()
         .file()
@@ -244,26 +239,44 @@ fn save_error_report(app: tauri::AppHandle, state: tauri::State<SidecarState>) -
     };
     let path = path.into_path().map_err(|e| e.to_string())?;
 
-    let file = std::fs::File::create(&path).map_err(|e| e.to_string())?;
-    let mut z = zip::ZipWriter::new(file);
-    let opts: zip::write::SimpleFileOptions = Default::default();
-    z.start_file("report.json", opts).map_err(|e| e.to_string())?;
-    z.write_all(report_body.as_bytes()).map_err(|e| e.to_string())?;
-    z.start_file("app.json", opts).map_err(|e| e.to_string())?;
-    z.write_all(meta.as_bytes()).map_err(|e| e.to_string())?;
-    z.finish().map_err(|e| e.to_string())?;
-    Ok(true)
+    let startup_failed = matches!(*state.startup.lock().unwrap(), Startup::Failed);
+    let port = state.port;
+    let token = state.token.clone();
+    let meta = serde_json::json!({
+        "appVersion": app.package_info().version.to_string(),
+        "os": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+    })
+    .to_string();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let report_body = fetch_error_report(startup_failed, port, &token).unwrap_or_else(|e| {
+            // sidecar가 죽어 있어도 최소 정보는 저장한다 (오류 문자열은 JSON 이스케이프)
+            serde_json::json!({"error": "sidecar unavailable", "detail": e}).to_string()
+        });
+        let file = std::fs::File::create(&path).map_err(|e| e.to_string())?;
+        let mut z = zip::ZipWriter::new(file);
+        let opts: zip::write::SimpleFileOptions = Default::default();
+        z.start_file("report.json", opts).map_err(|e| e.to_string())?;
+        z.write_all(report_body.as_bytes()).map_err(|e| e.to_string())?;
+        z.start_file("app.json", opts).map_err(|e| e.to_string())?;
+        z.write_all(meta.as_bytes()).map_err(|e| e.to_string())?;
+        z.finish().map_err(|e| e.to_string())?;
+        Ok(true)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
-fn fetch_error_report(state: &SidecarState) -> Result<String, String> {
+fn fetch_error_report(startup_failed: bool, port: u16, token: &str) -> Result<String, String> {
     // 시작 자체가 실패한 상태에서는 원인이 이미 명확하므로, 원시 소켓 오류 대신
     // 사람이 읽을 수 있는 안내를 우선 반환한다 (죽은 sidecar에 연결 시도하지 않음).
-    if matches!(*state.startup.lock().unwrap(), Startup::Failed) {
+    if startup_failed {
         return Err("sidecar를 시작하지 못해 오류 정보를 가져올 수 없습니다.".into());
     }
-    let url = format!("{}/api/system/error-report", sidecar_base_url(state.port));
+    let url = format!("{}/api/system/error-report", sidecar_base_url(port));
     ureq::get(&url)
-        .set("X-MedBridge-Token", &state.token)
+        .set("X-MedBridge-Token", token)
         .timeout(Duration::from_secs(10))
         .call()
         .map_err(|e| e.to_string())?
@@ -466,8 +479,12 @@ pub fn run() {
                 let handle = app.handle().clone();
                 std::thread::spawn(move || {
                     let state = handle.state::<SidecarState>();
+                    // 마이그레이션 적용 기동은 수 GB DB의 백업 복사 + VACUUM을 포함해
+                    // 느린 디스크에서 수 분이 걸릴 수 있다 — 120초로 자르면 그 기기는
+                    // 업데이트 직후 매번 '시작 실패'가 뜨고 마이그레이션이 영영 끝나지
+                    // 않는다. 죽은 sidecar는 try_wait로 즉시 감지되므로 넉넉히 잡는다.
                     let result =
-                        wait_for_sidecar(port, &state.child, Duration::from_secs(120));
+                        wait_for_sidecar(port, &state.child, Duration::from_secs(600));
                     match result {
                         Ok(()) => {
                             // 포트만 기록한다 — 토큰은 절대 로그에 남기지 않는다.
