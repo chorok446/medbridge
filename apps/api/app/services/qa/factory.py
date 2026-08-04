@@ -15,11 +15,19 @@ from app.services.qa.provider import (
     build_qa_provider,
 )
 from app.services.summary import secrets
-from app.services.summary.factory import ResolvedProviderConfig, load_settings_row
+from app.services.summary.factory import (
+    DuplicateSummarySettingsError,
+    ResolvedProviderConfig,
+    duplicate_settings_error,
+    load_settings_row,
+)
 
 
 async def _resolved_config(session: AsyncSession) -> ResolvedProviderConfig | None:
-    row = await load_settings_row(session)
+    try:
+        row = await load_settings_row(session)
+    except DuplicateSummarySettingsError as exc:
+        raise duplicate_settings_error() from exc
     if row is None or not row.enabled:
         return None
     return ResolvedProviderConfig(

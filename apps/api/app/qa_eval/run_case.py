@@ -99,6 +99,10 @@ async def _set_provider(factory, *, provider_mode: str, model: str | None) -> No
         rows = (await s.execute(select(SummarySettings))).scalars().all()
         for row in rows:
             await s.delete(row)
+        # 지우기를 먼저 내보낸다. 설정 행은 고정 id(SETTINGS_SINGLETON_ID)를 쓰므로,
+        # 같은 flush에 삭제와 삽입이 함께 들어가면 SQLAlchemy가 INSERT를 먼저 보내
+        # PK 충돌이 난다.
+        await s.flush()
         if provider_mode == "deterministic":
             s.add(SummarySettings(enabled=True, provider_type="deterministic"))
         else:  # local Ollama

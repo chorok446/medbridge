@@ -70,12 +70,21 @@ class SummaryRun(Base):
     )
 
 
+# 설정 행의 고정 id. "단일 행"을 주석이 아니라 PK로 강제한다 — 임의 UUID를 쓰면
+# 설정 저장과 로컬 AI 활성화가 각각 'SELECT → 없으면 INSERT'를 하다 겹칠 때 행이 조용히
+# 2개가 되고, 그 순간부터 요약·질문·설정이 전부 500이 된다. 같은 id면 두 번째 INSERT가
+# PK 위반으로 즉시 실패하므로 중복이 만들어지지 않는다.
+SETTINGS_SINGLETON_ID = uuid.UUID("00000000-0000-0000-0000-00005e771495")
+
+
 class SummarySettings(Base):
     """요약 모델 설정 — 단일 행. API 키는 여기 저장하지 않고 OS keyring에 둔다."""
 
     __tablename__ = "summary_settings"
 
-    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(), primary_key=True, default=lambda: SETTINGS_SINGLETON_ID
+    )
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     provider_type: Mapped[str] = mapped_column(String(30), default="disabled")
     endpoint: Mapped[str | None] = mapped_column(String(500), nullable=True)

@@ -5,6 +5,7 @@
 
 import json
 import sqlite3
+import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -489,16 +490,20 @@ class TestActivate:
     async def test_duplicate_settings_are_detected_without_overwriting(
         self, monkeypatch
     ):
+        # id를 명시해 싱글턴 PK가 생기기 **전에** 중복이 굳은 설치본을 재현한다.
+        # 이제 기본값이 고정 id라 ORM 경로로는 중복을 만들 수 없다.
         async with get_session_factory()() as session:
             session.add_all(
                 [
                     SummarySettings(
+                        id=uuid.uuid4(),
                         enabled=False,
                         provider_type="disabled",
                         model_name="first",
                         is_local=False,
                     ),
                     SummarySettings(
+                        id=uuid.uuid4(),
                         enabled=False,
                         provider_type="openai_compatible",
                         endpoint="https://api.example.com/v1",
