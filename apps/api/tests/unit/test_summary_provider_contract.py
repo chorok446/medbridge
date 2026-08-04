@@ -237,6 +237,44 @@ class TestContextOverflow:
         assert caught.value.category == "bad_response"
         assert caught.value.reason == "map_summary_missing"
 
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "요약하려면 더 많은 컨텍스트가 필요합니다",
+            "컨텍스트가 부족해 답변할 수 없습니다",
+        ],
+    )
+    def test_asking_for_more_context_is_not_overflow(self, message):
+        """'컨텍스트가 더 필요하다'는 초과의 반대다.
+
+        영어 목록은 이 오탐을 피하려고 맨 "context"를 일부러 뺐는데(주석에 명시),
+        한국어 쪽에 단독 "컨텍스트"를 넣어 같은 오탐을 되살렸다. 초과로 오판하면
+        실행기가 그룹을 깊이 3까지 쪼개 노드 하나에 20회 넘는 호출을 태우고, 끝내
+        "메모리를 확보하라"는 실행 불가 안내가 뜬다 — 모델이 그냥 거절한 것뿐인데.
+        """
+        provider, _ = _provider(_chat_response(json.dumps({"error": message})))
+
+        with pytest.raises(SummaryNetworkError) as caught:
+            provider.summarize_group(_group_request())
+
+        assert caught.value.category != "context_overflow", caught.value.reason
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "입력이 컨텍스트 길이를 초과했습니다",
+            "최대 컨텍스트 창을 넘었습니다",
+        ],
+    )
+    def test_korean_overflow_wording_is_still_detected(self, message):
+        """한국어로 답하는 모델의 진짜 초과 표현은 계속 잡아야 한다."""
+        provider, _ = _provider(_chat_response(json.dumps({"error": message})))
+
+        with pytest.raises(SummaryNetworkError) as caught:
+            provider.summarize_group(_group_request())
+
+        assert caught.value.category == "context_overflow"
+
     def test_overflow_message_is_not_echoed_to_user(self):
         """모델이 낸 영문 원문을 사용자 메시지로 그대로 쓰지 않는다."""
         err = SummaryNetworkError("context_overflow", "map_context_overflow")
