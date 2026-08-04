@@ -40,3 +40,9 @@ apps/desktop/src-tauri/resources/ocr/
 
 # Windows 실기기 검증 테스트 PDF (재생성 가능, git 미추적)
 docs/testing/windows-test-kit/*.pdf
+
+# 로컬 에이전트 도구 설정 (개발자 머신마다 다름)
+.claude/
+
+# 임시 작업 산출물 (스모크 테스트 PDF/이미지 등, 재생성 가능)
+tmp/
