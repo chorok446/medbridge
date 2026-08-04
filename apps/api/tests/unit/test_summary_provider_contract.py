@@ -5,6 +5,7 @@ import json
 import pytest
 
 from app.services.summary.endpoint import SummaryNetworkError
+from app.services.summary.executor import _is_input_too_large
 from app.services.summary.provider import (
     ChunkInput,
     DocumentRequest,
@@ -172,6 +173,28 @@ class TestFailureIsDiagnosable:
 
         assert shape.value.reason == "reduce_group_ids_shape"
         assert unknown.value.reason == "reduce_group_ids_unknown"
+
+    def test_reduce_truncation_is_promoted_so_the_executor_can_adapt(self):
+        """reduce가 잘리면 '입력을 줄이면 풀릴 수 있는 실패'로 승격돼야 한다.
+
+        map은 더 큰 예산으로 한 번 더 부르지만 reduce는 이미 num_ctx 상한 근처라
+        그럴 수 없다. 날것의 finish_length로 올리면 실행기가 '줄여도 소용없는 실패'로
+        분류해 접기 재시도를 한 번도 하지 않고 문서 전체 요약이 첫 절단에서 죽는다.
+        """
+        provider, _ = _provider(
+            _chat_response(json.dumps({"overview": {"text": "잘림"}}), finish_reason="length")
+        )
+        request = DocumentRequest(
+            group_summaries=[GroupSummary("g0", "구역", "요약", ["c0"])],
+            learner_level="nursing_student",
+            language="ko",
+        )
+
+        with pytest.raises(SummaryNetworkError) as caught:
+            provider.summarize_document(request)
+
+        assert caught.value.reason == "reduce_finish_length"
+        assert _is_input_too_large(caught.value), "실행기가 접기 재시도를 하지 않는다"
 
 
 class TestContextOverflow:

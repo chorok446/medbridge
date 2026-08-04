@@ -650,6 +650,54 @@ class TestAdaptiveSplitOnContextOverflow:
         assert caught.value.category == "bad_response"
         assert caught.value.reason == "map_summary_too_long"
 
+    async def test_reduce_truncation_collapses_input_instead_of_dying(
+        self, client, monkeypatch
+    ):
+        """구조화 reduce가 출력 상한에 걸리면 입력을 접어 다시 시도해야 한다.
+
+        map은 잘리면 더 큰 예산으로 한 번 더 부르지만(map_finish_length로 승격),
+        reduce에는 그 단계가 없다. 그래서 날것의 finish_length가 그대로 올라오는데
+        _is_input_too_large가 이를 제외해 MAX_REDUCE_ADAPT 접기가 한 번도 발동하지
+        않고 첫 실패에서 죽는다. 재시도해도 map 노드가 전부 재사용돼 같은 reduce 호출로
+        직행하고 temperature 0라 같은 절단이 반복 — 그 문서는 영원히 요약되지 않는다.
+
+        reduce는 이미 num_ctx 상한 근처라 예산을 더 키우는 것이 답이 아니다. 남은
+        수단은 입력을 줄이는 것뿐이고, 실행기는 이미 그 경로를 갖고 있다.
+        """
+        monkeypatch.setattr(executor_mod, "REDUCE_FAN_IN", 2)
+        monkeypatch.setattr(grouping_mod, "GROUP_MAX_CHARS", 400)
+        monkeypatch.setattr(grouping_mod, "GROUP_MIN_CHARS", 400)
+        doc_id = await _upload_chunked(client, fx.single_column_korean(pages=6))
+
+        class ReduceTruncates(CountingProvider):
+            """그룹이 하나로 접히기 전까지는 출력이 잘린다.
+
+            최종 레벨은 정의상 REDUCE_FAN_IN 이하이므로, 접기가 실제로 줄여 주는
+            지점(2 → 1)을 임계값으로 잡아야 이 경로를 밟는다.
+            """
+
+            def __init__(self) -> None:
+                super().__init__()
+                self.truncations = 0
+
+            def summarize_document(self, request):
+                with self._counter_lock:
+                    self.document_calls += 1
+                if len(request.group_summaries) > 1:
+                    self.truncations += 1
+                    # 공급자가 승격한 reason. 날것의 finish_length가 여기까지 오면
+                    # 안 된다는 것은 test_summary_provider_contract가 지킨다.
+                    raise SummaryNetworkError("bad_response", "reduce_finish_length")
+                return super().summarize_document(request)
+
+        provider = ReduceTruncates()
+        run_id, job_id, rev, chash = await _make_run(doc_id, provider)
+
+        drafts = await _run_executor(doc_id, run_id, job_id, rev, chash, provider)
+
+        assert provider.truncations > 0, "절단 경로를 밟지 않았다 — 단언이 공허하다"
+        assert drafts, "reduce 절단으로 문서 요약 전체가 사라졌다"
+
     async def test_split_gives_up_instead_of_looping_forever(self, client, monkeypatch):
         """단일 청크마저 넘으면 더 쪼갤 수 없다 — 무한 분할 대신 실패해야 한다."""
         monkeypatch.setattr(grouping_mod, "GROUP_MAX_CHARS", 4000)

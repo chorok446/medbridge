@@ -696,17 +696,28 @@ class OpenAICompatibleSummaryProvider:
         )
         from app.services.summary.endpoint import SummaryNetworkError
 
-        raw = self._chat_for(
-            system,
-            user,
-            max_tokens=SUMMARY_REDUCE_MAX_TOKENS,
-            schema=_document_schema(
-                include_sections=request.include_sections,
-                include_prerequisites=request.include_prerequisites,
-            ),
-            # 외부 공급자에는 reduce max_tokens를 보내지 않는다(변경 전 계약 유지).
-            external_max_tokens=None,
-        )
+        try:
+            raw = self._chat_for(
+                system,
+                user,
+                max_tokens=SUMMARY_REDUCE_MAX_TOKENS,
+                schema=_document_schema(
+                    include_sections=request.include_sections,
+                    include_prerequisites=request.include_prerequisites,
+                ),
+                # 외부 공급자에는 reduce max_tokens를 보내지 않는다(변경 전 계약 유지).
+                external_max_tokens=None,
+            )
+        except SummaryNetworkError as exc:
+            if exc.reason != "finish_length":
+                raise
+            # map은 여기서 더 큰 예산으로 한 번 더 부르지만 reduce는 그럴 수 없다 —
+            # 프롬프트 약 2,000토큰 + 출력 4,096으로 이미 num_ctx(8192) 상한 근처라
+            # 예산을 키우면 이번엔 컨텍스트가 넘친다. 남은 수단은 입력을 줄이는 것이므로,
+            # 실행기가 그렇게 읽을 수 있는 reason으로 승격한다. 승격하지 않으면 날것의
+            # finish_length가 '줄여도 소용없는 실패'로 분류돼 접기 재시도가 한 번도
+            # 발동하지 않고 문서 전체 요약이 첫 절단에서 영구히 죽는다.
+            raise SummaryNetworkError("bad_response", "reduce_finish_length") from exc
         parsed = self._parse_json_object(raw, stage="reduce")
         # reduce에도 초과 감지가 필요하다. 없으면 잘린 응답이 예외 없이 통과해
         # artifact가 하나도 없는 '빈 요약'이 SUCCEEDED로 저장된다.

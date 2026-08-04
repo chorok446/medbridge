@@ -657,6 +657,11 @@ def _is_input_too_large(exc: Exception) -> bool:
     finish_length로 실패해 문서 전체가 매번 버려졌다). 예산을 늘려도 안 되면 남은 수단은
     입력을 줄이는 것뿐이고, 실제로 같은 문서의 다른 그룹은 분할로 통과했다.
 
+    `reduce_finish_length`도 포함한다. 구조화 reduce는 프롬프트 약 2,000토큰 + 출력
+    4,096으로 이미 num_ctx(8192) 상한 근처라 map처럼 출력 예산을 키울 수 없다 —
+    키우면 이번엔 컨텍스트가 넘친다. 절단됐을 때 남은 수단은 입력(그룹 요약 개수)을
+    줄이는 것뿐이고, 실행기는 이미 그 경로(MAX_REDUCE_ADAPT)를 갖고 있다.
+
     한 번도 재시도하지 않은 날것의 `finish_length`는 **제외한다**. 공급자가 예산을 늘려
     다시 부르는 것이 먼저이고, 그 단계를 건너뛰고 나누면 호출만 증폭된다.
     """
@@ -665,6 +670,7 @@ def _is_input_too_large(exc: Exception) -> bool:
     return exc.category == "context_overflow" or exc.reason in (
         "map_summary_too_long",
         "map_finish_length",
+        "reduce_finish_length",
     )
 
 
