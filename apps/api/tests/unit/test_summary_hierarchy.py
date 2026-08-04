@@ -45,6 +45,33 @@ class TestBoundedPacking:
         assert groups[0].section_title == "A"
         assert groups[1].section_title == "B"
 
+    def test_merged_group_does_not_claim_one_sections_title(self):
+        """여러 절을 합친 그룹에 첫 절의 제목을 붙이면 화면이 거짓말을 한다.
+
+        절마다 1,000자 안팎인 약물 자료에서 '적응증'·'금기'·'부작용'이 한 그룹으로
+        합쳐진다. 그 그룹의 요약이 구역 요약 카드가 되고 제목은 첫 청크의 '적응증'이라,
+        사용자는 금기 내용을 적응증 항목으로 읽는다.
+
+        작은 절을 합치는 것 자체는 옳다(제목마다 끊으면 호출이 폭증한다). 합쳤다는
+        사실을 제목이 숨기지 않으면 된다.
+        """
+        chunks = [
+            _chunk(0, title="적응증", chars=800),
+            _chunk(1, title="금기", chars=800),
+            _chunk(2, title="부작용", chars=800),
+        ]
+        groups = build_groups(chunks)
+
+        assert len(groups) == 1, "이 크기면 한 그룹으로 합쳐지는 게 맞다"
+        assert groups[0].section_title is None, (
+            f"합친 그룹이 한 절의 제목을 주장한다: {groups[0].section_title}"
+        )
+
+    def test_single_section_group_keeps_its_title(self):
+        chunks = [_chunk(i, title="적응증", chars=800) for i in range(3)]
+        groups = build_groups(chunks)
+        assert groups[0].section_title == "적응증"
+
     def test_never_exceeds_char_limit_when_splitting_is_possible(self):
         chunks = [_chunk(i, title="A", chars=1000) for i in range(30)]
         groups = build_groups(chunks)
