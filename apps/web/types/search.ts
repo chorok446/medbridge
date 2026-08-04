@@ -10,6 +10,8 @@ export interface ChunkStatus {
   lastRebuiltAt: string | null;
   jobStatus: string | null;
   embeddingAvailable: boolean;
+  /** 청크가 0개인 이유. 이유를 모르면 통하지 않는 안내를 반복하게 된다. */
+  failureCode: string | null;
 }
 
 export interface SearchSourceRef {

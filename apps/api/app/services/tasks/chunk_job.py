@@ -13,7 +13,7 @@ from app.core.logging import correlation_id_var, get_logger
 from app.db.session import get_session_factory
 from app.models.document import Document, DocumentJob
 from app.models.enums import JobStatus, JobType
-from app.services.search.chunking import rebuild_chunks
+from app.services.search.chunking import LowConfidenceOnlyDocument, rebuild_chunks
 
 logger = get_logger(__name__)
 
@@ -45,9 +45,27 @@ async def run_chunk_rebuild_job(document_id: uuid.UUID, correlation_id: str) -> 
         job.started_at = datetime.now(UTC)
         await session.commit()
 
-    async with factory() as session:
-        chunk_count = await rebuild_chunks(session, document_id)
-        await session.commit()
+    try:
+        async with factory() as session:
+            chunk_count = await rebuild_chunks(session, document_id)
+            await session.commit()
+    except LowConfidenceOnlyDocument as exc:
+        # 성공으로 마감하면 문서가 '준비됐지만 비어 있는' 상태로 굳고, 화면은 눌러도
+        # 소용없는 "문서 검색 준비하기"만 반복해 권하게 된다.
+        async with factory() as session:
+            job = await session.get(DocumentJob, job_id)
+            if job is not None:
+                job.status = JobStatus.FAILED
+                job.failure_code = "CHUNK_LOW_CONFIDENCE_ONLY"
+                job.failure_reason = "low_confidence_only"
+                job.completed_at = datetime.now(UTC)
+            await session.commit()
+        logger.warning(
+            "chunk_rebuild_low_confidence_only",
+            document_id=str(document_id),
+            suppressed_blocks=exc.suppressed_blocks,
+        )
+        return
 
     async with factory() as session:
         job = await session.get(DocumentJob, job_id)

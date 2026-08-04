@@ -69,6 +69,9 @@ class ChunkStatus:
     last_rebuilt_at: datetime | None
     job_status: str | None
     embedding_available: bool
+    # 청크가 0개인 이유. 이게 없으면 화면은 "글자가 없는 문서"와 "읽었지만 못 믿어서
+    # 뺀 문서"에 똑같은 안내를 하게 되고, 후자에는 그 안내가 통하지 않는다.
+    failure_code: str | None = None
 
 
 async def get_chunk_status(db: AsyncSession, doc: Document) -> ChunkStatus:
@@ -85,6 +88,7 @@ async def get_chunk_status(db: AsyncSession, doc: Document) -> ChunkStatus:
         last_rebuilt_at=job.completed_at if job and job.status == JobStatus.SUCCEEDED else None,
         job_status=job.status.value if job else None,
         embedding_available=get_embedding_provider().available,
+        failure_code=job.failure_code if job and job.status == JobStatus.FAILED else None,
     )
 
 

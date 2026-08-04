@@ -54,6 +54,7 @@ export function DocumentSearch({ documentId, onNavigate }: Props) {
   }
 
   const chunkCount = statusQuery.data?.chunkCount ?? 0;
+  const lowConfidenceOnly = statusQuery.data?.failureCode === "CHUNK_LOW_CONFIDENCE_ONLY";
   const embeddingAvailable = statusQuery.data?.embeddingAvailable ?? false;
   const results: SearchResultItem[] = searchQuery.data ?? [];
   const usedKeywordOnlyFallback = submitted?.mode === "hybrid" && !embeddingAvailable;
@@ -75,11 +76,24 @@ export function DocumentSearch({ documentId, onNavigate }: Props) {
 
       {!statusQuery.isLoading && !statusQuery.isError && chunkCount === 0 && (
         <div className="rounded bg-slate-50 px-3 py-3 text-slate-700">
-          <p>이 문서는 아직 검색 준비가 되지 않았어요.</p>
+          {lowConfidenceOnly ? (
+            /* 같은 버튼을 다시 권하면 안 된다 — 같은 코드가 같은 0개를 만든다.
+               사용자가 실제로 할 수 있는 일은 스캔 품질을 올려 다시 읽는 것뿐이다. */
+            <p>
+              글자를 읽어내긴 했지만 인식 품질이 너무 낮아 검색에 쓸 수 없었어요. 더 선명한
+              스캔본으로 다시 올리거나, 문자 인식을 다시 실행해 주세요.
+            </p>
+          ) : (
+            <p>이 문서는 아직 검색 준비가 되지 않았어요.</p>
+          )}
           <button
             type="button"
             onClick={() => rebuildMutation.mutate()}
-            disabled={rebuildMutation.isPending || isActiveJobStatus(statusQuery.data?.jobStatus)}
+            disabled={
+              rebuildMutation.isPending ||
+              isActiveJobStatus(statusQuery.data?.jobStatus) ||
+              lowConfidenceOnly
+            }
             className="mt-2 rounded bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
           >
             문서 검색 준비하기

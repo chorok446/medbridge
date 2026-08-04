@@ -29,6 +29,22 @@ from app.services.search.settings import (
 _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+|(?<=[다요]\.)\s*\n|(?<=[다요]\.)\s+")
 
 
+class LowConfidenceOnlyDocument(Exception):
+    """읽어낸 내용이 전부 저신뢰라 청크로 쓸 수 있는 게 하나도 남지 않았다.
+
+    "글자가 없는 문서"와 구분해야 하는 상태다. 전자는 사용자가 할 수 있는 게 없지만,
+    이쪽은 스캔 품질을 올려 OCR을 다시 돌리면 풀린다 — 그 차이를 화면이 말할 수 있어야
+    한다. 예외로 올리는 이유는 이 경우 기존 청크를 지워서도, 준비 완료로 마감해서도
+    안 되기 때문이다.
+    """
+
+    def __init__(self, suppressed_blocks: int) -> None:
+        super().__init__(
+            f"저신뢰로 제외된 블록 {suppressed_blocks}개 외에 청크로 쓸 내용이 없다"
+        )
+        self.suppressed_blocks = suppressed_blocks
+
+
 @dataclass
 class SourceRef:
     page_number: int
@@ -145,9 +161,20 @@ def _has_digital_text(block: DocumentBlock) -> bool:
     )
 
 
-def _select_blocks(
-    pages: list[DocumentPage], blocks: list[DocumentBlock]
-) -> list[tuple[int, DocumentBlock]]:
+@dataclass
+class _Selection:
+    """청크에 넣을 블록과, 저신뢰 때문에 뺀 블록 수.
+
+    `suppressed_low_confidence`가 필요한 이유: 결과가 0개일 때 "문서에 글자가 없다"와
+    "글자는 있는데 우리가 못 믿어서 뺐다"를 구분해야 한다. 두 경우의 사용자 대응이
+    완전히 다른데, 개수만 보면 똑같이 0이다.
+    """
+
+    blocks: list[tuple[int, DocumentBlock]]
+    suppressed_low_confidence: int
+
+
+def _select_blocks(pages: list[DocumentPage], blocks: list[DocumentBlock]) -> _Selection:
     """페이지별로 머리말·꼬리말을 제외하고, 디지털 본문이 있으면 그 페이지의 OCR
     블록은 제외한다(디지털 우선). 반환은 (page_number, block) 튜플의 읽기 순서 목록.
 
@@ -169,26 +196,40 @@ def _select_blocks(
         by_page.setdefault(page_number, []).append(b)
 
     selected: list[tuple[int, DocumentBlock]] = []
+    suppressed = 0
     for page_number, page_blocks in sorted(by_page.items()):
         has_digital = any(_has_digital_text(b) for b in page_blocks)
         for b in sorted(page_blocks, key=lambda b: b.reading_order):
             if _block_source_method(b) == "ocr" and (
                 has_digital or b.page_id in unreliable_page_ids
             ):
+                # 디지털 본문에 밀린 것은 대체재가 있으니 세지 않는다. 저신뢰로 뺀
+                # 것만 센다 — 그것만이 "내용이 있었는데 못 쓴" 경우다.
+                if not has_digital and (b.text or "").strip():
+                    suppressed += 1
                 continue
             if not (b.text or "").strip() and not b.is_table:
                 continue
             selected.append((page_number, b))
-    return selected
+    return _Selection(blocks=selected, suppressed_low_confidence=suppressed)
+
+
+@dataclass
+class ChunkPlan:
+    """청크 초안과, 저신뢰로 빠진 블록 수. 0개의 이유를 구분하려면 둘 다 필요하다."""
+
+    drafts: list[ChunkDraft]
+    suppressed_low_confidence: int
 
 
 def build_chunk_drafts(
     pages: list[DocumentPage],
     blocks: list[DocumentBlock],
     tables: list[DocumentTable] | None = None,
-) -> list[ChunkDraft]:
+) -> ChunkPlan:
     """document_id 범위의 페이지·블록으로부터 청크 초안 목록을 만든다."""
-    ordered = _select_blocks(pages, blocks)
+    selection = _select_blocks(pages, blocks)
+    ordered = selection.blocks
     tables_by_page: dict[uuid.UUID, list[DocumentTable]] = {}
     for t in tables or []:
         tables_by_page.setdefault(t.page_id, []).append(t)
@@ -257,7 +298,10 @@ def build_chunk_drafts(
         current.refs.append(ref)
 
     flush()
-    return _merge_short_adjacent(drafts)
+    return ChunkPlan(
+        drafts=_merge_short_adjacent(drafts),
+        suppressed_low_confidence=selection.suppressed_low_confidence,
+    )
 
 
 def _merge_short_adjacent(drafts: list[ChunkDraft]) -> list[ChunkDraft]:
@@ -309,16 +353,8 @@ async def rebuild_chunks(session: AsyncSession, document_id: uuid.UUID) -> int:
         ).scalars()
     )
 
-    drafts = build_chunk_drafts(pages, blocks, tables)
-
-    # 원자적 교체: 기존 청크 + FTS 미러를 지우고 새로 넣는다 (재실행 누적 방지).
-    await session.execute(
-        delete(DocumentChunk).where(DocumentChunk.document_id == document_id)
-    )
-    await session.execute(
-        text("DELETE FROM document_chunks_fts WHERE document_id = :doc_id"),
-        {"doc_id": str(document_id)},
-    )
+    plan = build_chunk_drafts(pages, blocks, tables)
+    drafts = plan.drafts
 
     rows: list[DocumentChunk] = []
     rows_by_hash: dict[str, DocumentChunk] = {}
@@ -354,6 +390,23 @@ async def rebuild_chunks(session: AsyncSession, document_id: uuid.UUID) -> int:
         )
         rows.append(row)
         rows_by_hash[chunk_hash] = row
+
+    # 저신뢰 필터가 내용을 전부 걷어낸 경우다. 여기서 멈추지 않으면 두 가지가 한꺼번에
+    # 망가진다 — 아래 교체가 **이미 쓸 수 있던 청크까지 지우고**, chunk_revision에 준비
+    # 완료 도장이 찍혀 문서가 '준비됐지만 아무것도 없는' 상태로 굳는다. 그 상태에서
+    # 화면은 "문서 검색 준비하기"만 반복해 권하고, 눌러도 같은 코드가 같은 0개를 만든다.
+    if not rows and plan.suppressed_low_confidence:
+        raise LowConfidenceOnlyDocument(plan.suppressed_low_confidence)
+
+    # 원자적 교체: 기존 청크 + FTS 미러를 지우고 새로 넣는다 (재실행 누적 방지).
+    # 지우는 일은 새 행이 확정된 뒤에 한다.
+    await session.execute(
+        delete(DocumentChunk).where(DocumentChunk.document_id == document_id)
+    )
+    await session.execute(
+        text("DELETE FROM document_chunks_fts WHERE document_id = :doc_id"),
+        {"doc_id": str(document_id)},
+    )
 
     session.add_all(rows)
     await session.flush()

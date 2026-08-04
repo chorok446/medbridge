@@ -7,14 +7,14 @@ from sqlalchemy import func, select
 
 from app.db.session import get_session_factory
 from app.models.document import Document, DocumentJob
-from app.models.enums import JobType, OcrRunStatus
+from app.models.enums import JobStatus, JobType, OcrRunStatus
 from app.models.extraction import DocumentBlock, DocumentPage, DocumentWord
 from app.models.ocr import OcrRun
 from app.models.search import DocumentChunk
 from app.services.extraction.ocr import OcrResult, OcrWord
 from app.services.ocr import service as ocr_service
 from app.services.ocr.settings import OCR_HIGH_QUALITY_DPI, OCR_LOW_MEMORY_DPI
-from app.services.search.chunking import rebuild_chunks
+from app.services.search.chunking import LowConfidenceOnlyDocument, rebuild_chunks
 from tests import extraction_fixtures as fx
 from tests.integration.conftest import drain_jobs
 
@@ -449,8 +449,11 @@ class TestLowConfidenceIsolation:
 
         doc_id = uuid.UUID(doc["id"])
         async with get_session_factory()() as session:
-            await rebuild_chunks(session, doc_id)
-            await session.commit()
+            # 남길 내용이 하나도 없으면 조용히 0개로 끝내지 않고 이유를 들고 멈춘다.
+            with pytest.raises(LowConfidenceOnlyDocument):
+                await rebuild_chunks(session, doc_id)
+
+        async with get_session_factory()() as session:
             texts = [
                 r[0]
                 for r in (
@@ -499,6 +502,106 @@ class TestLowConfidenceIsolation:
         assert job.failure_code == "OCR_PARTIAL_FAILURE"
         # 같은 실패 코드라도 "엔진이 죽었다"와 "읽긴 읽었는데 노이즈다"는 대응이 다르다.
         assert job.failure_reason == "unreliable_pages"
+
+    async def test_all_low_confidence_does_not_report_chunking_success(
+        self, client, monkeypatch
+    ):
+        """전 페이지가 저신뢰면 청크가 0개가 되는데, 그걸 '준비 완료'로 마감하면 안 된다.
+
+        마감해 버리면 문서는 영구히 쓸 수 없는 상태가 되고 화면은 '문서 검색 준비하기'만
+        반복해서 권한다 — 눌러도 같은 코드가 같은 0개를 만든다.
+        """
+        fake = FakeEngine(result=_low_confidence_result(["ㄱㅂㅅ", "ㅁㄴㅇ", "ㄹㅇㅋ", "ㅍㅌㅊ"]))
+        monkeypatch.setattr(ocr_service, "engine", lambda: fake)
+        doc = await upload_extracted(client, fx.blank_image_page())
+        await client.post(f"/api/documents/{doc['id']}/ocr")
+        await drain_jobs()
+
+        assert (
+            await client.post(f"/api/documents/{doc['id']}/chunks/rebuild")
+        ).status_code == 202
+        await drain_jobs()
+
+        async with get_session_factory()() as session:
+            job = (
+                await session.execute(
+                    select(DocumentJob)
+                    .where(
+                        DocumentJob.document_id == uuid.UUID(doc["id"]),
+                        DocumentJob.job_type == JobType.CHUNK_REBUILD,
+                    )
+                    .order_by(DocumentJob.created_at.desc())
+                    .limit(1)
+                )
+            ).scalars().one()
+            document = await session.get(Document, uuid.UUID(doc["id"]))
+
+        assert job.status == JobStatus.FAILED, "0개인데 성공으로 끝났다"
+        assert job.failure_code == "CHUNK_LOW_CONFIDENCE_ONLY"
+        # 준비 완료 도장을 찍으면 안 된다 — 찍히면 stale 판정도 못 하게 된다.
+        assert document.chunk_revision != document.content_revision
+
+    async def test_status_surfaces_the_reason(self, client, monkeypatch):
+        """화면이 '왜 안 되는지' 말할 수 있어야 한다 — 코드가 안 나가면 안내를 못 바꾼다."""
+        fake = FakeEngine(result=_low_confidence_result(["ㄱㅂㅅ", "ㅁㄴㅇ", "ㄹㅇㅋ", "ㅍㅌㅊ"]))
+        monkeypatch.setattr(ocr_service, "engine", lambda: fake)
+        doc = await upload_extracted(client, fx.blank_image_page())
+        await client.post(f"/api/documents/{doc['id']}/ocr")
+        await drain_jobs()
+        await client.post(f"/api/documents/{doc['id']}/chunks/rebuild")
+        await drain_jobs()
+
+        status = (
+            await client.get(f"/api/documents/{doc['id']}/chunks/status")
+        ).json()["data"]
+        assert status["chunkCount"] == 0
+        assert status["jobStatus"] == "failed"
+        assert status["failureCode"] == "CHUNK_LOW_CONFIDENCE_ONLY"
+
+    async def test_empty_rebuild_does_not_destroy_existing_chunks(
+        self, client, monkeypatch
+    ):
+        """새 결과가 빌 것을 알기 전에 기존 청크를 지우면 안 된다.
+
+        이전에 쓸 수 있던 문서가 OCR 재시도 한 번으로 통째로 비어 버린다.
+        """
+        fake = FakeEngine(result=_low_confidence_result(["ㄱㅂㅅ", "ㅁㄴㅇ", "ㄹㅇㅋ", "ㅍㅌㅊ"]))
+        monkeypatch.setattr(ocr_service, "engine", lambda: fake)
+        doc = await upload_extracted(client, fx.blank_image_page())
+        await client.post(f"/api/documents/{doc['id']}/ocr")
+        await drain_jobs()
+
+        doc_id = uuid.UUID(doc["id"])
+        async with get_session_factory()() as session:
+            session.add(
+                DocumentChunk(
+                    id=uuid.uuid4(),
+                    document_id=doc_id,
+                    chunk_index=0,
+                    section_title=None,
+                    normalized_text="이전 실행에서 만들어 둔 쓸 수 있는 청크",
+                    token_count=10,
+                    page_start=1,
+                    page_end=1,
+                    source_refs_json=[],
+                    content_hash="deadbeef",
+                )
+            )
+            await session.commit()
+
+        async with get_session_factory()() as session:
+            with pytest.raises(LowConfidenceOnlyDocument):
+                await rebuild_chunks(session, doc_id)
+
+        async with get_session_factory()() as session:
+            survived = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(DocumentChunk)
+                    .where(DocumentChunk.document_id == doc_id)
+                )
+            ).scalar_one()
+        assert survived == 1, "빈 결과를 만들면서 기존 청크를 지웠다"
 
     async def test_engine_errors_and_noise_get_different_reasons(
         self, client, monkeypatch
