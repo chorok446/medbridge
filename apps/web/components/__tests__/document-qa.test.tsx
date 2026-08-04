@@ -308,6 +308,35 @@ describe("답변 렌더", () => {
     expect(screen.queryByRole("button", { name: /근거 보기/ })).toBeNull();
   });
 
+  it("본문에 마커가 없는 주장은 출처 목록에 번호를 올리지 않는다", async () => {
+    // 모델이 claim 3개 중 첫 번째에만 마커를 다는 일은 로컬 모델에서 흔하다.
+    // 본문에는 [1]만 보이는데 목록에 1·2·3이 뜨면, 사용자는 '2'가 가리키는 문장을
+    // 답변에서 찾다가 못 찾는다 — SourceList docstring이 명시한 실패다.
+    apiMock.listThreads.mockResolvedValue([thread]);
+    apiMock.getThread.mockResolvedValue({
+      thread,
+      messages: [
+        {
+          id: "m9",
+          role: "assistant" as const,
+          content: "심장은 혈액을 보냅니다[c0].",
+          status: "completed" as const,
+          sequenceNumber: 2,
+          retrievalMode: "keyword",
+          claims: [
+            claim,
+            { ...claim, text: "마커가 없는 주장", sourceRefs: [{ ...claim.sourceRefs[0], pageNumber: 9 }] },
+          ],
+          followups: [],
+        },
+      ],
+    });
+    renderQa();
+
+    expect(await screen.findAllByRole("button", { name: /3쪽 근거 보기/ })).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: /9쪽 근거 보기/ })).toBeNull();
+  });
+
   it("인용을 누르면 그 쪽으로 이동한다", async () => {
     withAssistant("심장은 혈액을 보냅니다[c0].");
     renderQa();

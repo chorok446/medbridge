@@ -455,7 +455,16 @@ function AssistantMessage({
           bbox: r.bbox,
         })),
   );
-  const cited = hasCitations(tokenizeCitations(message.content, sources.length));
+  const tokens = tokenizeCitations(message.content, sources.length);
+  const cited = hasCitations(tokens);
+  // 본문에 실제로 등장한 인용 번호만 출처 목록에 올린다. claims 배열 전체를 올리면
+  // 모델이 일부 주장에만 마커를 단 답변에서(로컬 모델에서 흔하다) 본문에는 [1]만
+  // 보이는데 목록에는 1·2·3이 뜬다 — 사용자는 '2'가 가리키는 문장을 답변에서 찾다가
+  // 못 찾는다. 번호 자체는 claims 자리를 그대로 써야 인용 pill과 목록이 같은 곳을
+  // 가리킨다(걸러내며 당기면 번호가 밀린다).
+  const citedIndexes = new Set(
+    tokens.flatMap((t) => (t.kind === "citation" ? [t.claimIndex] : [])),
+  );
 
   return (
     <div>
@@ -469,7 +478,7 @@ function AssistantMessage({
           />
           <SourceList
             groups={sources.flatMap((refs, i) =>
-              refs ? [{ number: i + 1, refs }] : [],
+              refs && citedIndexes.has(i) ? [{ number: i + 1, refs }] : [],
             )}
             onNavigate={(s) => onNavigate({ pageNumber: s.pageNumber, bbox: s.bbox })}
           />
