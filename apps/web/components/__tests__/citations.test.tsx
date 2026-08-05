@@ -72,7 +72,7 @@ describe("SourceList", () => {
     const onNavigate = vi.fn();
     render(<SourceList groups={groups} onNavigate={onNavigate} />);
     fireEvent.click(screen.getByRole("button", { name: /7쪽 근거 보기/ }));
-    expect(onNavigate).toHaveBeenCalledWith(PAGE7);
+    expect(onNavigate).toHaveBeenCalledWith({ ...PAGE7, bboxes: [PAGE7.bbox] });
   });
 
   it("lists every source of a claim, not just the first", () => {
@@ -96,7 +96,7 @@ describe("SourceList", () => {
 
   it("collapses sources that look identical on screen", () => {
     // 한 주장이 같은 페이지의 블록 여러 개에 근거를 두면 화면에는 같은 줄이
-    // 수십 번 반복된다 — 사용자는 어느 줄도 구분할 수 없다. 첫 출처만 남긴다.
+    // 수십 번 반복된다 — 사용자는 어느 줄도 구분할 수 없다. 한 줄로 접는다.
     const onNavigate = vi.fn();
     render(
       <SourceList
@@ -115,9 +115,18 @@ describe("SourceList", () => {
     );
     const buttons = screen.getAllByRole("button", { name: /3쪽 근거 보기/ });
     expect(buttons).toHaveLength(1);
-    // 이동은 첫 출처의 위치로 — 목록이 접혀도 갈 곳은 있어야 한다.
+    // 접혀도 근거 위치는 잃지 않는다 — 클릭하면 세 블록 모두 하이라이트되도록
+    // 모든 bbox를 실어 보낸다.
     fireEvent.click(buttons[0]);
-    expect(onNavigate).toHaveBeenCalledWith({ ...PAGE3, bbox: [0, 0, 1, 1] });
+    expect(onNavigate).toHaveBeenCalledWith({
+      ...PAGE3,
+      bbox: [0, 0, 1, 1],
+      bboxes: [
+        [0, 0, 1, 1],
+        [2, 2, 3, 3],
+        [4, 4, 5, 5],
+      ],
+    });
   });
 
   it("keeps same-page sources apart when their section titles differ", () => {
@@ -134,5 +143,22 @@ describe("SourceList", () => {
     );
     expect(screen.getAllByRole("button", { name: /3쪽 근거 보기/ })).toHaveLength(2);
     expect(screen.getByText(/호흡계/)).toBeInTheDocument();
+  });
+
+  it("gives same-page rows distinct accessible names", () => {
+    // 눈에는 절 제목으로 구분되는 두 줄이 스크린리더에는 같은 이름이면 안 된다.
+    render(
+      <SourceList
+        groups={[
+          {
+            number: 1,
+            refs: [PAGE3, { ...PAGE3, sectionTitle: "호흡계", bbox: [9, 9, 10, 10] }],
+          },
+        ]}
+        onNavigate={() => {}}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "3쪽 근거 보기 · 순환계" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "3쪽 근거 보기 · 호흡계" })).toBeInTheDocument();
   });
 });

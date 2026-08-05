@@ -35,8 +35,12 @@ VALID_ANSWER_STATUSES = (
 
 # 스트리밍(4B) 네트워크 제한
 STREAM_CONNECT_TIMEOUT_SEC = 15.0
-STREAM_IDLE_TIMEOUT_SEC = 30.0  # 청크 사이 무응답 상한
-STREAM_TOTAL_DEADLINE_SEC = 180.0  # 전체 스트림 deadline
+# idle timeout은 첫 청크 대기에도 그대로 적용된다 — 카탈로그 최대 모델(19GiB)의 콜드
+# 로드는 HDD에서 2분을 넘을 수 있다. 짧게 잡으면 "첫 질문은 더 오래 걸릴 수 있다"고
+# 안내한 바로 그 상황에서 앱이 먼저 연결을 끊는다. 대가로 죽은 스트림 감지가 늦어지는
+# 것은 로컬 우선 앱에서 감수한다.
+STREAM_IDLE_TIMEOUT_SEC = 180.0
+STREAM_TOTAL_DEADLINE_SEC = 600.0  # 전체 스트림 deadline(콜드 로드 + 생성 전체)
 STREAM_MAX_LINE_BYTES = 64 * 1024
 STREAM_MAX_TOTAL_BYTES = 8 * 1024 * 1024
 

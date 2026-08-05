@@ -43,7 +43,7 @@
 ## 보안 확인(실기기)
 
 - 화면 어디에도 localhost/11434/endpoint/bearer/JSON/NDJSON/quantization/stack trace가 없다.
-- 다운로드는 qwen3:4b/8b/14b 외 모델을 받을 수 없다(allowlist).
+- 다운로드는 qwen3:4b/8b/14b/30b-a3b 외 모델을 받을 수 없다(allowlist).
 - 연결 테스트에 문서 원문·질문·개인정보가 전송되지 않는다.
 - 앱 제거 시 Ollama·모델이 자동 삭제되지 않는다. MedBridge가 `.ollama` 폴더를 만지지 않는다.
 

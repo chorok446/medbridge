@@ -6,6 +6,8 @@ import type { Rect } from "@/types/extraction";
 export interface PdfNavigationTarget {
   pageNumber: number;
   bbox: [number, number, number, number];
+  /** 함께 강조할 근거 위치 전부(접힌 출처). 없으면 bbox 하나만 강조한다. */
+  bboxes?: [number, number, number, number][];
 }
 
 /** PDF 이동 + 하이라이트 + 강조 애니메이션 상태를 한 곳에서 관리한다.
@@ -18,10 +20,11 @@ export function usePdfNavigation() {
   const [highlights, setHighlights] = useState<Rect[]>([]);
   const [flashKey, setFlashKey] = useState(0);
 
-  /** 출처 클릭 → 해당 페이지로 이동해 bbox를 강조한다. */
+  /** 출처 클릭 → 해당 페이지로 이동해 근거 영역(들)을 강조한다. */
   function navigate(ref: PdfNavigationTarget) {
     setPage(ref.pageNumber);
-    setHighlights([{ x0: ref.bbox[0], y0: ref.bbox[1], x1: ref.bbox[2], y1: ref.bbox[3] }]);
+    const boxes = ref.bboxes ?? [ref.bbox];
+    setHighlights(boxes.map((b) => ({ x0: b[0], y0: b[1], x1: b[2], y1: b[3] })));
     setFlashKey((k) => k + 1);
   }
 

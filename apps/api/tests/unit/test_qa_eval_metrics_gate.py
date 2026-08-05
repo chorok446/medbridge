@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from app.qa_eval import report
 from app.qa_eval.evaluate import CaseResult
 from app.qa_eval.gate import (
@@ -145,33 +147,26 @@ def test_release_mode_insufficient_repeat_holds():
     assert gate.verdict == RELEASE_HOLD
 
 
-def test_14b_not_selectable_when_model_gate_fails():
-    # 안전 통과지만 모델 게이트 실패(보류 정확도 낮음) → 14b는 selectable 아님
+# 14b·30b-a3b는 게이트 규칙이 같다(gate.py의 한 분기) — 테스트도 사본 대신 한 벌로 돈다.
+@pytest.mark.parametrize("model", ["qwen3:14b", "qwen3:30b-a3b"])
+def test_high_tier_not_selectable_when_model_gate_fails(model):
+    # 안전 통과지만 모델 게이트 실패(보류 정확도 낮음) → selectable 아님
     per_case = [[_result("g", "grounded_basic", True, "insufficient_evidence")]]
-    summary = summarize("qwen3:14b", per_case)
+    summary = summarize(model, per_case)
     gate = evaluate_gate(summary)
     assert gate.safety_passed
     assert not gate.model_gate_passed
     assert gate.verdict == RELEASE_HOLD
 
 
-def test_30b_a3b_selectable_when_gates_pass():
-    # 안전·모델 게이트 모두 통과 → 14B와 같이 '선택 가능'(기본 추천은 여전히 8B).
+@pytest.mark.parametrize("model", ["qwen3:14b", "qwen3:30b-a3b"])
+def test_high_tier_selectable_when_gates_pass(model):
+    # 안전·모델 게이트 모두 통과 → '선택 가능'(기본 추천은 여전히 8B).
     per_case = [[_result("g", "grounded_basic", True, "completed")]]
-    summary = summarize("qwen3:30b-a3b", per_case)
+    summary = summarize(model, per_case)
     gate = evaluate_gate(summary)
     assert gate.model_gate_passed
     assert gate.verdict == SELECTABLE
-
-
-def test_30b_a3b_not_selectable_when_model_gate_fails():
-    # 14B와 같은 규칙 — 카탈로그에 있어도 게이트를 못 넘으면 출시 보류다.
-    per_case = [[_result("g", "grounded_basic", True, "insufficient_evidence")]]
-    summary = summarize("qwen3:30b-a3b", per_case)
-    gate = evaluate_gate(summary)
-    assert gate.safety_passed
-    assert not gate.model_gate_passed
-    assert gate.verdict == RELEASE_HOLD
 
 
 def test_report_json_has_no_leak_and_valid_shape(tmp_path):

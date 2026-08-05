@@ -21,7 +21,8 @@ import {
 import type { DocumentSummary } from "@/types/api";
 import type { QaMessage } from "@/types/qa";
 
-type NavigateRef = { pageNumber: number; bbox: [number, number, number, number] };
+type Bbox = [number, number, number, number];
+type NavigateRef = { pageNumber: number; bbox: Bbox; bboxes?: Bbox[] };
 
 const PHASE_LABEL: Record<string, string> = {
   connecting: "질문을 준비하고 있어요…",
@@ -423,7 +424,7 @@ function AssistantMessage({
   onNavigate,
 }: {
   message: QaMessage;
-  onNavigate: (ref: { pageNumber: number; bbox: [number, number, number, number] }) => void;
+  onNavigate: (ref: NavigateRef) => void;
 }) {
   const notice = statusNotice(message.status);
   // 확정 사실로 보여줄 근거 있는 주장만 출처 배지를 표시한다
@@ -471,7 +472,9 @@ function AssistantMessage({
             groups={sources.flatMap((refs, i) =>
               refs && citedIndexes.has(i) ? [{ number: i + 1, refs }] : [],
             )}
-            onNavigate={(s) => onNavigate({ pageNumber: s.pageNumber, bbox: s.bbox })}
+            onNavigate={(s) =>
+              onNavigate({ pageNumber: s.pageNumber, bbox: s.bbox, bboxes: s.bboxes })
+            }
           />
         </>
       ) : (
@@ -506,22 +509,29 @@ function SourceBadges({
   onNavigate: (ref: NavigateRef) => void;
 }) {
   // 배지에는 페이지 번호만 보인다 — 출처 목록(SourceList)과 같은 원칙으로, 화면에
-  // 똑같이 보이는 배지("3쪽" 여러 개)는 첫 출처 하나로 접는다.
-  const seenPages = new Set<number>();
-  const refs = sources.filter((r) => {
-    if (seenPages.has(r.pageNumber)) return false;
-    seenPages.add(r.pageNumber);
-    return true;
-  });
+  // 똑같이 보이는 배지("3쪽" 여러 개)는 하나로 접는다. 다만 접힌 출처들의 bbox는
+  // 전부 실어, 클릭 한 번에 그 페이지의 근거 영역 전부가 하이라이트되게 한다.
+  const byPage = new Map<number, Required<NavigateRef>>();
+  for (const r of sources) {
+    const kept = byPage.get(r.pageNumber);
+    if (kept) {
+      if (!kept.bboxes.some((b) => b.every((v, i) => v === r.bbox[i]))) {
+        kept.bboxes.push(r.bbox);
+      }
+      continue;
+    }
+    byPage.set(r.pageNumber, { pageNumber: r.pageNumber, bbox: r.bbox, bboxes: [r.bbox] });
+  }
+  const refs = [...byPage.values()];
   if (refs.length === 0) return null;
   return (
     <div className="mt-1 flex flex-wrap gap-1">
       <span className="text-xs text-slate-500">출처:</span>
       {refs.map((r) => (
         <button
-          key={`${r.pageNumber}-${r.blockId}`}
+          key={r.pageNumber}
           type="button"
-          onClick={() => onNavigate({ pageNumber: r.pageNumber, bbox: r.bbox })}
+          onClick={() => onNavigate(r)}
           className="rounded bg-blue-50 px-2 py-0.5 text-xs text-blue-700 hover:bg-blue-100"
         >
           {r.pageNumber}쪽

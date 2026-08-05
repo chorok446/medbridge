@@ -59,6 +59,17 @@ class TestModels:
         assert by_model["qwen3:14b"]["ramAdvice"] == "selectable"
         assert by_model["qwen3:30b-a3b"]["ramAdvice"] == "selectable"
 
+    async def test_nominal_32gb_machine_is_still_selectable(self, client, monkeypatch):
+        # 공칭 32GB 기기의 OS 보고값은 예약 메모리 때문에 32GiB에 못 미친다(~31.5GiB).
+        # 문서가 "32GB 이상이면 선택 가능"이라 안내하는 바로 그 기기를 경고로 내몰면 안 된다.
+        monkeypatch.setattr(ollama_client, "list_models", lambda: [])
+        monkeypatch.setattr(system, "total_ram_bytes", lambda: int(31.5 * 1024**3))
+        monkeypatch.setattr(system, "free_disk_bytes", lambda path="/": 200 * 1024**3)
+        res = await client.get("/api/local-ai/models")
+        by_model = {m["model"]: m for m in res.json()["data"]["models"]}
+        assert by_model["qwen3:14b"]["ramAdvice"] == "selectable"
+        assert by_model["qwen3:30b-a3b"]["ramAdvice"] == "selectable"
+
     async def test_30b_a3b_warns_below_32gb_ram(self, client, monkeypatch):
         # 가중치만 19GB라 32GB 미만에서는 실행이 어렵다 — 경고로 안내한다.
         monkeypatch.setattr(ollama_client, "list_models", lambda: [])

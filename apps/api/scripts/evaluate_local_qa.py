@@ -10,7 +10,7 @@ deterministic 모드만 쓴다(모델 다운로드 없음).
   uv run python scripts/evaluate_local_qa.py --model qwen3:8b --repeat 3 --fail-on-gate
   uv run python scripts/evaluate_local_qa.py --provider deterministic --category grounded_basic
 
---model은 allowlist(qwen3:4b/8b/14b)만 허용한다. Ollama·모델 미설치면 명확히 skip한다
+--model은 allowlist(qwen3:4b/8b/14b/30b-a3b)만 허용한다. Ollama·모델 미설치면 명확히 skip한다
 (자동 다운로드하지 않는다). 임시 DB·파일은 실행 후 정리한다.
 """
 

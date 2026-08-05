@@ -466,7 +466,13 @@ describe("리뷰 회귀", () => {
     });
     renderQa();
     await screen.findByText("같은 쪽 근거가 여럿");
-    expect(screen.getAllByRole("button", { name: "3쪽" })).toHaveLength(1);
+    const badges = screen.getAllByRole("button", { name: "3쪽" });
+    expect(badges).toHaveLength(1);
+    // 접힌 배지를 누르면 그 페이지의 근거 블록 세 곳이 모두 하이라이트된다 —
+    // 접기가 두 번째 이후 근거를 도달 불가능하게 만들면 안 된다.
+    await userEvent.click(badges[0]);
+    expect(screen.getByTestId("pdf-viewer")).toHaveAttribute("data-page", "3");
+    expect(screen.getByTestId("pdf-viewer")).toHaveAttribute("data-hl", "3");
   });
 
   it("한 주장의 출처가 여럿이면 모두 보여준다", async () => {

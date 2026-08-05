@@ -215,6 +215,31 @@ describe("SummaryView", () => {
     expect(screen.getByTestId("pdf-viewer").getAttribute("data-highlights")).toBe("1");
   });
 
+  it("같은 페이지의 여러 블록 근거는 한 줄로 접되 클릭 시 모두 하이라이트한다", async () => {
+    // 요약 출처에는 절 제목이 없어 같은 페이지 근거가 전부 한 줄로 접힌다 —
+    // 그 접기가 두 번째 이후 블록의 위치를 잃으면 사용자가 수치·근거를 검증할 수 없다.
+    apiMock.getSummaryStatus.mockResolvedValue(status());
+    apiMock.getSummaries.mockResolvedValue({
+      stale: false,
+      artifacts: [
+        {
+          ...overviewArtifact,
+          sourceRefs: [
+            { ...overviewArtifact.sourceRefs[0], blockId: "b1", bbox: [0, 0, 1, 1] },
+            { ...overviewArtifact.sourceRefs[0], blockId: "b2", bbox: [2, 2, 3, 3] },
+            { ...overviewArtifact.sourceRefs[0], blockId: "b3", bbox: [4, 4, 5, 5] },
+          ],
+        },
+      ],
+    });
+    renderView();
+    const rows = await screen.findAllByRole("button", { name: /2쪽 근거 보기/ });
+    expect(rows).toHaveLength(1);
+    await userEvent.click(rows[0]);
+    expect(screen.getByTestId("pdf-viewer").getAttribute("data-page")).toBe("2");
+    expect(screen.getByTestId("pdf-viewer").getAttribute("data-highlights")).toBe("3");
+  });
+
   it("최신 시도가 실패해도 이전 성공 요약을 계속 보여준다", async () => {
     apiMock.getSummaryStatus.mockResolvedValue(
       status({ status: "failed", failureCategory: "timeout", canRetry: true }),

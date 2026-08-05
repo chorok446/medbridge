@@ -14,6 +14,8 @@ export interface CitationSource {
   sectionTitle?: string | null;
   sourceMethod: "digital" | "ocr";
   bbox: [number, number, number, number];
+  /** 이 줄이 대표하는 근거 위치 전부(접힌 출처 포함). 없으면 bbox 하나뿐이다. */
+  bboxes?: [number, number, number, number][];
 }
 
 // `c` 접두사를 요구해 문서 본문에 흔한 대괄호(`[1]`, `[표 3]`)를 인용으로 오인하지 않는다.
@@ -40,16 +42,27 @@ export function hasCitations(tokens: CitationToken[]): boolean {
 
 /** 화면에 똑같이 보이는 출처를 접는다. 출처 목록에는 페이지·절 제목·판독 방법만
  *  보이므로, 같은 페이지의 다른 블록을 가리키는 출처는 사용자에게 구분할 수 없는
- *  같은 줄의 반복일 뿐이다(긴 문서에서 "132쪽" 수십 줄). 첫 출처를 남겨 이동 위치는
- *  유지한다 — 블록 단위 정밀 이동보다 목록을 읽을 수 있는 것이 먼저다. */
+ *  같은 줄의 반복일 뿐이다(긴 문서에서 "132쪽" 수십 줄).
+ *
+ *  접어도 근거 위치는 잃지 않는다: 접힌 출처들의 bbox를 대표 줄의 `bboxes`에 모아,
+ *  클릭 한 번에 그 페이지의 근거 영역 전부가 하이라이트되게 한다. 위치를 버리면
+ *  같은 페이지의 두 번째 이후 근거(예: 상충하는 두 문단)로 갈 방법이 사라진다. */
 export function dedupeDisplayedSources(refs: CitationSource[]): CitationSource[] {
-  const seen = new Set<string>();
+  const byKey = new Map<string, CitationSource & { bboxes: [number, number, number, number][] }>();
   const out: CitationSource[] = [];
   for (const r of refs) {
     const key = `${r.pageNumber}|${r.sectionTitle ?? ""}|${r.sourceMethod}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(r);
+    const kept = byKey.get(key);
+    if (kept) {
+      // 같은 블록이 여러 번 들어와도 같은 영역을 두 번 칠하지 않는다.
+      if (!kept.bboxes.some((b) => b.every((v, i) => v === r.bbox[i]))) {
+        kept.bboxes.push(r.bbox);
+      }
+      continue;
+    }
+    const merged = { ...r, bboxes: [r.bbox] };
+    byKey.set(key, merged);
+    out.push(merged);
   }
   return out;
 }

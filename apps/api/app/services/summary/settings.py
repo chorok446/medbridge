@@ -76,7 +76,11 @@ STUDY_CAUTION_NOTICE = (
 
 # 외부 모델 네트워크 제한 (SSRF·DoS 방어). urllib은 단일 timeout만 지원하므로
 # connect/read를 분리하지 못한다 — 전체 요청 timeout으로 근사한다.
-SUMMARY_REQUEST_TIMEOUT_SEC = 60.0  # 요약 생성 요청 전체 timeout
+#
+# 이 단일 timeout이 로컬 모델의 콜드 로드(디스크→메모리 적재)와 노드 생성 전체를 함께
+# 덮는다. 카탈로그 최대 모델(19GiB)은 HDD에서 적재만 2분을 넘을 수 있으므로, 60초로
+# 두면 "첫 요약은 오래 걸릴 수 있다"는 안내와 달리 앱이 먼저 요청을 끊는다.
+SUMMARY_REQUEST_TIMEOUT_SEC = 300.0  # 요약 생성 요청 전체 timeout
 CONNECTION_TEST_TIMEOUT_SEC = 10.0  # 연결 확인은 더 짧게
 # 정상/오류 응답 모두 이 크기까지만 읽는다(압축 비활성화 후 적용). 요약 JSON은 작다.
 SUMMARY_MAX_RESPONSE_BYTES = 4 * 1024 * 1024

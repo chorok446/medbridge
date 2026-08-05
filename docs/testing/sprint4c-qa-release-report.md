@@ -43,14 +43,15 @@ Layer 1은 실제 애플리케이션 경로(검색 → 컨텍스트 → provider
 # 균형형(기본 후보)
 cd apps/api && uv run python scripts/evaluate_local_qa.py --model qwen3:8b --repeat 3 --fail-on-gate
 
-# 경량형 / 고품질형 비교
+# 경량형 / 고품질형 / 전문가형 비교
 cd apps/api && uv run python scripts/evaluate_local_qa.py --model qwen3:4b --repeat 3
 cd apps/api && uv run python scripts/evaluate_local_qa.py --model qwen3:14b --repeat 3
+cd apps/api && uv run python scripts/evaluate_local_qa.py --model qwen3:30b-a3b --repeat 3
 ```
 
 - 결과: `artifacts/qa-evaluation/qa-eval-qwen3-8b.json` / `.md` 등
 - Ollama·모델 미설치 시 자동 다운로드 없이 skip
-- 모델명은 allowlist(qwen3:4b/8b/14b)만 허용, 127.0.0.1의 Ollama만 사용
+- 모델명은 allowlist(qwen3:4b/8b/14b/30b-a3b)만 허용, 127.0.0.1의 Ollama만 사용
 
 ## 4. 모델별 판정 (실제 평가 후 기록)
 
@@ -59,6 +60,7 @@ cd apps/api && uv run python scripts/evaluate_local_qa.py --model qwen3:14b --re
 | qwen3:8b | _대기_ | Layer 2 미실행 |
 | qwen3:4b | _대기_ | Layer 2 미실행 |
 | qwen3:14b | _대기_ | Layer 2 미실행 |
+| qwen3:30b-a3b | _대기_ | Layer 2 미실행 |
 
 판정 값: 기본 권장(default_recommended) / 선택 가능(selectable) / 경량 제한
 (light_limited) / 출시 보류(release_hold) / allowlist 제외(allowlist_excluded).
