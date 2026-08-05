@@ -38,13 +38,15 @@ export function hasCitations(tokens: CitationToken[]): boolean {
   return tokens.some((t) => t.kind === "citation");
 }
 
-/** 같은 페이지·블록을 가리키는 중복 출처를 접는다. 한 주장이 여러 청크에 근거를 두면
- *  같은 블록이 반복해서 들어온다 — 목록에 같은 줄이 두 번 뜨면 차이를 판단할 수 없다. */
-export function dedupeRefs<T extends { pageNumber: number; blockId: string }>(refs: T[]): T[] {
+/** 화면에 똑같이 보이는 출처를 접는다. 출처 목록에는 페이지·절 제목·판독 방법만
+ *  보이므로, 같은 페이지의 다른 블록을 가리키는 출처는 사용자에게 구분할 수 없는
+ *  같은 줄의 반복일 뿐이다(긴 문서에서 "132쪽" 수십 줄). 첫 출처를 남겨 이동 위치는
+ *  유지한다 — 블록 단위 정밀 이동보다 목록을 읽을 수 있는 것이 먼저다. */
+export function dedupeDisplayedSources(refs: CitationSource[]): CitationSource[] {
   const seen = new Set<string>();
-  const out: T[] = [];
+  const out: CitationSource[] = [];
   for (const r of refs) {
-    const key = `${r.pageNumber}-${r.blockId}`;
+    const key = `${r.pageNumber}|${r.sectionTitle ?? ""}|${r.sourceMethod}`;
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(r);

@@ -6,7 +6,6 @@ import { CitedText, SourceList } from "@/components/citations";
 import { PdfViewer } from "@/components/pdf-viewer";
 import {
   type CitationSource,
-  dedupeRefs,
   hasCitations,
   tokenizeCitations,
 } from "@/lib/citations";
@@ -439,7 +438,7 @@ function AssistantMessage({
     // 출처가 아예 없는 주장도 마찬가지 — 없는 근거를 1쪽으로 지어내지 않는다.
     c.verificationStatus === "unsupported" || c.sourceRefs.length === 0
       ? null
-      : dedupeRefs(c.sourceRefs).map((r) => ({
+      : c.sourceRefs.map((r) => ({
           pageNumber: r.pageNumber,
           sectionTitle: r.sectionTitle ?? null,
           sourceMethod: r.sourceMethod,
@@ -506,9 +505,14 @@ function SourceBadges({
   sources: SourceRef[];
   onNavigate: (ref: NavigateRef) => void;
 }) {
-  // 출처 목록(SourceList 경유)과 같은 기준으로 접는다 — 기준이 갈라지면 같은 답변에서
-  // 한쪽엔 출처가 두 개, 다른 쪽엔 한 개로 보인다.
-  const refs = dedupeRefs(sources);
+  // 배지에는 페이지 번호만 보인다 — 출처 목록(SourceList)과 같은 원칙으로, 화면에
+  // 똑같이 보이는 배지("3쪽" 여러 개)는 첫 출처 하나로 접는다.
+  const seenPages = new Set<number>();
+  const refs = sources.filter((r) => {
+    if (seenPages.has(r.pageNumber)) return false;
+    seenPages.add(r.pageNumber);
+    return true;
+  });
   if (refs.length === 0) return null;
   return (
     <div className="mt-1 flex flex-wrap gap-1">

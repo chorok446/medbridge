@@ -1,6 +1,11 @@
 "use client";
 
-import { type CitationSource, type CitationToken, tokenizeCitations } from "@/lib/citations";
+import {
+  type CitationSource,
+  type CitationToken,
+  dedupeDisplayedSources,
+  tokenizeCitations,
+} from "@/lib/citations";
 
 /** 인용 번호 i가 가리키는 출처들. null이면 그 번호는 화면에 내보내지 않는다 —
  *  검증에 실패했거나 출처가 아예 없는 주장이다. 배열 자리는 비워둔 채로 유지한다:
@@ -69,7 +74,11 @@ export function SourceList({
   groups: SourceGroup[];
   onNavigate: (source: CitationSource) => void;
 }) {
-  const visible = groups.filter((g) => g.refs.length > 0);
+  // 같은 줄로 보이는 출처는 묶음 안에서 접는다 — 한 주장이 같은 페이지의 블록
+  // 여러 개에 근거를 두면 똑같은 "N쪽" 줄이 수십 번 반복된다.
+  const visible = groups
+    .map((g) => ({ ...g, refs: dedupeDisplayedSources(g.refs) }))
+    .filter((g) => g.refs.length > 0);
   if (visible.length === 0) return null;
   return (
     <section className="mt-4 border-t border-slate-200 pt-3">

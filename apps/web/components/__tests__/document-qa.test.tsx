@@ -437,6 +437,38 @@ describe("리뷰 회귀", () => {
     expect(screen.queryByRole("button", { name: /1쪽 근거 보기/ })).toBeNull();
   });
 
+  it("같은 페이지의 다른 블록을 가리키는 출처 배지를 한 개로 접는다", async () => {
+    // 배지에는 페이지 번호만 보인다 — 블록이 달라도 '3쪽' 배지 14개는
+    // 사용자에게 똑같은 버튼의 반복일 뿐이다.
+    apiMock.listThreads.mockResolvedValue([thread]);
+    apiMock.getThread.mockResolvedValue({
+      thread,
+      messages: [
+        {
+          id: "m3", role: "assistant" as const, content: "마커 없는 옛 답변",
+          status: "completed" as const, sequenceNumber: 2, retrievalMode: "keyword",
+          followups: [],
+          claims: [
+            {
+              text: "같은 쪽 근거가 여럿", verificationStatus: "supported" as const,
+              sourceRefs: [
+                { pageNumber: 3, blockId: "b1", bbox: [0, 0, 1, 1] as [number, number, number, number],
+                  readingOrder: 0, sourceMethod: "digital" as const },
+                { pageNumber: 3, blockId: "b2", bbox: [2, 2, 3, 3] as [number, number, number, number],
+                  readingOrder: 1, sourceMethod: "digital" as const },
+                { pageNumber: 3, blockId: "b3", bbox: [4, 4, 5, 5] as [number, number, number, number],
+                  readingOrder: 2, sourceMethod: "digital" as const },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+    renderQa();
+    await screen.findByText("같은 쪽 근거가 여럿");
+    expect(screen.getAllByRole("button", { name: "3쪽" })).toHaveLength(1);
+  });
+
   it("한 주장의 출처가 여럿이면 모두 보여준다", async () => {
     apiMock.listThreads.mockResolvedValue([thread]);
     apiMock.getThread.mockResolvedValue({

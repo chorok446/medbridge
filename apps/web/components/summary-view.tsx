@@ -2,7 +2,6 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { SourceList } from "@/components/citations";
-import { dedupeRefs } from "@/lib/citations";
 import { ErrorReportButton } from "@/components/error-report-button";
 import { PdfViewer } from "@/components/pdf-viewer";
 import { usePdfNavigation } from "@/hooks/use-pdf-navigation";
@@ -268,7 +267,7 @@ export function SummaryView({ doc, fileUrl }: Props) {
                               groups={[
                                 {
                                   number: null,
-                                  refs: dedupeRefs(a.sourceRefs).map((r) => ({
+                                  refs: a.sourceRefs.map((r) => ({
                                     pageNumber: r.pageNumber,
                                     sectionTitle: null,
                                     sourceMethod: r.sourceMethod,

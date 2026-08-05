@@ -93,4 +93,46 @@ describe("SourceList", () => {
     const { container } = render(<SourceList groups={[]} onNavigate={() => {}} />);
     expect(container).toBeEmptyDOMElement();
   });
+
+  it("collapses sources that look identical on screen", () => {
+    // 한 주장이 같은 페이지의 블록 여러 개에 근거를 두면 화면에는 같은 줄이
+    // 수십 번 반복된다 — 사용자는 어느 줄도 구분할 수 없다. 첫 출처만 남긴다.
+    const onNavigate = vi.fn();
+    render(
+      <SourceList
+        groups={[
+          {
+            number: 1,
+            refs: [
+              { ...PAGE3, bbox: [0, 0, 1, 1] },
+              { ...PAGE3, bbox: [2, 2, 3, 3] },
+              { ...PAGE3, bbox: [4, 4, 5, 5] },
+            ],
+          },
+        ]}
+        onNavigate={onNavigate}
+      />,
+    );
+    const buttons = screen.getAllByRole("button", { name: /3쪽 근거 보기/ });
+    expect(buttons).toHaveLength(1);
+    // 이동은 첫 출처의 위치로 — 목록이 접혀도 갈 곳은 있어야 한다.
+    fireEvent.click(buttons[0]);
+    expect(onNavigate).toHaveBeenCalledWith({ ...PAGE3, bbox: [0, 0, 1, 1] });
+  });
+
+  it("keeps same-page sources apart when their section titles differ", () => {
+    render(
+      <SourceList
+        groups={[
+          {
+            number: 1,
+            refs: [PAGE3, { ...PAGE3, sectionTitle: "호흡계", bbox: [9, 9, 10, 10] }],
+          },
+        ]}
+        onNavigate={() => {}}
+      />,
+    );
+    expect(screen.getAllByRole("button", { name: /3쪽 근거 보기/ })).toHaveLength(2);
+    expect(screen.getByText(/호흡계/)).toBeInTheDocument();
+  });
 });
