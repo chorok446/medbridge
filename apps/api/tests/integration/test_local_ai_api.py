@@ -54,9 +54,19 @@ class TestModels:
         assert by_model["qwen3:8b"]["installed"] is True
         assert by_model["qwen3:8b"]["recommended"] is True
         assert by_model["qwen3:4b"]["installed"] is False
-        # 32GB → 8B 권장, 14B 선택 가능
+        # 32GB → 8B 권장, 14B·30B-A3B 선택 가능
         assert by_model["qwen3:8b"]["ramAdvice"] == "recommended"
         assert by_model["qwen3:14b"]["ramAdvice"] == "selectable"
+        assert by_model["qwen3:30b-a3b"]["ramAdvice"] == "selectable"
+
+    async def test_30b_a3b_warns_below_32gb_ram(self, client, monkeypatch):
+        # 가중치만 19GB라 32GB 미만에서는 실행이 어렵다 — 경고로 안내한다.
+        monkeypatch.setattr(ollama_client, "list_models", lambda: [])
+        monkeypatch.setattr(system, "total_ram_bytes", lambda: 16 * 1024**3)
+        monkeypatch.setattr(system, "free_disk_bytes", lambda path="/": 200 * 1024**3)
+        res = await client.get("/api/local-ai/models")
+        by_model = {m["model"]: m for m in res.json()["data"]["models"]}
+        assert by_model["qwen3:30b-a3b"]["ramAdvice"] == "warn"
 
     async def test_disk_shortage_flags_model(self, client, monkeypatch):
         monkeypatch.setattr(ollama_client, "list_models", lambda: [])

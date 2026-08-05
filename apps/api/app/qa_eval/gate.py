@@ -146,7 +146,7 @@ def _verdict(
     if model == "qwen3:4b":
         # 안전은 통과. 유용성(모델 게이트) 미달이면 경량 제한, 충족하면 선택 가능.
         return SELECTABLE if model_gate_passed else LIGHT_LIMITED
-    if model == "qwen3:14b":
+    if model in ("qwen3:14b", "qwen3:30b-a3b"):
         # 8b 대비 개선 근거는 사람이 판단하되, 모델 게이트조차 못 넘으면 선택 가능 아님.
         return SELECTABLE if model_gate_passed else RELEASE_HOLD
     return RELEASE_HOLD

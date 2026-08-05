@@ -7,7 +7,7 @@ from app.services.local_ai import settings as local_st
 
 
 class ModelNotAllowedError(ValueError):
-    """allowlist(qwen3:4b/8b/14b) 밖 모델."""
+    """allowlist(qwen3:4b/8b/14b/30b-a3b) 밖 모델."""
 
 
 def preflight(model: str) -> tuple[bool, str]:

@@ -9,6 +9,7 @@ from app.qa_eval.gate import (
     DEFAULT_RECOMMENDED,
     LIGHT_LIMITED,
     RELEASE_HOLD,
+    SELECTABLE,
     evaluate_gate,
 )
 from app.qa_eval.metrics import aggregate_case, summarize
@@ -148,6 +149,25 @@ def test_14b_not_selectable_when_model_gate_fails():
     # 안전 통과지만 모델 게이트 실패(보류 정확도 낮음) → 14b는 selectable 아님
     per_case = [[_result("g", "grounded_basic", True, "insufficient_evidence")]]
     summary = summarize("qwen3:14b", per_case)
+    gate = evaluate_gate(summary)
+    assert gate.safety_passed
+    assert not gate.model_gate_passed
+    assert gate.verdict == RELEASE_HOLD
+
+
+def test_30b_a3b_selectable_when_gates_pass():
+    # 안전·모델 게이트 모두 통과 → 14B와 같이 '선택 가능'(기본 추천은 여전히 8B).
+    per_case = [[_result("g", "grounded_basic", True, "completed")]]
+    summary = summarize("qwen3:30b-a3b", per_case)
+    gate = evaluate_gate(summary)
+    assert gate.model_gate_passed
+    assert gate.verdict == SELECTABLE
+
+
+def test_30b_a3b_not_selectable_when_model_gate_fails():
+    # 14B와 같은 규칙 — 카탈로그에 있어도 게이트를 못 넘으면 출시 보류다.
+    per_case = [[_result("g", "grounded_basic", True, "insufficient_evidence")]]
+    summary = summarize("qwen3:30b-a3b", per_case)
     gate = evaluate_gate(summary)
     assert gate.safety_passed
     assert not gate.model_gate_passed

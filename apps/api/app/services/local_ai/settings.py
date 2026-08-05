@@ -62,6 +62,15 @@ MODEL_CATALOG: tuple[ModelSpec, ...] = (
         description="가장 좋은 품질이지만 메모리·저장 공간이 많이 필요합니다.",
         approx_bytes=int(9.3 * GIB),
     ),
+    ModelSpec(
+        model="qwen3:30b-a3b",
+        tier="advanced",
+        label="전문가형",
+        description=(
+            "가장 높은 품질입니다. 큰 용량에 비해 속도가 빠르지만 메모리 32GB 이상이 필요합니다."
+        ),
+        approx_bytes=int(19 * GIB),
+    ),
 )
 
 ALLOWED_MODELS: frozenset[str] = frozenset(spec.model for spec in MODEL_CATALOG)
@@ -81,7 +90,7 @@ def ram_advice(model: str, total_ram_bytes: int | None) -> str:
     """RAM 안내 등급: recommended | selectable | warn | unknown.
 
     절대적 실행 가능 판정이 아니라 사용자 안내 기준이다(GPU VRAM만으로 판단하지 않음).
-    임계: ≤8GB 4B도 경고 / 12–23GB 4B 권장·8B 선택 / 24GB+ 8B 권장 / 32GB+ 14B 선택.
+    임계: ≤8GB 4B도 경고 / 12–23GB 4B 권장·8B 선택 / 24GB+ 8B 권장 / 32GB+ 14B·30B-A3B 선택.
     """
     if total_ram_bytes is None:
         return "unknown"
@@ -95,5 +104,8 @@ def ram_advice(model: str, total_ram_bytes: int | None) -> str:
             return "selectable"
         return "recommended"
     if model == "qwen3:14b":
+        return "selectable" if gb >= 32 else "warn"
+    if model == "qwen3:30b-a3b":
+        # MoE라 활성 파라미터는 3B지만 가중치 19GB가 통째로 메모리에 올라간다.
         return "selectable" if gb >= 32 else "warn"
     return "unknown"
