@@ -73,4 +73,36 @@ describe("ExtractedTable", () => {
     await userEvent.click(screen.getByRole("button", { name: "3쪽의 표 1" }));
     expect(onLocate).toHaveBeenCalledOnce();
   });
+
+  it("가로로 미는 영역에 키보드로 들어갈 수 있다", () => {
+    // 표 안에는 누를 것이 하나도 없다(전부 th/td 글자뿐). 스크롤 상자에 초점이
+    // 닿지 않으면 마우스 없는 사용자는 칸 밖으로 밀려난 열을 영영 볼 수 없다.
+    // 넓은 표를 옆으로 밀어 읽는 것이 이 화면의 핵심이라, 바로 그 자리에서 막힌다.
+    render(<ExtractedTable table={table()} onLocate={vi.fn()} />);
+
+    const region = screen.getByRole("region", { name: "3쪽의 표 1" });
+    expect(region).toHaveAttribute("tabindex", "0");
+    expect(region).toContainElement(screen.getByRole("table"));
+  });
+
+  it("머리글 행이 비어 있어도 자료 행을 머리글로 올리지 않는다", () => {
+    // pymupdf는 병합된 머리글을 [null, null, null]로 넘길 때가 있다. 빈 행을
+    // 걷어내며 첫 행까지 지우면 첫 자료 행이 <thead>로 승격되고, 스크린리더는
+    // 그 열의 모든 값을 "심박수"라는 머리글 아래에 있는 것으로 읽는다.
+    render(
+      <ExtractedTable
+        table={table({
+          cells: [
+            [null, null, null],
+            ["심박수", "60~100", "회/분"],
+          ],
+          rowCount: 2,
+        })}
+        onLocate={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("columnheader", { name: "심박수" })).not.toBeInTheDocument();
+    expect(screen.getByRole("rowheader", { name: "심박수" })).toBeInTheDocument();
+  });
 });

@@ -352,7 +352,10 @@ export function ExtractionReview({ doc, fileUrl }: Props) {
                   aria-pressed={wideTables}
                   className="hidden self-start rounded border border-slate-300 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 lg:inline-block"
                 >
-                  {wideTables ? "원문 넓게 보기" : "표 넓게 보기"}
+                  {/* 라벨은 상태와 무관하게 고정한다. 눌린 상태에서 "원문 넓게 보기"로
+                      바꾸면 스크린리더가 "원문 넓게 보기, 눌림"으로 읽어, 라벨은 다음
+                      동작을 aria-pressed는 현재 상태를 말해 서로 반대로 들린다. */}
+                  표 넓게 보기
                 </button>
               )}
               {(tablesQuery.data ?? []).map((t) => (

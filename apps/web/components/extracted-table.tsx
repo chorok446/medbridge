@@ -30,15 +30,21 @@ function cellText(value: string | null): string {
  * 옆으로 밀어도 "이 값이 무슨 항목의 무슨 열인지"를 잃지 않는다.
  */
 export function ExtractedTable({ table, onLocate }: Props) {
-  const rows = table.cells.filter((row) => row.some((c) => cellText(c)));
+  // 첫 행은 내용이 비어 있어도 머리글 자리를 지킨다. 빈 행을 걷어내며 첫 행까지
+  // 지우면, 병합 머리글을 [null, null, null]로 넘기는 표에서 첫 자료 행이 <thead>로
+  // 승격되고 스크린리더는 그 열의 모든 값을 "심박수" 아래에 있는 것으로 읽는다.
+  const [rawHeader, ...rawBody] = table.cells;
+  const headerRow = rawHeader ?? [];
+  const bodyRows = rawBody.filter((row) => row.some((c) => cellText(c)));
   // 읽어내기 자체가 실패한 표에만 경고를 붙인다. 이전에는 `confidence < 0.8`로 판정했는데
   // 추출기가 성공한 표에 0.7을 상수로 박아 넣으므로(engine.py) 모든 표에 빠짐없이 떴다.
   // 항상 뜨는 경고는 아무것도 알려주지 않으면서 표 하나하나의 높이만 잡아먹는다.
   // 규칙 기반 추출이라는 일반적인 한계는 목록 맨 위에 한 번만 적는다.
-  const failed = table.extractionStatus !== "extracted" || rows.length === 0;
+  // 격자는 있는데 칸이 전부 빈 표(머리글까지 null)도 읽어내지 못한 것으로 본다 —
+  // 빈 머리글 한 줄만 그려놓으면 실패를 설명하는 대신 흐린다.
+  const hasContent = [headerRow, ...bodyRows].some((row) => row.some((c) => cellText(c)));
+  const failed = table.extractionStatus !== "extracted" || !hasContent;
   const label = `${table.pageNumber}쪽의 표 ${table.tableIndex + 1}`;
-
-  const [headerRow = [], ...bodyRows] = rows;
 
   // 정렬은 셀이 아니라 열 단위로 정한다. 셀마다 따로 판정하면 같은 열에서 "20mg"은
   // 오른쪽, "정맥/경구"는 왼쪽으로 흩어지고, 머리글만 늘 왼쪽이라 값과 어긋난다.
@@ -73,7 +79,18 @@ export function ExtractedTable({ table, onLocate }: Props) {
         </p>
       ) : (
         // 표가 칸보다 넓으면 표만 옆으로 밀린다 — 화면 전체가 가로로 흔들리지 않는다.
-        <div className="max-h-96 overflow-auto border-t border-slate-200">
+        //
+        // tabIndex/role/aria-label이 함께 필요하다: 표 안에는 초점이 닿는 것이 하나도
+        // 없어서(전부 th/td 글자뿐) 이 상자가 초점을 받지 못하면 마우스 없는 사용자는
+        // 칸 밖으로 밀려난 열을 영영 볼 수 없다. 넓은 표를 옆으로 밀어 읽는 것이 이
+        // 화면의 핵심이라 바로 그 자리에서 막힌다(WCAG 2.1.1). 초점을 받는 요소에는
+        // 이름이 있어야 하므로 role="region" + aria-label을 같이 준다.
+        <div
+          role="region"
+          aria-label={label}
+          tabIndex={0}
+          className="max-h-96 overflow-auto border-t border-slate-200 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-blue-600"
+        >
           {/* border-separate를 쓴다 — border-collapse에서는 테두리가 셀이 아니라 표에
               속해서, 고정된 머리글·첫 열을 스크롤하면 그 테두리만 사라진다. */}
           {/* w-max + min-w-full: 칸보다 좁으면 채우고, 넓으면 눌리지 않고 그대로 밀린다.
