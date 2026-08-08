@@ -411,7 +411,7 @@ export function DocumentQa({ doc, fileUrl }: Props) {
             <button
               type="submit"
               disabled={busy || !input.trim()}
-              className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
             >
               보내기
             </button>
@@ -495,7 +495,7 @@ function AssistantMessage({
       ) : (
         <>
           {/* 마커 없는 옛 메시지 — 기존 렌더를 그대로 둔다. 백필하지 않으므로 이 경로는 남는다. */}
-          <p className="max-w-[68ch] whitespace-pre-wrap text-[17px] leading-[1.7] text-slate-900">
+          <p className="max-w-[68ch] whitespace-pre-wrap text-[1.0625rem] leading-[1.7] text-slate-900">
             {message.content}
           </p>
           {supportedClaims.length > 0 && (

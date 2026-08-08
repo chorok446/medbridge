@@ -120,7 +120,7 @@ function InstallGuide({
         <button
           type="button"
           onClick={() => void openExternalUrl(OLLAMA_INSTALL_URL)}
-          className="rounded bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700"
+          className="rounded-md bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700"
         >
           설치 안내 열기
         </button>
@@ -345,7 +345,7 @@ function ReadyPanel({ onRecheck }: { onRecheck: () => void }) {
               type="button"
               onClick={() => requestActivation(confirmOverwrite, true)}
               disabled={activateMutation.isPending}
-              className="rounded bg-blue-600 px-3 py-1.5 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              className="rounded-md bg-blue-600 px-3 py-1.5 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
             >
               로컬 AI로 변경
             </button>
@@ -470,7 +470,7 @@ function ReadyWithModels({
           type="button"
           onClick={() => onActivate(activeModel)}
           disabled={activating}
-          className="rounded bg-blue-600 px-3 py-1.5 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+          className="rounded-md bg-blue-600 px-3 py-1.5 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
         >
           기본 모델로 사용
         </button>
@@ -506,7 +506,7 @@ function ModelChooser({
                 <span className="font-medium text-slate-800">
                   {m.label}
                   {isDefault && (
-                    <span className="ml-2 rounded bg-blue-50 px-1.5 py-0.5 text-[11px] text-blue-700">
+                    <span className="ml-2 rounded bg-blue-50 px-1.5 py-0.5 text-xs text-blue-700">
                       추천
                     </span>
                   )}
@@ -526,7 +526,7 @@ function ModelChooser({
                 disabled={!m.diskOk}
                 className={
                   isDefault
-                    ? "mt-1 w-fit rounded bg-blue-600 px-3 py-1.5 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                    ? "mt-1 w-fit rounded-md bg-blue-600 px-3 py-1.5 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
                     : "mt-1 w-fit rounded border border-slate-300 px-3 py-1.5 hover:bg-slate-50 disabled:opacity-50"
                 }
               >

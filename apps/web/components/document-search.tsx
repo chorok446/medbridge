@@ -94,7 +94,7 @@ export function DocumentSearch({ documentId, onNavigate }: Props) {
               isActiveJobStatus(statusQuery.data?.jobStatus) ||
               lowConfidenceOnly
             }
-            className="mt-2 rounded bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+            className="mt-2 rounded-md bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
           >
             문서 검색 준비하기
           </button>
@@ -126,12 +126,15 @@ export function DocumentSearch({ documentId, onNavigate }: Props) {
           />
           <button
             type="submit"
-            className="rounded bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700"
+            className="rounded-md bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700"
           >
             검색
           </button>
         </div>
-        <div className="flex gap-3 text-xs text-slate-600">
+        {/* fieldset으로 묶어야 스크린리더가 "2개 중 1개"라고 알린다. div로 두면
+            낱개 라디오로 읽혀, 학습 수준 등 다른 화면의 같은 컨트롤과 다르게 들린다. */}
+        <fieldset className="flex gap-3 text-xs text-slate-600">
+          <legend className="sr-only">검색 방식</legend>
           <label className="flex items-center gap-1.5">
             <input
               type="radio"
@@ -150,7 +153,7 @@ export function DocumentSearch({ documentId, onNavigate }: Props) {
             />
             의미 검색 포함
           </label>
-        </div>
+        </fieldset>
         {blankQueryNotice && (
           <p role="alert" className="text-xs text-red-700">
             검색어를 입력해 주세요.

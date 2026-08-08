@@ -227,6 +227,11 @@ export function ExtractionReview({ doc, fileUrl }: Props) {
             <button
               key={t.key}
               role="tab"
+              // 탭과 내용을 id로 이어야 스크린리더가 "3번째 탭, 패널과 연결됨"이라는
+              // 표준 안내를 낼 수 있다. 연결이 없으면 탭 아래 내용이 무엇에 속하는지
+              // 알 수 없어, 탭을 옮겨도 내용이 바뀐 줄 모른다.
+              id={`extraction-tab-${t.key}`}
+              aria-controls={`extraction-panel-${t.key}`}
               aria-selected={tab === t.key}
               onClick={() => setTab(t.key)}
               className={`px-3 py-2 ${
@@ -240,7 +245,12 @@ export function ExtractionReview({ doc, fileUrl }: Props) {
           ))}
         </div>
 
-        <div className="flex-1 overflow-auto p-3 text-sm">
+        <div
+          role="tabpanel"
+          id={`extraction-panel-${tab}`}
+          aria-labelledby={`extraction-tab-${tab}`}
+          className="flex-1 overflow-auto p-3 text-sm"
+        >
           {tab === "text" && (
             <div>
               <label className="mb-2 flex items-center gap-2 text-xs text-slate-500">

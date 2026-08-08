@@ -99,6 +99,12 @@ function DocumentDetail() {
   }
   const effectiveTab =
     mainTab ?? defaultTab ?? (hasExtraction(doc.processingStatus) ? "qa" : "preview");
+  // 탭이 없을 때는 아래 내용도 tabpanel이 아니다 — 짝 없는 tabpanel은 스크린리더에
+  // 어느 탭에 속하는지 알 수 없는 영역으로 남는다.
+  const tabsShown =
+    hasExtraction(doc.processingStatus) ||
+    doc.processingStatus === "extracting" ||
+    doc.processingStatus === "extraction_failed";
 
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-8">
@@ -173,9 +179,7 @@ function DocumentDetail() {
         </div>
       )}
 
-      {(hasExtraction(doc.processingStatus) ||
-        doc.processingStatus === "extracting" ||
-        doc.processingStatus === "extraction_failed") && (
+      {tabsShown && (
         <div role="tablist" className="mb-4 flex gap-1 border-b border-slate-200 text-sm">
           {(
             [
@@ -188,6 +192,10 @@ function DocumentDetail() {
             <button
               key={t.key}
               role="tab"
+              // 탭과 내용을 id로 잇는다 — 없으면 스크린리더가 탭 아래 내용이
+              // 무엇에 속하는지 알 수 없어, 탭을 옮겨도 내용이 바뀐 줄 모른다.
+              id={`doc-tab-${t.key}`}
+              aria-controls="doc-tabpanel"
               aria-selected={effectiveTab === t.key}
               onClick={() => setMainTab(t.key)}
               className={`rounded-t px-4 py-2 ${
@@ -202,6 +210,11 @@ function DocumentDetail() {
         </div>
       )}
 
+      <div
+        {...(tabsShown
+          ? { role: "tabpanel", id: "doc-tabpanel", "aria-labelledby": `doc-tab-${effectiveTab}` }
+          : {})}
+      >
       {effectiveTab === "extraction" && fileUrlQuery.data ? (
         <ExtractionReview doc={doc} fileUrl={fileUrlQuery.data} />
       ) : effectiveTab === "summary" && fileUrlQuery.data ? (
@@ -280,6 +293,7 @@ function DocumentDetail() {
         </aside>
       </div>
       )}
+      </div>
 
       <ConfirmDialog
         open={confirmDelete}

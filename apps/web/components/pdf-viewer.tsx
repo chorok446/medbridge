@@ -220,7 +220,15 @@ export function PdfViewer({
               onPagePointerDown(inv.x0, inv.y0);
             }}
           >
-            <canvas ref={canvasRef} className="block" />
+            {/* 캔버스는 픽셀 그림이라 보조기술에 아무 정보도 주지 않는다. 최소한
+                "지금 몇 쪽 원문이 보이는지"는 알려야 옆 패널의 인용·구역 목록과
+                맞춰볼 수 있다. 본문 글자는 오른쪽 패널이 따로 제공한다. */}
+            <canvas
+              ref={canvasRef}
+              role="img"
+              aria-label={`${page}쪽 원문`}
+              className="block"
+            />
             {rendered &&
               highlights.map((h, i) => {
                 const s = toScreen(h);

@@ -38,7 +38,7 @@ export function CitedText({
 }) {
   const tokens = precomputed ?? tokenizeCitations(content, sources.length);
   return (
-    <p className="max-w-[68ch] whitespace-pre-wrap text-[17px] leading-[1.7] text-slate-900">
+    <p className="max-w-[68ch] whitespace-pre-wrap text-[1.0625rem] leading-[1.7] text-slate-900">
       {tokens.map((t, i) => {
         if (t.kind === "text") return <span key={i}>{t.text}</span>;
         const refs = sources[t.claimIndex];

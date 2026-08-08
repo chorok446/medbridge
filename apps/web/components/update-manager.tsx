@@ -159,7 +159,7 @@ export function UpdateManager({ autoCheck = false }: { autoCheck?: boolean }) {
             <button
               type="button"
               onClick={startUpdate}
-              className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+              className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
             >
               지금 업데이트
             </button>

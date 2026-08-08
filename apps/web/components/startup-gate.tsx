@@ -44,7 +44,7 @@ export function StartupGate({ children }: { children: React.ReactNode }) {
           <button
             type="button"
             onClick={() => relaunchApp()}
-            className="rounded bg-blue-600 px-5 py-2.5 font-medium text-white hover:bg-blue-700"
+            className="rounded-md bg-blue-600 px-5 py-2.5 font-medium text-white hover:bg-blue-700"
           >
             다시 시작
           </button>

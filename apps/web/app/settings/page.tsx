@@ -103,7 +103,7 @@ export default function SettingsPage() {
           <button
             type="submit"
             disabled={mutation.isPending}
-            className="rounded bg-blue-600 px-4 py-2.5 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+            className="rounded-md bg-blue-600 px-4 py-2.5 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
           >
             저장
           </button>

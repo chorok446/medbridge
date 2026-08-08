@@ -187,7 +187,7 @@ export function SummaryView({ doc, fileUrl }: Props) {
                   type="button"
                   onClick={() => createMutation.mutate()}
                   disabled={createMutation.isPending}
-                  className="mt-2 rounded bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                  className="mt-2 rounded-md bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
                 >
                   요약 만들기
                 </button>
@@ -260,7 +260,7 @@ export function SummaryView({ doc, fileUrl }: Props) {
                                 {a.title}
                               </p>
                             )}
-                            <p className="max-w-[68ch] whitespace-pre-wrap text-[17px] leading-[1.7] text-slate-900">
+                            <p className="max-w-[68ch] whitespace-pre-wrap text-[1.0625rem] leading-[1.7] text-slate-900">
                               {artifactBody(a)}
                             </p>
                             {/* 질문 탭과 같은 출처 표기를 쓴다 — 근거를 읽는 법이 화면마다
