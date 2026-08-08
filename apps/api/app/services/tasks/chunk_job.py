@@ -36,7 +36,7 @@ async def run_chunk_rebuild_job(document_id: uuid.UUID, correlation_id: str) -> 
 
     try:
         async with factory() as session:
-            chunk_count = await rebuild_chunks(session, document_id)
+            result = await rebuild_chunks(session, document_id)
             await session.commit()
     except LowConfidenceOnlyDocument as exc:
         # 성공으로 마감하면 문서가 '준비됐지만 비어 있는' 상태로 굳고, 화면은 눌러도
@@ -62,7 +62,15 @@ async def run_chunk_rebuild_job(document_id: uuid.UUID, correlation_id: str) -> 
             job.status = JobStatus.SUCCEEDED
             job.completed_at = datetime.now(UTC)
         await session.commit()
-    logger.info("chunk_rebuild_done", document_id=str(document_id), chunk_count=chunk_count)
+    logger.info(
+        "chunk_rebuild_done",
+        document_id=str(document_id),
+        chunk_count=result.chunk_count,
+        # 저신뢰라 청크에서 뺀 블록 수. 0이 아니면 이 문서의 요약·검색은 그만큼을 못 본
+        # 채로 완결된 것처럼 보인다 — 청크 수만으로는 그 사실이 드러나지 않아, 실기기
+        # 오류 보고서에서 "요약에 이 내용이 왜 없나"를 좁힐 단서가 하나도 없었다.
+        suppressed_low_confidence=result.suppressed_low_confidence,
+    )
 
 
 async def mark_chunk_rebuild_crashed(document_id: uuid.UUID) -> None:

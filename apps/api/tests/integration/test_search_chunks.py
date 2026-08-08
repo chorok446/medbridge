@@ -29,9 +29,9 @@ async def upload_extracted(client, data: bytes) -> dict:
 
 async def _rebuild(doc_id: str) -> int:
     async with get_session_factory()() as session:
-        count = await rebuild_chunks(session, uuid.UUID(doc_id))
+        result = await rebuild_chunks(session, uuid.UUID(doc_id))
         await session.commit()
-        return count
+        return result.chunk_count
 
 
 class TestChunkOrderAndSourceRefs:

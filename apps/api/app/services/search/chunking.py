@@ -45,6 +45,21 @@ class LowConfidenceOnlyDocument(Exception):
         self.suppressed_blocks = suppressed_blocks
 
 
+@dataclass(frozen=True)
+class ChunkRebuildResult:
+    """만든 청크 수와, 저신뢰라 청크에서 뺀 블록 수.
+
+    둘을 같이 돌려주는 이유: 청크 수만 보면 "16226개나 만들었으니 이 문서는 잘 준비됐다"로
+    읽히는데, 같은 실행에서 저신뢰로 통째로 빠진 페이지가 있으면 요약·검색·답변은 그
+    내용을 영영 못 본 채 완결된 것처럼 보인다. `suppressed_low_confidence`가 "왜 요약에
+    이 내용이 없나"에 답할 수 있는 유일한 숫자인데, 지금까지는 청크가 **0개**가 됐을
+    때만 예외로 드러나고 일부만 빠지는 흔한 경우엔 계산 직후 버려졌다.
+    """
+
+    chunk_count: int
+    suppressed_low_confidence: int
+
+
 @dataclass
 class SourceRef:
     page_number: int
@@ -327,8 +342,10 @@ def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-async def rebuild_chunks(session: AsyncSession, document_id: uuid.UUID) -> int:
-    """문서 청크를 원자적으로 재계산·교체한다. 반환: 생성된 청크 수."""
+async def rebuild_chunks(
+    session: AsyncSession, document_id: uuid.UUID
+) -> ChunkRebuildResult:
+    """문서 청크를 원자적으로 재계산·교체한다. 반환: 청크 수 + 저신뢰로 뺀 블록 수."""
     pages = list(
         (
             await session.execute(
@@ -432,4 +449,7 @@ async def rebuild_chunks(session: AsyncSession, document_id: uuid.UUID) -> int:
     if doc is not None:
         doc.chunk_revision = doc.content_revision
 
-    return len(rows)
+    return ChunkRebuildResult(
+        chunk_count=len(rows),
+        suppressed_low_confidence=plan.suppressed_low_confidence,
+    )

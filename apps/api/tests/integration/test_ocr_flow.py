@@ -4,6 +4,7 @@ import uuid
 
 import pytest
 from sqlalchemy import func, select
+from structlog.testing import capture_logs
 
 from app.db.session import get_session_factory
 from app.models.document import Document, DocumentJob
@@ -407,6 +408,78 @@ class TestOcrControlPaths:
         assert runs == 0 and blocks == 0
 
 
+class TestOcrPageLogIsDiagnosable:
+    """`words=0`이 세 가지 다른 사건을 같은 모양으로 남기지 않게 한다.
+
+    실기기 로그에 `words 0 / conf 0.9 / ocr_completed`(잘 읽었지만 전부 디지털과 중복),
+    `words 0 / conf 0.9639 / ocr_empty`(단어가 임계값 미만), `words 0 / conf 0.0 /
+    ocr_empty`(진짜 백지)가 거의 구분되지 않는 모양으로 섞여 있었다. 대응이 각각 다르다.
+    """
+
+    async def test_raw_word_count_survives_digital_dedupe(self, client, monkeypatch):
+        """디지털 본문과 통째로 겹쳐 저장된 단어가 0개여도 읽어낸 양은 로그에 남는다."""
+        doc = await upload_extracted(client, fx.scanned_page_with_short_caption())
+
+        # 이 쪽의 디지털 블록과 정확히 같은 자리에 OCR 단어를 놓는다 — 중복 제거가
+        # 전부 걷어내므로 저장되는 단어는 0개가 된다.
+        async with get_session_factory()() as session:
+            digital = [
+                b
+                for b in (
+                    await session.execute(
+                        select(DocumentBlock).where(
+                            DocumentBlock.document_id == uuid.UUID(doc["id"])
+                        )
+                    )
+                ).scalars().all()
+                if (b.metadata_json or {}).get("source") != "ocr" and (b.text or "").strip()
+            ]
+        assert digital, "겹칠 디지털 블록이 없으면 이 테스트는 공허하다"
+        box = digital[0]
+        overlapping = [
+            OcrWord(
+                bbox=(box.x0, box.y0, box.x1, box.y1),
+                text=t,
+                confidence=0.9,
+                block_index=1,
+                paragraph_index=1,
+                line_index=1,
+                word_index=i + 1,
+            )
+            for i, t in enumerate(["그림", "1.", "심장"])
+        ]
+        fake = FakeEngine(
+            result=OcrResult(page_number=1, words=overlapping, mean_confidence=0.9)
+        )
+        monkeypatch.setattr(ocr_service, "engine", lambda: fake)
+
+        with capture_logs() as logs:
+            await client.post(f"/api/documents/{doc['id']}/ocr")
+            await drain_jobs()
+
+        done = [e for e in logs if e.get("event") == "ocr_page_done"]
+        assert done, [e.get("event") for e in logs]
+        entry = done[0]
+        # 저장된 단어는 0개다 — 여기까지는 기존 로그와 같다.
+        assert entry["words"] == 0
+        # 하지만 엔진은 3단어를 읽어냈다. 이 값이 없으면 백지와 구분할 수 없다.
+        assert entry["raw_words"] == 3
+
+    async def test_blank_page_reports_zero_raw_words(self, client, monkeypatch):
+        """진짜 백지는 raw_words도 0이다 — 위 경우와 로그에서 갈린다."""
+        monkeypatch.setattr(ocr_service, "engine", lambda: FakeEngine())
+        doc = await upload_extracted(client, fx.blank_image_page())
+
+        with capture_logs() as logs:
+            await client.post(f"/api/documents/{doc['id']}/ocr")
+            await drain_jobs()
+
+        done = [e for e in logs if e.get("event") == "ocr_page_done"]
+        assert done, [e.get("event") for e in logs]
+        assert done[0]["raw_words"] == 0
+        assert done[0]["result_status"] == OcrRunStatus.OCR_EMPTY.value
+
+
 def _low_confidence_result(texts: list[str]) -> OcrResult:
     """판독에 실패한 것과 다름없는 결과 — 단어는 있지만 신뢰도가 바닥이다.
 
@@ -450,6 +523,29 @@ class TestLowConfidenceIsolation:
                 ).all()
             ]
         assert not any("ㄱㅂㅅ" in t for t in texts), texts
+
+    async def test_partial_suppression_is_reported_next_to_the_chunk_count(
+        self, client, monkeypatch
+    ):
+        """일부만 저신뢰인 문서 — 청크는 만들어지지만 그만큼이 빠져 있다.
+
+        전부 저신뢰일 때만 예외로 알리고 이 흔한 경우엔 아무 말도 하지 않으면, 청크 수는
+        멀쩡해 보이는데 요약·검색은 그 페이지를 영영 못 본다. 실기기 오류 보고서에
+        `chunk_count=16226`만 남아 "요약에 이 내용이 왜 없나"를 좁힐 단서가 없었다.
+        """
+        fake = FakeEngine(result=_low_confidence_result(["ㄱㅂㅅ", "ㅁㄴㅇ", "ㄹㅇㅋ", "ㅍㅌㅊ"]))
+        monkeypatch.setattr(ocr_service, "engine", lambda: fake)
+        doc = await upload_extracted(client, fx.mixed_digital_and_scanned())
+        await client.post(f"/api/documents/{doc['id']}/ocr")
+        await drain_jobs()
+
+        async with get_session_factory()() as session:
+            result = await rebuild_chunks(session, uuid.UUID(doc["id"]))
+            await session.commit()
+
+        # 디지털 1쪽이 살아 있으므로 청크는 만들어진다 — 그래서 개수만으로는 멀쩡해 보인다.
+        assert result.chunk_count > 0
+        assert result.suppressed_low_confidence > 0
 
     async def test_low_confidence_keeps_document_unresolved(self, client, monkeypatch):
         """ocr_empty와 같은 취급 — '다 읽었다'로 승격하지 않는다."""

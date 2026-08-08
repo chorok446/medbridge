@@ -127,6 +127,19 @@ def image_with_caption() -> bytes:
     return _to_bytes(doc)
 
 
+def scanned_page_with_short_caption() -> bytes:
+    """거의 전면인 이미지 + 짧은 캡션 한 줄 — OCR이 필요하면서 디지털 텍스트도 있는 쪽.
+
+    이런 쪽에서 OCR 결과가 이미 있는 디지털 텍스트와 통째로 겹치면 새로 저장할 단어는
+    0개가 된다. 실기기에서 `words=0, ocr_completed`로 남던 바로 그 경우다.
+    """
+    doc = _new_doc()
+    page = doc.new_page(width=PAGE_W, height=PAGE_H)
+    page.insert_text((72, 60), "그림 1. 심장", fontsize=12, **KOR)
+    page.insert_image(pymupdf.Rect(0, 100, PAGE_W, PAGE_H), stream=_tiny_png())
+    return _to_bytes(doc)
+
+
 def sparse_text() -> bytes:
     doc = _new_doc()
     page = doc.new_page(width=PAGE_W, height=PAGE_H)
