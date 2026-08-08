@@ -301,11 +301,15 @@ export function ExtractionReview({ doc, fileUrl }: Props) {
                     <li key={b.id}>
                       <button
                         type="button"
+                        // 선택 상태를 배경색으로만 알리면 스크린리더 사용자는 어느
+                        // 구역이 지금 원문에서 하이라이트되고 있는지 알 수 없다.
+                        // 원문 대조가 이 화면의 핵심이라 거기서 막힌다(WCAG 1.4.1).
+                        aria-pressed={selectedBlockId === b.id}
                         onClick={() => focusBlock(b)}
                         className={`w-full rounded border px-2.5 py-1.5 text-left leading-snug ${
                           selectedBlockId === b.id
                             ? "border-amber-400 bg-amber-50"
-                            : "border-slate-150 border-slate-200 hover:bg-slate-50"
+                            : "border-slate-200 hover:bg-slate-50"
                         }`}
                       >
                         {(b.isHeader || b.isFooter) && (

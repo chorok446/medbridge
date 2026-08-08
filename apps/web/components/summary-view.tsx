@@ -225,7 +225,11 @@ export function SummaryView({ doc, fileUrl }: Props) {
                       type="button"
                       onClick={() => retryMutation.mutate()}
                       disabled={retryMutation.isPending}
-                      className="text-blue-700 hover:underline disabled:opacity-50"
+                      // 맨 텍스트 링크였다. 12px 글자 높이만큼만 눌리는 영역이라
+                      // WCAG 2.5.8 최소 24×24에 못 미쳤고, 문장 속 인라인 링크가
+                      // 아니라 독립 동작이라 인라인 예외도 해당하지 않는다. 다른
+                      // 화면의 "다시 시도"와 모양도 달라 학습된 패턴이 끊겼다.
+                      className="rounded-md border border-slate-300 px-3 py-1.5 text-slate-700 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 disabled:opacity-50"
                     >
                       다시 시도
                     </button>

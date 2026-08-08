@@ -224,6 +224,31 @@ describe("DocumentQa", () => {
     expect(await screen.findByText(/이 자료에서는 확인할 수 없는 내용/)).toBeInTheDocument();
   });
 
+  it("답변이 실패해도 화면의 파란 버튼은 하나뿐이다", async () => {
+    // DESIGN.md 155행: Primary는 화면의 "다음 할 일" 하나에만. 재시도 버튼과 하단
+    // 보내기 버튼이 둘 다 파란색이면 무엇을 눌러야 하는지 판단할 기준이 사라진다.
+    // 이 상황에서 진짜 다음 행동은 재시도인데 시각적으로 보내기와 동급이었다.
+    //
+    // 사용자에게 보이는 것이 색의 위계 자체라 글자로는 확인할 방법이 없다.
+    apiMock.listThreads.mockResolvedValue([thread]);
+    apiMock.getThread.mockResolvedValue({
+      ...answerDetail,
+      messages: [
+        answerDetail.messages[0],
+        { ...answerDetail.messages[1], status: "failed", claims: [] },
+      ],
+    });
+    renderQa();
+
+    expect(await screen.findByRole("button", { name: "다시 시도" })).toBeInTheDocument();
+
+    const primaries = screen
+      .getAllByRole("button")
+      .filter((b) => b.className.includes("bg-blue-600"));
+    expect(primaries).toHaveLength(1);
+    expect(primaries[0]).toHaveAccessibleName("보내기");
+  });
+
   it("모델 미연결(501)이면 설정 안내를 보여준다", async () => {
     apiMock.listThreads.mockResolvedValue([]);
     apiMock.createThread.mockResolvedValue({ thread });

@@ -327,7 +327,16 @@ function ReadyPanel({ onRecheck }: { onRecheck: () => void }) {
       )}
 
       {confirmOverwrite && (
-        <div role="alertdialog" className="rounded border border-amber-200 bg-amber-50 p-3">
+        // role은 실제 동작과 맞춰야 한다. alertdialog였지만 초점 트랩도, 최초
+        // 초점 이동도, Esc도, backdrop도 없는 그냥 카드다. 스크린리더는 "경고
+        // 대화상자가 열렸다"고 안내하면서 초점은 그대로 두어, 사용자는 무엇을
+        // 확인하라는 것인지 찾지 못한 채 뒷배경을 계속 탐색하게 된다. 이름조차
+        // 없어 "경고 대화상자"라고만 읽혔다(WCAG 4.1.2).
+        <div
+          role="group"
+          aria-label="로컬 AI로 바꿀지 확인"
+          className="rounded border border-amber-200 bg-amber-50 p-3"
+        >
           <p className="mb-2 text-amber-900">
             이미 외부 AI가 설정되어 있어요. 로컬 AI로 바꿀까요?
           </p>

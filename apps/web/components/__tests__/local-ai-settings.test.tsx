@@ -143,8 +143,33 @@ describe("LocalAiSection", () => {
     await userEvent.click(await screen.findByRole("button", { name: "기본 모델로 사용" }));
 
     expect(await screen.findByText("설정을 저장하지 못했어요. 다시 시도해 주세요.")).toBeInTheDocument();
-    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: /바꿀지 확인/ })).not.toBeInTheDocument();
     expect(screen.queryByText("기술 원문")).not.toBeInTheDocument();
+  });
+
+  it("덮어쓰기 확인은 이름이 있는 묶음으로 알린다", async () => {
+    // role="alertdialog"였는데 초점 트랩도, 최초 초점 이동도, Esc도, backdrop도
+    // 없는 그냥 카드였다. 스크린리더는 "경고 대화상자가 열렸다"고 안내하지만
+    // 초점은 그대로라 사용자는 무엇을 확인하라는 것인지 찾지 못한다. 게다가
+    // 이름(aria-label)조차 없어 "경고 대화상자"라고만 읽혔다(WCAG 4.1.2).
+    apiMock.getLocalAiStatus.mockResolvedValue({ status: "ready" });
+    apiMock.getLocalModels.mockResolvedValue({
+      models: THREE.map((m) => (m.model === "qwen3:8b" ? { ...m, installed: true } : m)),
+      defaultModel: "qwen3:8b", totalRamBytes: 32 * 1024 ** 3, freeDiskBytes: 200 * 1024 ** 3,
+    });
+    apiMock.activateLocalModel.mockRejectedValue(
+      new ApiError(409, "EXTERNAL_AI_OVERWRITE_REQUIRED", "외부", false, {
+        details: { failureCategory: "external_settings_conflict" },
+      }),
+    );
+
+    renderSection();
+    await userEvent.click(await screen.findByRole("button", { name: "기본 모델로 사용" }));
+
+    const confirm = await screen.findByRole("group", { name: /바꿀지 확인/ });
+    expect(confirm).toHaveTextContent("이미 외부 AI가 설정되어 있어요");
+    // 모달이 아니므로 대화상자라고 주장하지 않는다.
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   });
 
   it("retryable DB lock은 기술 정보를 숨기고 재시도 안내만 보여준다", async () => {

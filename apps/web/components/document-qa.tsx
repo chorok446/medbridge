@@ -351,7 +351,10 @@ export function DocumentQa({ doc, fileUrl }: Props) {
                 type="button"
                 onClick={() => retryMutation.mutate()}
                 disabled={busy}
-                className="mt-2 rounded bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                // Secondary로 둔다. 하단 "보내기"가 이미 파란 버튼이라, 여기도
+                // 파랗게 하면 화면에 "다음 할 일"이 둘이 되어 우선순위가 사라진다.
+                // 다른 화면의 "다시 시도"도 전부 테두리형이라 모양이 통일된다.
+                className="mt-2 rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 disabled:opacity-50"
               >
                 다시 시도
               </button>
