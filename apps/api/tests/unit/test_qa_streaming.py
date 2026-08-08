@@ -213,6 +213,85 @@ class TestOpenAIStreaming:
         assert p.available is False
 
 
+class TestOllamaNativeStreaming:
+    """QA도 요약과 같은 native 경로를 써야 컨텍스트가 지정된다.
+
+    요약 어댑터만 `/api/chat` + `options.num_ctx`로 옮기고 QA 스트리밍은 OpenAI 호환
+    `/chat/completions`에 남아 있었다. 그 경로는 num_ctx를 받지 못해 기기별 기본
+    컨텍스트(대개 4096)로 모델이 올라가는데, QA 프롬프트는 시스템 계약 + 12,000자
+    청크 + 히스토리라 그 창을 넘는다. Ollama는 **앞부분부터** 조용히 잘라내고, 잘리는
+    앞부분이 바로 "NDJSON 한 줄씩 내라"는 계약이라 모델이 평범한 산문을 돌려준다.
+    파서가 모든 줄을 버려 답이 페이지에 적혀 있어도 매번 "근거를 찾지 못했어요"가
+    나오고, temperature 0이라 재시도해도 같다.
+    """
+
+    def _capture(self, endpoint: str, is_local: bool, lines):
+        seen: dict = {}
+
+        def line_source(url, payload, key):
+            seen["url"] = url
+            seen["payload"] = payload
+            return iter(lines)
+
+        provider = OpenAICompatibleStreamingQaProvider(
+            endpoint=endpoint,
+            model_name="qwen3:8b",
+            api_key="",
+            is_local=is_local,
+            line_source=line_source,
+        )
+        return provider, seen
+
+    def test_ollama_gets_native_url_and_num_ctx(self):
+        from app.services.summary.settings import LOCAL_NUM_CTX
+
+        lines = [
+            '{"message":{"content":"{\\"type\\":\\"final\\",\\"answerStatus\\":\\"answered\\"}\\n"}}'
+        ]
+        p, seen = self._capture("http://127.0.0.1:11434/v1", True, lines)
+
+        list(p.stream_answer(QaRequest(question="q", chunks=[]), _Token()))
+
+        assert seen["url"] == "http://127.0.0.1:11434/api/chat"
+        assert seen["payload"]["options"]["num_ctx"] == LOCAL_NUM_CTX
+        assert seen["payload"]["stream"] is True
+
+    def test_native_frames_are_parsed(self):
+        # native 응답은 SSE가 아니라 NDJSON이고 delta 위치도 다르다.
+        lines = [
+            '{"message":{"content":"{\\"type\\":\\"claim\\",\\"text\\":\\"심장은 뛴다\\","}}',
+            '{"message":{"content":"\\"sourceChunkIds\\":[\\"c1\\"]}\\n"}}',
+            '{"message":{"content":"{\\"type\\":\\"final\\",\\"answerStatus\\":\\"answered\\"}\\n"},"done":true}',
+        ]
+        p, _ = self._capture("http://127.0.0.1:11434/v1", True, lines)
+
+        events = list(p.stream_answer(QaRequest(question="q", chunks=[]), _Token()))
+
+        assert events[0]["type"] == "claim"
+        assert events[0]["text"] == "심장은 뛴다"
+        assert events[-1]["type"] == "final"
+
+    def test_external_provider_stays_on_openai_path(self):
+        # 외부 공급자에게 Ollama 전용 필드를 보내면 400으로 거절당한다.
+        lines = _sse('{"type":"final","answerStatus":"answered"}\n')
+        p, seen = self._capture("https://api.example.com/v1", False, lines)
+
+        list(p.stream_answer(QaRequest(question="q", chunks=[]), _Token()))
+
+        assert seen["url"] == "https://api.example.com/v1/chat/completions"
+        assert "options" not in seen["payload"]
+
+    def test_non_ollama_local_server_stays_on_openai_path(self):
+        # LM Studio·llama.cpp server는 loopback이지만 /api/chat이 없다.
+        lines = _sse('{"type":"final","answerStatus":"answered"}\n')
+        p, seen = self._capture("http://127.0.0.1:1234/v1", True, lines)
+
+        list(p.stream_answer(QaRequest(question="q", chunks=[]), _Token()))
+
+        assert seen["url"] == "http://127.0.0.1:1234/v1/chat/completions"
+        assert "options" not in seen["payload"]
+
+
 class TestFinalStatusSafety:
     """스트림 종료 시 서버 최종 상태 확정 — 미검증/상반 근거를 안전하게 처리한다."""
 

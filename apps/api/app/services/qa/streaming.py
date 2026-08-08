@@ -122,6 +122,11 @@ class OpenAICompatibleStreamingQaProvider:
             self._endpoint and self.model_name and (self.is_local or self._api_key)
         )
 
+    def _uses_ollama_native(self) -> bool:
+        from app.services.summary.endpoint import is_ollama_native_endpoint
+
+        return is_ollama_native_endpoint(self._endpoint, self.is_local)
+
     def stream_answer(self, request: QaRequest, cancel_token: CancelToken) -> Iterator[dict]:
         payload = {
             "model": self.model_name,
@@ -142,7 +147,35 @@ class OpenAICompatibleStreamingQaProvider:
             payload["temperature"] = 0
             payload["reasoning_effort"] = LOCAL_REASONING_EFFORT
             payload["max_tokens"] = LOCAL_MAX_TOKENS
+
         url = f"{self._endpoint}/chat/completions"
+        if self._uses_ollama_native():
+            # OpenAI 호환 경로는 num_ctx를 받지 못해 기기별 기본 컨텍스트(대개 4096)로
+            # 모델이 올라간다. QA 프롬프트는 시스템 계약 + CONTEXT_MAX_CHARS(12,000자)
+            # 청크 + 히스토리라 그 창을 넘고, Ollama는 **앞부분부터** 조용히 잘라낸다.
+            # 잘려나가는 앞부분이 바로 "NDJSON 한 줄씩 내라"는 계약이라 모델이 평범한
+            # 산문을 돌려주고, 파서가 모든 줄을 버려 답이 페이지에 그대로 적힌 질문에도
+            # 매번 "근거를 찾지 못했어요"가 나온다. 요약은 이미 이 경로로 옮겼다.
+            from app.services.summary.endpoint import ollama_native_chat_url
+            from app.services.summary.settings import (
+                LOCAL_KEEP_ALIVE,
+                LOCAL_MAX_TOKENS,
+                LOCAL_NUM_CTX,
+            )
+
+            url = ollama_native_chat_url(self._endpoint)
+            payload = {
+                "model": self.model_name,
+                "messages": payload["messages"],
+                "stream": True,
+                "think": False,  # 사고 흔적이 출력 예산을 잡아먹지 않게 명시적으로 끈다
+                "keep_alive": LOCAL_KEEP_ALIVE,
+                "options": {
+                    "temperature": 0,
+                    "num_ctx": LOCAL_NUM_CTX,
+                    "num_predict": LOCAL_MAX_TOKENS,
+                },
+            }
         if self._line_source is not None:
             sse_lines = self._line_source(url, payload, self._api_key)
         else:
@@ -208,6 +241,15 @@ class OpenAICompatibleStreamingQaProvider:
 
 
 def _extract_delta(frame: dict) -> str:
+    """토큰 조각을 꺼낸다 — OpenAI 호환과 Ollama native는 자리가 다르다.
+
+    OpenAI: {"choices":[{"delta":{"content":"..."}}]}
+    native: {"message":{"content":"..."},"done":false}
+    """
+    message = frame.get("message")
+    if isinstance(message, dict):
+        content = message.get("content")
+        return content if isinstance(content, str) else ""
     try:
         return frame["choices"][0].get("delta", {}).get("content") or ""
     except (KeyError, IndexError, TypeError):

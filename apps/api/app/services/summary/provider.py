@@ -421,9 +421,9 @@ class OpenAICompatibleSummaryProvider:
         return parse_chat_content(data)
 
     def _native_url(self) -> str:
-        """OpenAI 호환 base(.../v1)에서 Ollama native chat 주소를 만든다."""
-        base = self._endpoint[: -len("/v1")] if self._endpoint.endswith("/v1") else self._endpoint
-        return f"{base}/api/chat"
+        from app.services.summary.endpoint import ollama_native_chat_url
+
+        return ollama_native_chat_url(self._endpoint)
 
     def _chat_native(
         self, system: str, user: str, *, max_tokens: int, schema: dict | None
@@ -508,25 +508,9 @@ class OpenAICompatibleSummaryProvider:
         `http://localhost:11434/v1`이 저장돼 있으면 문자열 일치로는 걸러지지 않아
         num_ctx 지정·JSON schema 강제가 통째로 적용되지 않았다.
         """
-        from urllib.parse import urlsplit
+        from app.services.summary.endpoint import is_ollama_native_endpoint
 
-        from app.services.local_ai.settings import OLLAMA_BASE
-        from app.services.summary.endpoint import is_loopback_hostname
-
-        if not self.is_local:
-            return False
-        try:
-            parts = urlsplit(self._endpoint)
-            ollama = urlsplit(OLLAMA_BASE)
-            port = parts.port
-            host = parts.hostname or ""
-        except ValueError:
-            return False
-        return (
-            is_loopback_hostname(host)
-            and port == ollama.port
-            and (parts.path or "").rstrip("/") in ("", "/v1")
-        )
+        return is_ollama_native_endpoint(self._endpoint, self.is_local)
 
     def _chat_for(
         self,

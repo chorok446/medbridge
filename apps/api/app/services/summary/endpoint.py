@@ -138,6 +138,46 @@ def is_loopback_hostname(host: str) -> bool:
     return ip.is_loopback
 
 
+def is_ollama_native_endpoint(endpoint: str, is_local: bool) -> bool:
+    """이 endpoint가 앱이 붙인 Ollama인가 — native `/api/chat`을 써도 되는지.
+
+    `is_local`은 "loopback이다"라는 뜻이지 "Ollama다"가 아니다. LM Studio·llama.cpp
+    server·vLLM 같은 로컬 OpenAI 호환 서버는 `/api/chat`을 제공하지 않으므로,
+    포트·경로까지 확인해 Ollama일 때만 참을 낸다.
+
+    비교는 문자열이 아니라 **정규화된 (loopback, 포트, 경로)**로 한다.
+    `validate_endpoint`는 호스트명을 IP로 바꾸지 않으므로, 같은 Ollama를 가리키는
+    `http://localhost:11434/v1`이 저장돼 있으면 문자열 일치로는 걸러지지 않는다.
+
+    요약과 QA가 같은 설정 행에서 만들어지므로 판정도 한곳에서 한다 — 두 벌로 두면
+    한쪽만 native로 옮기는 일이 다시 생긴다(실제로 QA가 그렇게 남아 있었다).
+    """
+    from urllib.parse import urlsplit
+
+    from app.services.local_ai.settings import OLLAMA_BASE
+
+    if not is_local:
+        return False
+    try:
+        parts = urlsplit(endpoint)
+        ollama = urlsplit(OLLAMA_BASE)
+        port = parts.port
+        host = parts.hostname or ""
+    except ValueError:
+        return False
+    return (
+        is_loopback_hostname(host)
+        and port == ollama.port
+        and (parts.path or "").rstrip("/") in ("", "/v1")
+    )
+
+
+def ollama_native_chat_url(endpoint: str) -> str:
+    """OpenAI 호환 base(.../v1)에서 Ollama native chat 주소를 만든다."""
+    base = endpoint[: -len("/v1")] if endpoint.endswith("/v1") else endpoint
+    return f"{base}/api/chat"
+
+
 def _ip_is_blocked_for_external(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     """외부 endpoint가 연결하면 안 되는 IP인지 — 내부·특수 대역 전부 차단."""
     # IPv4-mapped IPv6(::ffff:a.b.c.d)는 내부 IPv4로 매핑되므로 원래 IPv4로 판정

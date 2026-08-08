@@ -167,6 +167,72 @@ class _FakeVersion:
     stderr = ""
 
 
+class TestDescribeLeaksNoPath:
+    """엔진 스냅샷이 계정 이름을 오류 보고서로 실어 나르지 않게 한다.
+
+    NSIS 설치 모드가 currentUser라 resource_dir()는 `C:\\Users\\<계정>\\...`가 되고,
+    그 값이 MEDBRIDGE_OCR_DIR → describe()의 경로 필드로 흘러간다. ocr_job이 잡마다
+    이걸 로그에 쓰고, error-report가 sidecar.log 꼬리 200줄을 zip에 담는다. 한국에서
+    Windows 계정 이름은 대개 실명이다 — logging.py가 "개인정보는 남기지 않는다"고
+    못박은 계약을 정면으로 깬다.
+    """
+
+    def _engine(self, tmp_path, monkeypatch, user: str):
+        from app.services.ocr import tesseract as mod
+
+        ocr = tmp_path / "Users" / user / "AppData" / "MedBridge" / "resources" / "ocr"
+        (ocr / "tessdata" / "configs").mkdir(parents=True)
+        (ocr / "tessdata" / "kor.traineddata").write_text("", encoding="utf-8")
+        (ocr / "tessdata" / "eng.traineddata").write_text("", encoding="utf-8")
+        (ocr / "tessdata" / "configs" / "tsv").write_text("", encoding="utf-8")
+        (ocr / ("tesseract.exe" if os.name == "nt" else "tesseract")).write_text(
+            "", encoding="utf-8"
+        )
+        monkeypatch.setenv("MEDBRIDGE_OCR_DIR", str(ocr))
+        monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _FakeVersion())
+        return mod.TesseractEngine()
+
+    def test_no_field_carries_the_account_name(self, tmp_path, monkeypatch):
+        engine = self._engine(tmp_path, monkeypatch, "김민준")
+
+        snapshot = engine.describe()
+
+        flat = " ".join(f"{k}={v}" for k, v in snapshot.items())
+        assert "김민준" not in flat, snapshot
+        # 경로 조각 자체가 없어야 한다 — 계정 이름은 그 안에만 들어 있다.
+        assert "Users" not in flat and "AppData" not in flat, snapshot
+
+    def test_still_answers_what_is_missing(self, tmp_path, monkeypatch):
+        """경로를 뺐다고 진단력을 잃으면 안 된다 — 이 스냅샷의 존재 이유다."""
+        engine = self._engine(tmp_path, monkeypatch, "김민준")
+
+        snapshot = engine.describe()
+
+        assert snapshot["binary_found"] is True
+        assert snapshot["tessdata_found"] is True
+        assert snapshot["tessdata_langs"] == "eng,kor"
+        assert snapshot["tsv_config"] is True
+        assert snapshot["ocr_dir_env"] is True
+        assert snapshot["version"] == "v5.4.0"
+
+    def test_reports_a_missing_tessdata(self, tmp_path, monkeypatch):
+        from app.services.ocr import tesseract as mod
+
+        ocr = tmp_path / "ocr"
+        ocr.mkdir()
+        (ocr / ("tesseract.exe" if os.name == "nt" else "tesseract")).write_text(
+            "", encoding="utf-8"
+        )
+        monkeypatch.setenv("MEDBRIDGE_OCR_DIR", str(ocr))
+        monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: _FakeVersion())
+
+        snapshot = mod.TesseractEngine().describe()
+
+        assert snapshot["binary_found"] is True
+        assert snapshot["tessdata_found"] is False
+        assert snapshot["tessdata_langs"] == ""
+
+
 def _tsv(good: int, noise: int) -> str:
     """잘 읽힌 단어 `good`개(conf 0.75)와 노이즈 `noise`개(conf 0.08)."""
     rows = [

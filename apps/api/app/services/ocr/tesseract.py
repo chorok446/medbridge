@@ -175,15 +175,25 @@ class TesseractEngine:
         return self._version
 
     def describe(self) -> dict:
-        """엔진 상태 스냅샷 — 잡 시작 시 한 번 남겨 '무엇이 없어서' 실패했는지 좁힌다."""
+        """엔진 상태 스냅샷 — 잡 시작 시 한 번 남겨 '무엇이 없어서' 실패했는지 좁힌다.
+
+        **경로를 담지 않는다.** NSIS 설치 모드가 currentUser라 리소스 경로는
+        `C:\\Users\\<계정>\\...`가 되고, 한국에서 Windows 계정 이름은 대개 실명이다.
+        이 스냅샷은 ocr_job이 잡마다 로그에 쓰고 그 로그 꼬리 200줄이 오류 보고서
+        zip에 실려 나가므로, 경로를 담으면 지원 요청 파일에 실명이 들어간다
+        (logging.py: "로그에는 식별자만 남기고 개인정보는 남기지 않는다").
+
+        진단력은 잃지 않는다 — 좁혀야 할 질문은 "바이너리를 찾았나, tessdata가
+        있나, 언어가 깔렸나, tsv 설정이 있나"이고 전부 경로 없이 답할 수 있다.
+        """
         tessdata = Path(self._tessdata) if self._tessdata else None
         langs = (
             sorted(p.stem for p in tessdata.glob("*.traineddata")) if tessdata else []
         )
         return {
-            "binary": self._binary or "",
+            "binary_found": self._binary is not None,
             "version": self._version,
-            "tessdata": self._tessdata or "",
+            "tessdata_found": tessdata is not None,
             "tessdata_langs": ",".join(langs),
             "tsv_config": bool(tessdata and (tessdata / "configs" / "tsv").is_file()),
             "ocr_dir_env": bool(os.environ.get("MEDBRIDGE_OCR_DIR")),
