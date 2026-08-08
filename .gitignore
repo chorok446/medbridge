@@ -43,6 +43,11 @@ docs/testing/windows-test-kit/*.pdf
 
 # 로컬 에이전트 도구 설정 (개발자 머신마다 다름)
 .claude/
+# `npx skills add`가 설치하는 서드파티 스킬과 잠금 파일. .claude/와 같은 부류로,
+# 제품 코드가 아니라 개발자 머신의 도구 설정이다. 무시하지 않으면 `git add .` 한 번에
+# 스킬 저장소 수십~수백 파일이 제품 저장소로 딸려 들어온다.
+.agents/
+skills-lock.json
 
 # 임시 작업 산출물 (스모크 테스트 PDF/이미지 등, 재생성 가능)
 tmp/
