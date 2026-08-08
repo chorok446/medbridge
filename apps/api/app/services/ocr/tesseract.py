@@ -64,6 +64,16 @@ def strip_extended_prefix(path: str | None) -> str | None:
     return path
 
 
+# 패키징된 앱에서 tesseract를 부를 때 콘솔 창이 뜨지 않게 한다.
+#
+# sidecar.spec이 `console=False`라 sidecar 프로세스에는 콘솔이 없다. 그 상태에서
+# 콘솔 앱인 tesseract.exe를 그냥 spawn하면 Windows가 **자식마다 새 콘솔을 할당**해
+# 검은 창이 화면에 번쩍인다. capture_output(파이프 리다이렉트)로는 막히지 않는다 —
+# 창 생성 자체를 끄는 플래그가 따로 필요하다. 27쪽 문서면 최대 55번 깜빡인다.
+# DESIGN.md: "개발자 도구처럼 보이게 하지 않는다".
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
 def _tail(text: str, limit: int = 300) -> str:
     """오류 문구 꼬리만 한 줄로. 원문 길이가 로그를 잡아먹지 않게 자른다."""
     flat = " ".join(text.split())
@@ -149,6 +159,7 @@ class TesseractEngine:
                     capture_output=True,
                     text=True,
                     timeout=10,
+                    creationflags=_NO_WINDOW,
                 )
                 first = (out.stdout or out.stderr).splitlines()[0]
                 self._version = first.replace("tesseract", "").strip()
@@ -202,7 +213,8 @@ class TesseractEngine:
             env = dict(os.environ)
             if self._tessdata:
                 env["TESSDATA_PREFIX"] = self._tessdata
-            def run_psm(psm: str) -> list[TsvWord]:
+            def run_psm(psm: str) -> tuple[list[TsvWord], int]:
+                """반환: (임계값을 넘긴 단어, 임계값 미만이라 버린 단어 수)."""
                 cmd = [
                     self._binary or "tesseract",
                     str(rendered.path),
@@ -219,6 +231,7 @@ class TesseractEngine:
                         capture_output=True,
                         env=env,
                         timeout=OCR_TIMEOUT_SECONDS,
+                        creationflags=_NO_WINDOW,
                     )
                 except subprocess.TimeoutExpired as exc:
                     # subprocess.run이 timeout 시 하위 프로세스를 강제 종료한다
@@ -236,17 +249,21 @@ class TesseractEngine:
                     # tessdata/configs/tsv 누락 — 조용한 빈 결과 대신 명시적 실패
                     raise RuntimeError(f"tesseract tsv config missing: {_tail(stderr)}")
                 stdout = proc.stdout.decode("utf-8", errors="replace")
-                return [
-                    w for w in parse_tsv(stdout) if w.confidence >= OCR_MIN_WORD_CONFIDENCE
-                ]
+                # 버린 몫을 함께 돌려준다. 필터가 여기서 걸리므로, 세지 않으면 그
+                # 사실이 이 함수 밖으로 나가지 못하고 하류의 어떤 지표에도 남지 않는다.
+                parsed = parse_tsv(stdout)
+                kept = [w for w in parsed if w.confidence >= OCR_MIN_WORD_CONFIDENCE]
+                return kept, len(parsed) - len(kept)
 
-            tsv_words = run_psm("3")
+            tsv_words, dropped = run_psm("3")
             psm_fallback = False
             if len(tsv_words) < 3:
                 # 자동 분할(psm 3)이 희소 페이지를 버리는 경우 → 단일 블록 모드 재시도
-                retry = run_psm("6")
+                retry, retry_dropped = run_psm("6")
                 if len(retry) > len(tsv_words):
                     tsv_words = retry
+                    # 채택한 실행의 값으로 갈아 끼운다 — 버린 몫은 psm마다 다르다.
+                    dropped = retry_dropped
                     psm_fallback = True
             words: list[OcrWord] = []
             for w in tsv_words:
@@ -287,6 +304,7 @@ class TesseractEngine:
                 render_dpi=rendered.effective_dpi,
                 duration_ms=duration_ms,
                 warnings=rendered.warnings + (["psm_fallback"] if psm_fallback else []),
+                low_quality_dropped=dropped,
             )
         finally:
             rendered.path.unlink(missing_ok=True)  # 임시 이미지 정리

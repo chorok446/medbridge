@@ -156,6 +156,11 @@ async def run_ocr_job(
                     # 하다. 이게 없으면 words=0인 세 사건이 같은 모양으로 남는다: 잘 읽고
                     # 전부 디지털과 중복, 단어가 임계값 미만, 진짜 백지. 대응이 다 다르다.
                     raw_words=len(result.words),
+                    # 신뢰도가 바닥이라 아예 버린 단어 수. 이 필터는 OcrResult를 만들기
+                    # 전에 걸려서, 이게 없으면 버려진 몫이 mean_confidence에도
+                    # result_status에도 raw_words에도 안 잡힌다 — 한 쪽의 85%가 노이즈로
+                    # 빠져도 "신뢰도 0.75, 정상 완료" 한 줄로만 남는다.
+                    dropped_words=result.low_quality_dropped,
                     mean_confidence=run_row.mean_confidence,
                     duration_ms=run_row.duration_ms,
                     # 판독 품질 판정 결과. 이게 없으면 신뢰도 0.35짜리 노이즈 페이지와

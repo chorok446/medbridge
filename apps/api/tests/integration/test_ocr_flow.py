@@ -536,8 +536,12 @@ class TestLowConfidenceIsolation:
         fake = FakeEngine(result=_low_confidence_result(["ㄱㅂㅅ", "ㅁㄴㅇ", "ㄹㅇㅋ", "ㅍㅌㅊ"]))
         monkeypatch.setattr(ocr_service, "engine", lambda: fake)
         doc = await upload_extracted(client, fx.mixed_digital_and_scanned())
-        await client.post(f"/api/documents/{doc['id']}/ocr")
-        await drain_jobs()
+
+        # OCR이 끝나면 청크 재계산 잡이 뒤따라 붙는다(ocr_job.py). 그 잡이 남기는
+        # 로그까지 함께 본다 — 실기기 오류 보고서에 남는 것은 반환값이 아니라 로그다.
+        with capture_logs() as logs:
+            await client.post(f"/api/documents/{doc['id']}/ocr")
+            await drain_jobs()
 
         async with get_session_factory()() as session:
             result = await rebuild_chunks(session, uuid.UUID(doc["id"]))
@@ -546,6 +550,12 @@ class TestLowConfidenceIsolation:
         # 디지털 1쪽이 살아 있으므로 청크는 만들어진다 — 그래서 개수만으로는 멀쩡해 보인다.
         assert result.chunk_count > 0
         assert result.suppressed_low_confidence > 0
+
+        # 반환값만 맞고 로그에 실리지 않으면 이 수정은 아무것도 바꾸지 못한다.
+        done = [e for e in logs if e.get("event") == "chunk_rebuild_done"]
+        assert done, [e.get("event") for e in logs]
+        assert done[-1]["suppressed_low_confidence"] > 0
+        assert done[-1]["chunk_count"] > 0
 
     async def test_low_confidence_keeps_document_unresolved(self, client, monkeypatch):
         """ocr_empty와 같은 취급 — '다 읽었다'로 승격하지 않는다."""

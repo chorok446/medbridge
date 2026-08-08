@@ -165,3 +165,75 @@ class TestExtendedLengthPrefix:
 class _FakeVersion:
     stdout = "tesseract v5.4.0\n"
     stderr = ""
+
+
+def _tsv(good: int, noise: int) -> str:
+    """잘 읽힌 단어 `good`개(conf 0.75)와 노이즈 `noise`개(conf 0.08)."""
+    rows = [
+        "\t".join(
+            ["level", "page_num", "block_num", "par_num", "line_num", "word_num",
+             "left", "top", "width", "height", "conf", "text"]
+        )
+    ]
+    for i in range(good):
+        rows.append(f"5\t1\t1\t1\t1\t{i + 1}\t{i * 10}\t100\t50\t20\t75.0\t단어{i}")
+    for i in range(noise):
+        rows.append(f"5\t1\t1\t1\t2\t{i + 1}\t{i * 10}\t200\t50\t20\t8.0\t노이즈{i}")
+    return "\n".join(rows)
+
+
+def _stub_engine(monkeypatch, tmp_path, tsv: str):
+    """렌더·subprocess를 대신해 주어진 TSV를 돌려주는 엔진."""
+    from app.services.ocr import tesseract as mod
+
+    engine = mod.TesseractEngine.__new__(mod.TesseractEngine)
+    engine._binary = "tesseract"
+    engine._tessdata = None
+    engine._version = "5.4.0"
+
+    class _Rendered:
+        path = tmp_path / "p.png"
+        effective_dpi = 300
+        page_width_pt = 595.0
+        page_height_pt = 842.0
+        warnings: list[str] = []
+
+    _Rendered.path.write_bytes(b"")
+    monkeypatch.setattr(mod, "render_page", lambda *a, **k: _Rendered())
+    monkeypatch.setattr(
+        mod.subprocess,
+        "run",
+        lambda *a, **k: type(
+            "P", (), {"returncode": 0, "stdout": tsv.encode(), "stderr": b""}
+        )(),
+    )
+    return engine
+
+
+class TestNoiseDropIsVisible:
+    """0.20 미만으로 버린 단어가 어느 지표에도 남지 않던 문제.
+
+    `OCR_MIN_WORD_CONFIDENCE` 필터가 `OcrResult`를 만들기 **전에** 걸리므로,
+    mean_confidence도 classify_result의 low_ratio도 raw_words도 전부 살아남은
+    단어만 센다. 한 쪽의 85%가 노이즈로 버려져도 로그에는 "신뢰도 0.75, 정상 완료"로
+    남아, "요약에 이 내용이 왜 없나"를 물을 때 좁힐 단서가 하나도 없다.
+    """
+
+    def test_dropped_word_count_survives_the_noise_filter(self, tmp_path, monkeypatch):
+        engine = _stub_engine(monkeypatch, tmp_path, _tsv(good=15, noise=85))
+
+        result = engine.recognize_page("x.pdf", 1)
+
+        # 살아남은 단어만 보면 이 쪽은 깨끗해 보인다 — 그게 문제였다.
+        assert len(result.words) == 15
+        assert result.mean_confidence == pytest.approx(0.75)
+        # 버려진 85단어가 숫자로 남아야 "깨끗함"과 "대부분 버림"이 로그에서 갈린다.
+        assert result.low_quality_dropped == 85
+
+    def test_clean_page_reports_nothing_dropped(self, tmp_path, monkeypatch):
+        engine = _stub_engine(monkeypatch, tmp_path, _tsv(good=12, noise=0))
+
+        result = engine.recognize_page("x.pdf", 1)
+
+        assert len(result.words) == 12
+        assert result.low_quality_dropped == 0

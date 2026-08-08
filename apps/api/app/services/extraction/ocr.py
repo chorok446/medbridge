@@ -43,6 +43,13 @@ class OcrResult:
     render_dpi: int = 0
     duration_ms: int = 0
     warnings: list[str] = field(default_factory=list)
+    # OCR_MIN_WORD_CONFIDENCE 미만이라 `words`에 넣지 않은 단어 수.
+    #
+    # 이 필터는 OcrResult를 만들기 전에 걸린다. 그래서 이 값이 없으면 버려진 몫이 어느
+    # 지표에도 남지 않는다 — mean_confidence도 classify_result의 low_ratio도 살아남은
+    # 단어만 세기 때문에, 한 쪽의 85%가 노이즈로 빠져도 "신뢰도 0.75, 정상 완료"로
+    # 기록된다. 그러면 요약·검색은 그 쪽 내용을 못 본 채 문서가 '다 읽힌' 것이 된다.
+    low_quality_dropped: int = 0
 
 
 class OcrEngine(Protocol):
