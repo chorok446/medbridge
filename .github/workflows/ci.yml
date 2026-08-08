@@ -146,6 +146,67 @@ jobs:
             정적 export 빌드|${{ steps.build.outcome }}|
         run: python3 "$GITHUB_WORKSPACE/scripts/ci_summary.py"
 
+  # 의존성 취약점 스캔.
+  #
+  # **비차단으로 시작한다.** 지금 이미 JS 쪽 high 7건, Python 쪽 2건(pypdf)이 잡히므로
+  # 차단형으로 넣으면 첫날부터 모든 PR이 빨간불이 되고, 그러면 사람들은 CI를 읽지 않게
+  # 된다. 리포트를 먼저 쌓아 무엇이 실제로 우리에게 닿는 취약점인지 가려낸 뒤 차단으로
+  # 올린다.
+  #
+  # 이 앱은 사용자 PC에서 임의의 PDF를 연다 — 파서 취약점이 곧 공격면이라 리포트만으로도
+  # 값어치가 있다(첫 실행에서 pypdf 6.14.2의 GHSA 2건이 걸렸다).
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6
+        with:
+          version: 11
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/web/pnpm-lock.yaml
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: apps/api/uv.lock
+      - name: JS 의존성 스캔 (pnpm audit, high 이상)
+        id: jsaudit
+        continue-on-error: true
+        working-directory: apps/web
+        run: |
+          pnpm install --frozen-lockfile
+          set +e
+          pnpm audit --audit-level=high 2>&1 | sed -r 's/\x1b\[[0-9;]*m//g' | tee audit.log
+          status=${PIPESTATUS[0]}
+          echo "result=$(grep -E '^[0-9]+ vulnerabilit' audit.log | tail -1)" >> "$GITHUB_OUTPUT"
+          exit $status
+      - name: Python 의존성 스캔 (pip-audit)
+        id: pyaudit
+        continue-on-error: true
+        working-directory: apps/api
+        run: |
+          # 잠금 파일을 그대로 감사한다 — 설치된 환경이 아니라 우리가 고정한 버전이
+          # 검사 대상이어야 한다. --no-emit-project: 우리 패키지 자체는 PyPI에 없다.
+          uv export --format requirements-txt --no-dev --no-emit-project > requirements-audit.txt
+          set +e
+          uvx pip-audit@2.9.0 -r requirements-audit.txt --progress-spinner off 2>&1 | tee pipaudit.log
+          status=${PIPESTATUS[0]}
+          echo "result=$(grep -E 'known vulnerabilit|No known vulnerabilities' pipaudit.log | tail -1)" \
+            >> "$GITHUB_OUTPUT"
+          exit $status
+      - name: 실행 요약
+        if: always()
+        env:
+          CI_SUMMARY_ICON: 🔒
+          CI_SUMMARY_TITLE: 의존성 보안 스캔 (비차단)
+          CI_SUMMARY_ROWS: |
+            JS (pnpm audit)|${{ steps.jsaudit.outcome }}|${{ steps.jsaudit.outputs.result }}
+            Python (pip-audit)|${{ steps.pyaudit.outcome }}|${{ steps.pyaudit.outputs.result }}
+        run: python3 "$GITHUB_WORKSPACE/scripts/ci_summary.py"
+
   # Windows 빌드 검증 — Release는 생성하지 않고 artifact만 업로드한다
   windows-build:
     runs-on: windows-latest
@@ -293,7 +354,9 @@ jobs:
   # 열자마자 "무엇이 깨졌나"를 보려면 종합이 하나 필요하다.
   summary:
     if: always()
-    needs: [versions, backend, frontend, windows-build]
+    # security는 비차단이라 잡 결과가 항상 success다(단계에 continue-on-error).
+    # 종합 표에는 실려야 하므로 needs에 넣되, 이 때문에 전체가 빨개지지는 않는다.
+    needs: [versions, backend, frontend, security, windows-build]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -307,6 +370,7 @@ jobs:
             버전 일치|${{ needs.versions.result }}|
             백엔드 (ubuntu)|${{ needs.backend.result }}|
             프런트엔드 (ubuntu)|${{ needs.frontend.result }}|
+            의존성 보안 스캔|${{ needs.security.result }}|비차단 — 표는 위 섹션 참고
             Windows 빌드|${{ needs['windows-build'].result }}|
         run: python3 scripts/ci_summary.py
       - name: 실패한 잡이 있으면 이 잡도 실패시킨다
