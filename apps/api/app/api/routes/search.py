@@ -29,6 +29,7 @@ class ChunkStatusOut(CamelModel):
     job_status: str | None
     embedding_available: bool
     failure_code: str | None = None
+    suppressed_pages: int = 0
 
 
 class SearchRequest(CamelModel):
@@ -85,6 +86,7 @@ async def chunk_status_route(
             job_status=status.job_status,
             embedding_available=status.embedding_available,
             failure_code=status.failure_code,
+            suppressed_pages=status.suppressed_pages,
         )
     )
 

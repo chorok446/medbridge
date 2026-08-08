@@ -10,7 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError, ErrorCode
 from app.models.document import Document, DocumentJob
-from app.models.enums import JobStatus, JobType
+from app.models.enums import JobStatus, JobType, OcrRunStatus
+from app.models.extraction import DocumentPage
 from app.models.search import DocumentChunk
 from app.services.search.embedding import get_embedding_provider
 from app.services.search.hybrid import SearchResult
@@ -64,6 +65,11 @@ class ChunkStatus:
     # 청크가 0개인 이유. 이게 없으면 화면은 "글자가 없는 문서"와 "읽었지만 못 믿어서
     # 뺀 문서"에 똑같은 안내를 하게 되고, 후자에는 그 안내가 통하지 않는다.
     failure_code: str | None = None
+    # 인식 품질이 낮아 청크에서 빠진 쪽 수. failure_code는 청크가 **0개**일 때만
+    # 채워지므로, 40/45쪽이 빠져도 청크가 5쪽 분량 남아 있으면 화면에는 아무 표시도
+    # 없이 "검색 준비 완료"가 된다. 사용자는 문서의 90%가 검색·질문·요약에서 보이지
+    # 않는데 그 사실을 알 길이 없다.
+    suppressed_pages: int = 0
 
 
 async def get_chunk_status(db: AsyncSession, doc: Document) -> ChunkStatus:
@@ -75,12 +81,21 @@ async def get_chunk_status(db: AsyncSession, doc: Document) -> ChunkStatus:
         )
     ).scalar_one()
     job = await _latest_chunk_job(db, doc.id)
+    suppressed = (
+        await db.execute(
+            select(func.count()).select_from(DocumentPage).where(
+                DocumentPage.document_id == doc.id,
+                DocumentPage.ocr_status == OcrRunStatus.OCR_LOW_CONFIDENCE.value,
+            )
+        )
+    ).scalar_one()
     return ChunkStatus(
         chunk_count=chunk_count,
         last_rebuilt_at=job.completed_at if job and job.status == JobStatus.SUCCEEDED else None,
         job_status=job.status.value if job else None,
         embedding_available=get_embedding_provider().available,
         failure_code=job.failure_code if job and job.status == JobStatus.FAILED else None,
+        suppressed_pages=suppressed,
     )
 
 

@@ -6,7 +6,8 @@ import uuid
 from sqlalchemy import func, select
 
 from app.db.session import get_session_factory
-from app.models.extraction import DocumentTable
+from app.models.enums import OcrRunStatus
+from app.models.extraction import DocumentPage, DocumentTable
 from app.models.search import DocumentChunk
 from app.services.extraction.ocr import OcrResult
 from app.services.ocr import service as ocr_service
@@ -201,6 +202,38 @@ class TestChunkRebuildIdempotency:
                 ).all()
             ]
         assert len(hashes) == len(set(hashes))
+
+    async def test_status_reports_pages_left_out_of_the_index(self, client):
+        """일부만 억제된 문서도 그 사실을 화면에 알린다.
+
+        failure_code는 청크가 **0개**일 때만 채워진다. 45쪽 중 40쪽이 저신뢰로
+        빠져도 5쪽 분량 청크가 남으면 화면에는 아무 표시 없이 "검색 준비 완료"가
+        된다 — 사용자는 문서의 90%가 검색·질문·요약에서 보이지 않는데 알 길이 없다.
+        """
+        doc = await upload_extracted(client, fx.single_column_korean(pages=2))
+        await _rebuild(doc["id"])
+
+        # 한 쪽을 저신뢰로 표시한다(OCR이 읽었지만 못 믿는 상태).
+        async with get_session_factory()() as session:
+            page = (
+                await session.execute(
+                    select(DocumentPage).where(
+                        DocumentPage.document_id == uuid.UUID(doc["id"]),
+                        DocumentPage.page_number == 1,
+                    )
+                )
+            ).scalars().one()
+            page.ocr_status = OcrRunStatus.OCR_LOW_CONFIDENCE.value
+            await session.commit()
+
+        status = (
+            await client.get(f"/api/documents/{doc['id']}/chunks/status")
+        ).json()["data"]
+
+        assert status["suppressedPages"] == 1
+        # 청크는 남아 있으므로 실패 코드로는 드러나지 않는다 — 그래서 이 필드가 필요하다.
+        assert status["chunkCount"] > 0
+        assert status["failureCode"] is None
 
     async def test_delete_document_cascades_chunks(self, client):
         doc = await upload_extracted(client, fx.single_column_korean(pages=1))

@@ -270,9 +270,23 @@ async def run_ocr_job(
             changed=changed,
         )
 
-    # 내용이 바뀌었으면 청크를 자동으로 다시 만든다(요약은 자동 생성하지 않는다 —
-    # 모델 호출은 사용자가 실행). 청크 재생성 실패는 OCR 완료 자체를 되돌리지 않는다.
-    if changed > 0:
+    # 청크를 자동으로 다시 만든다(요약은 자동 생성하지 않는다 — 모델 호출은 사용자가
+    # 실행). 청크 재생성 실패는 OCR 완료 자체를 되돌리지 않는다.
+    #
+    # 조건은 "내용이 바뀌었나"가 아니라 "청크가 실제로 낡았거나 없나"다. changed > 0
+    # 하나만 보면, 청크 잡이 앱 종료로 중단된 문서에서 OCR을 다시 돌려도 결정론적
+    # 엔진이 같은 결과를 내 changed == 0이 되고 재생성이 아예 등록되지 않는다 —
+    # 검색·질문 화면은 영영 준비되지 않은 문서로 남고, 화면이 시키는 '다시 실행'을
+    # 눌러도 아무 일이 일어나지 않는다. `processed > 0`으로 되돌리는 것도 답이 아니다.
+    # 그러면 같은 결과를 다시 쓴 재실행마다 revision이 올라 요약 노드 수백 개가
+    # 재사용 키에서 무효가 된다.
+    #
+    # chunk_revision은 성공한 재생성에서만 content_revision과 같아지므로, 그 불일치가
+    # 곧 "없거나 낡았다"는 뜻이다.
+    async with factory() as session:
+        doc = await session.get(Document, document_id)
+        stale_chunks = doc is not None and doc.chunk_revision != doc.content_revision
+    if changed > 0 or stale_chunks:
         async with factory() as session:
             doc = await session.get(Document, document_id)
             if doc is not None and doc.deleted_at is None:
@@ -293,4 +307,9 @@ async def mark_ocr_job_crashed(document_id: uuid.UUID) -> None:
             job.status = JobStatus.FAILED
             job.failure_code = "OCR_CRASHED"
             job.completed_at = datetime.now(UTC)
+            # 실행 기록도 함께 닫는다 — RUNNING으로 남으면 다음 실행의 "바뀜" 판정이
+            # 항상 참이 되어 요약 재사용 키가 통째로 무효가 된다.
+            await ocr_service._close_open_runs(
+                session, document_id, OcrRunStatus.OCR_FAILED
+            )
             await session.commit()

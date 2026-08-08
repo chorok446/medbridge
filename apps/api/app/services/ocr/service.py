@@ -136,8 +136,33 @@ async def cancel_ocr(db: AsyncSession, doc: Document) -> Document:
     ).scalars()
     for page in pending_pages:
         page.ocr_status = OcrRunStatus.OCR_CANCELLED.value
+    await _close_open_runs(db, doc.id, OcrRunStatus.OCR_CANCELLED)
     await db.commit()
     return doc
+
+
+async def _close_open_runs(
+    db: AsyncSession, document_id: uuid.UUID, status: OcrRunStatus
+) -> None:
+    """RUNNING으로 남은 실행 기록을 끝난 것으로 확정한다.
+
+    `apply_ocr_result`의 "본문이 실제로 바뀌었나" 판정은 직전 OcrRun의 status를
+    본다. 취소·크래시로 끝난 실행이 RUNNING인 채로 남으면 그 비교가 항상 참이 되어,
+    결과가 바이트 단위로 같은 재실행도 "바뀜"으로 판정된다. 그러면 content_revision이
+    올라 이미 성공시켜 둔 요약 노드 수백 개가 재사용 키에서 통째로 무효가 되고,
+    사용자는 내용이 하나도 바뀌지 않았는데 요약을 처음부터 다시 만들어야 한다.
+    """
+    rows = (
+        await db.execute(
+            select(OcrRun).where(
+                OcrRun.document_id == document_id,
+                OcrRun.status == OcrRunStatus.RUNNING,
+            )
+        )
+    ).scalars()
+    for run in rows:
+        run.status = status
+        run.completed_at = datetime.now(UTC)
 
 
 async def _latest_ocr_job(db: AsyncSession, document_id: uuid.UUID) -> DocumentJob | None:

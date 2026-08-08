@@ -3,7 +3,7 @@
 import uuid
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from structlog.testing import capture_logs
 
 from app.db.session import get_session_factory
@@ -650,6 +650,166 @@ class TestLowConfidenceIsolation:
 
         assert job.status == JobStatus.SUCCEEDED, job.failure_reason
         assert job.failure_code is None
+
+    async def test_rerun_rebuilds_chunks_when_they_are_missing(
+        self, client, monkeypatch
+    ):
+        """결과가 같아도 청크가 없으면 다시 만든다 — 자기치유 경로.
+
+        게이트가 `changed > 0`뿐이면, 청크 잡이 앱 종료로 중단된 문서에서 OCR을
+        다시 돌려도 결정론적 엔진이 같은 결과를 내 changed==0이 되고 재생성이
+        아예 등록되지 않는다. 검색·질문 화면은 영영 준비되지 않은 문서로 남고,
+        화면이 시키는 '다시 실행'을 눌러도 아무 일이 일어나지 않는다.
+
+        내용이 바뀌었는지가 아니라 **청크가 실제로 낡았는지**를 봐야 한다.
+        chunk_revision은 성공한 재생성에서만 content_revision과 같아지므로,
+        그 불일치가 곧 "없거나 낡았다"는 뜻이다.
+        """
+        fake = FakeEngine(
+            result=OcrResult(
+                page_number=1,
+                words=[
+                    OcrWord(bbox=(10, 10 + i * 12, 100, 20 + i * 12), text=f"심장{i}",
+                            confidence=0.95, block_index=1, paragraph_index=1,
+                            line_index=1, word_index=i + 1)
+                    for i in range(6)
+                ],
+                mean_confidence=0.95,
+            )
+        )
+        monkeypatch.setattr(ocr_service, "engine", lambda: fake)
+        doc = await upload_extracted(client, fx.blank_image_page())
+        await client.post(f"/api/documents/{doc['id']}/ocr")
+        await drain_jobs()
+
+        # 청크 잡이 중단된 상황을 만든다 — 청크를 지우고 revision 도장도 되돌린다.
+        async with get_session_factory()() as session:
+            await session.execute(
+                delete(DocumentChunk).where(
+                    DocumentChunk.document_id == uuid.UUID(doc["id"])
+                )
+            )
+            row = await session.get(Document, uuid.UUID(doc["id"]))
+            row.chunk_revision = None
+            await session.commit()
+
+        # 같은 결과가 나오는 재실행 — changed는 0이다. 첫 실행이 requires_ocr을
+        # 내렸으므로 대상 페이지를 명시한다(화면의 '이 페이지 다시 읽기'와 같은 경로).
+        await client.post(f"/api/documents/{doc['id']}/ocr", json={"pages": [1]})
+        await drain_jobs()
+
+        async with get_session_factory()() as session:
+            chunks = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(DocumentChunk)
+                    .where(DocumentChunk.document_id == uuid.UUID(doc["id"]))
+                )
+            ).scalar_one()
+        assert chunks > 0, "청크가 비었는데 재실행이 다시 만들지 않았다"
+
+
+class TestRunRowsAreClosed:
+    """끝난 실행은 ocr_runs 행도 닫는다.
+
+    apply_ocr_result의 "본문이 실제로 바뀌었나" 판정은 직전 OcrRun의 status를 본다.
+    취소·크래시로 끝난 실행이 RUNNING인 채로 남으면 그 비교가 항상 참이 되어,
+    결과가 바이트 단위로 같은 재실행도 "바뀜"으로 판정된다. 그러면
+    content_revision이 올라 이미 성공시켜 둔 요약 노드 수백 개(실기기 794개)가
+    재사용 키에서 통째로 무효가 되고, 사용자는 내용이 하나도 바뀌지 않았는데
+    요약을 처음부터 몇 시간에 걸쳐 다시 만들어야 한다.
+    """
+
+    async def _open_runs(self, doc_id: str) -> int:
+        async with get_session_factory()() as session:
+            return (
+                await session.execute(
+                    select(func.count())
+                    .select_from(OcrRun)
+                    .where(
+                        OcrRun.document_id == uuid.UUID(doc_id),
+                        OcrRun.status == OcrRunStatus.RUNNING,
+                    )
+                )
+            ).scalar_one()
+
+    async def test_cancel_closes_the_open_run(self, client, monkeypatch):
+        monkeypatch.setattr(ocr_service, "engine", lambda: FakeEngine())
+        doc = await upload_extracted(client, fx.blank_image_page())
+        await client.post(f"/api/documents/{doc['id']}/ocr")
+
+        # 잡을 태우기 전에 취소한다 — 열린 run 행이 남는 실제 경로다.
+        async with get_session_factory()() as session:
+            row = await session.get(Document, uuid.UUID(doc["id"]))
+            session.add(
+                OcrRun(
+                    document_id=row.id,
+                    page_id=(
+                        await session.execute(
+                            select(DocumentPage.id).where(
+                                DocumentPage.document_id == row.id
+                            )
+                        )
+                    ).scalars().first(),
+                    engine="tesseract",
+                    engine_version="fake",
+                    language="kor+eng",
+                    render_dpi=300,
+                    preprocessing_json={},
+                )
+            )
+            await session.commit()
+        assert await self._open_runs(doc["id"]) > 0
+
+        await client.post(f"/api/documents/{doc['id']}/ocr/cancel")
+
+        assert await self._open_runs(doc["id"]) == 0
+
+    async def test_crash_boundary_closes_the_open_run(self, client, monkeypatch):
+        from app.services.tasks.ocr_job import mark_ocr_job_crashed
+
+        monkeypatch.setattr(ocr_service, "engine", lambda: FakeEngine())
+        doc = await upload_extracted(client, fx.blank_image_page())
+        await client.post(f"/api/documents/{doc['id']}/ocr")
+
+        # 앱이 꺼진 순간을 재현한다: 잡은 RUNNING인 채, 실행 기록도 열린 채 남는다.
+        async with get_session_factory()() as session:
+            row = await session.get(Document, uuid.UUID(doc["id"]))
+            job = (
+                await session.execute(
+                    select(DocumentJob)
+                    .where(
+                        DocumentJob.document_id == row.id,
+                        DocumentJob.job_type == JobType.OCR_DOCUMENT,
+                    )
+                    .order_by(DocumentJob.created_at.desc())
+                    .limit(1)
+                )
+            ).scalars().one()
+            job.status = JobStatus.RUNNING
+            job.completed_at = None
+            session.add(
+                OcrRun(
+                    document_id=row.id,
+                    page_id=(
+                        await session.execute(
+                            select(DocumentPage.id).where(
+                                DocumentPage.document_id == row.id
+                            )
+                        )
+                    ).scalars().first(),
+                    engine="tesseract",
+                    engine_version="fake",
+                    language="kor+eng",
+                    render_dpi=300,
+                    preprocessing_json={},
+                )
+            )
+            await session.commit()
+
+        await mark_ocr_job_crashed(uuid.UUID(doc["id"]))
+
+        assert await self._open_runs(doc["id"]) == 0
 
     async def test_all_low_confidence_does_not_report_chunking_success(
         self, client, monkeypatch

@@ -54,6 +54,7 @@ export function DocumentSearch({ documentId, onNavigate }: Props) {
   }
 
   const chunkCount = statusQuery.data?.chunkCount ?? 0;
+  const suppressedPages = statusQuery.data?.suppressedPages ?? 0;
   const lowConfidenceOnly = statusQuery.data?.failureCode === "CHUNK_LOW_CONFIDENCE_ONLY";
   const embeddingAvailable = statusQuery.data?.embeddingAvailable ?? false;
   const results: SearchResultItem[] = searchQuery.data ?? [];
@@ -160,6 +161,17 @@ export function DocumentSearch({ documentId, onNavigate }: Props) {
           </p>
         )}
       </form>
+
+      {/* 일부만 빠진 문서는 failureCode로 드러나지 않는다 — 청크가 남아 있으면
+          "준비 완료"로 보이고, 사용자는 문서의 상당 부분이 검색·질문·요약에서
+          보이지 않는데 그 사실을 알 길이 없다. */}
+      {suppressedPages > 0 && chunkCount > 0 && (
+        <p className="rounded bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
+          이 자료의 {suppressedPages}쪽은 글자 인식 품질이 낮아 검색에서 빠졌어요. 그
+          쪽 내용은 검색·질문·요약에 나오지 않습니다. 더 선명한 스캔본으로 다시 올리면
+          찾을 수 있어요.
+        </p>
+      )}
 
       {usedKeywordOnlyFallback && (
         <p className="rounded bg-slate-50 px-3 py-2 text-xs text-slate-600">
