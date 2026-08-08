@@ -269,7 +269,7 @@ export function ExtractionReview({ doc, fileUrl }: Props) {
                     type="button"
                     onClick={() => pageOcrMutation.mutate(page)}
                     disabled={pageOcrMutation.isPending || ocrRunning}
-                    className="mt-2 rounded bg-amber-600 px-4 py-2 font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+                    className="mt-2 rounded bg-amber-700 px-4 py-2 font-medium text-white hover:bg-amber-800 disabled:opacity-50"
                   >
                     현재 페이지 이미지로 읽기
                   </button>

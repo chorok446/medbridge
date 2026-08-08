@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { ConfirmDialog, PromptDialog } from "@/components/confirm-dialog";
 import { DocumentTable } from "@/components/document-table";
 import { ErrorBox } from "@/components/error-box";
 import { UploadDropzone } from "@/components/upload-dropzone";
@@ -74,19 +75,10 @@ export default function DocumentsPage() {
     onError: () => setActionError("오류 신고를 저장하지 못했습니다. 잠시 후 다시 시도해 주세요."),
   });
 
-  function handleDelete(id: string, title: string) {
-    // 확인 모달: 기본(Esc/취소)은 취소 행동. 삭제 대상 이름을 명시한다.
-    if (window.confirm(`'${title}'을(를) 삭제할까요?\n파일과 학습 기록이 함께 삭제되며 되돌릴 수 없습니다.`)) {
-      deleteMutation.mutate(id);
-    }
-  }
-
-  function handleRename(id: string, currentTitle: string) {
-    const title = window.prompt("새 이름을 입력해 주세요.", currentTitle);
-    if (title && title.trim() && title.trim() !== currentTitle) {
-      renameMutation.mutate({ id, title: title.trim() });
-    }
-  }
+  // 확인 대상은 상태로 들고 있는다. 여는 쪽은 "무엇을" 만 정하고, 취소·Esc·초점
+  // 처리는 다이얼로그가 맡는다.
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; title: string } | null>(null);
+  const [pendingRename, setPendingRename] = useState<{ id: string; title: string } | null>(null);
 
   return (
     <div className="mx-auto w-full max-w-4xl px-4 py-8">
@@ -119,12 +111,40 @@ export default function DocumentsPage() {
             items={data.items}
             busyId={busyId}
             onRetry={(id) => retryMutation.mutate(id)}
-            onRename={handleRename}
-            onDelete={(id, title) => handleDelete(id, title)}
+            onRename={(id, title) => setPendingRename({ id, title })}
+            onDelete={(id, title) => setPendingDelete({ id, title })}
             onReport={(id) => reportMutation.mutate(id)}
           />
         )}
       </div>
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title={`'${pendingDelete?.title ?? ""}'을(를) 삭제할까요?`}
+        description="파일과 학습 기록이 함께 삭제되며 되돌릴 수 없습니다."
+        confirmLabel="삭제"
+        onConfirm={() => {
+          if (pendingDelete) deleteMutation.mutate(pendingDelete.id);
+          setPendingDelete(null);
+        }}
+        onCancel={() => setPendingDelete(null)}
+      />
+
+      <PromptDialog
+        open={pendingRename !== null}
+        title="새 이름을 입력해 주세요."
+        label="자료 이름"
+        defaultValue={pendingRename?.title ?? ""}
+        confirmLabel="바꾸기"
+        onConfirm={(title) => {
+          // 이름이 그대로면 요청을 보내지 않는다 — 목록만 무의미하게 다시 불러온다.
+          if (pendingRename && title !== pendingRename.title) {
+            renameMutation.mutate({ id: pendingRename.id, title });
+          }
+          setPendingRename(null);
+        }}
+        onCancel={() => setPendingRename(null)}
+      />
     </div>
   );
 }

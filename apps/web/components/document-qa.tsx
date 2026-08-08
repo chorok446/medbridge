@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { CitedText, SourceList } from "@/components/citations";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { PdfViewer } from "@/components/pdf-viewer";
 import {
   type CitationSource,
@@ -78,6 +79,7 @@ export function DocumentQa({ doc, fileUrl }: Props) {
   const queryClient = useQueryClient();
   const nav = usePdfNavigation();
   const [input, setInput] = useState("");
+  const [confirmDeleteThread, setConfirmDeleteThread] = useState(false);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
   // 마지막 선택을 브라우저에 기억한다 — 서버에 저장하지 않는다. 이 패널은
@@ -217,9 +219,7 @@ export function DocumentQa({ doc, fileUrl }: Props) {
           {effectiveThreadId && (
             <button
               type="button"
-              onClick={() => {
-                if (window.confirm("이 대화를 삭제할까요?")) deleteMutation.mutate(effectiveThreadId);
-              }}
+              onClick={() => setConfirmDeleteThread(true)}
               className="rounded border border-red-200 px-2.5 py-1 text-red-700 hover:bg-red-50"
             >
               삭제
@@ -415,6 +415,18 @@ export function DocumentQa({ doc, fileUrl }: Props) {
           </form>
         </div>
       </aside>
+
+      <ConfirmDialog
+        open={confirmDeleteThread}
+        title="이 대화를 삭제할까요?"
+        description="주고받은 질문과 답변이 모두 지워지며 되돌릴 수 없습니다."
+        confirmLabel="삭제"
+        onConfirm={() => {
+          if (effectiveThreadId) deleteMutation.mutate(effectiveThreadId);
+          setConfirmDeleteThread(false);
+        }}
+        onCancel={() => setConfirmDeleteThread(false)}
+      />
     </div>
   );
 }

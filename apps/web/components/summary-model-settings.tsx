@@ -131,7 +131,7 @@ function SummaryModelForm({
           placeholder={isLocal ? "예: http://localhost:11434/v1" : "예: https://api.example.com/v1"}
           className="rounded border border-slate-300 px-3 py-2"
         />
-        <span className="text-xs text-slate-400">
+        <span className="text-xs text-slate-500">
           {isLocal
             ? "로컬 모델은 내 컴퓨터 주소(localhost 또는 127.0.0.1)만 쓸 수 있어요."
             : "외부 모델 주소는 https:// 로 시작해야 안전하게 연결돼요."}
@@ -156,7 +156,7 @@ function SummaryModelForm({
           placeholder={initial.hasApiKey ? "변경하려면 새 키 입력" : "API 키 입력"}
           className="rounded border border-slate-300 px-3 py-2"
         />
-        <span className="text-xs text-slate-400">
+        <span className="text-xs text-slate-500">
           키는 이 기기의 안전한 저장소에만 보관되고 화면에 다시 표시되지 않습니다.
         </span>
       </label>

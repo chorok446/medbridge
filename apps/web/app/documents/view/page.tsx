@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { ErrorBox } from "@/components/error-box";
 import { DocumentQa } from "@/components/document-qa";
 import { ExtractionReview } from "@/components/extraction-review";
@@ -26,6 +27,7 @@ function DocumentDetail() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [notice, setNotice] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   // null = 아직 사용자가 고르지 않음. 기본 탭은 문서 상태를 보고 정한다(아래 effectiveTab).
   const [mainTab, setMainTab] = useState<"preview" | "extraction" | "summary" | "qa" | null>(null);
   // 문서를 처음 본 시점의 기본 탭. 폴링으로 상태가 바뀌어도 여기서 고정된다.
@@ -119,13 +121,7 @@ function DocumentDetail() {
           <button
             type="button"
             disabled={deleteMutation.isPending}
-            onClick={() => {
-              if (
-                window.confirm("이 학습자료를 삭제할까요? 파일과 학습 기록이 함께 삭제됩니다.")
-              ) {
-                deleteMutation.mutate();
-              }
-            }}
+            onClick={() => setConfirmDelete(true)}
             className="rounded border border-red-200 px-4 py-2 text-sm text-red-700 hover:bg-red-50 disabled:opacity-50"
           >
             삭제
@@ -284,6 +280,18 @@ function DocumentDetail() {
         </aside>
       </div>
       )}
+
+      <ConfirmDialog
+        open={confirmDelete}
+        title="이 학습자료를 삭제할까요?"
+        description="파일과 학습 기록이 함께 삭제되며 되돌릴 수 없습니다."
+        confirmLabel="삭제"
+        onConfirm={() => {
+          deleteMutation.mutate();
+          setConfirmDelete(false);
+        }}
+        onCancel={() => setConfirmDelete(false)}
+      />
     </div>
   );
 }

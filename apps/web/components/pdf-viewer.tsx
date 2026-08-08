@@ -200,7 +200,11 @@ export function PdfViewer({
           </p>
         ) : (
           <div
-            className="relative mx-auto w-fit shadow"
+            // 그림자 대신 1px 테두리로 종이의 가장자리를 낸다. DESIGN.md는 깊이를
+            // (1) 바탕 위 흰 종이의 명도 차, (2) 1px 테두리 두 가지로만 낸다고
+            // 못박았고 "box-shadow 값은 코드베이스에 존재하지 않는다"고 적혀 있다.
+            // 회색 바탕(bg-slate-100) 위 흰 캔버스라 (1)은 이미 성립한다.
+            className="relative mx-auto w-fit border border-slate-300"
             onPointerDown={(e) => {
               if (!rendered || !onPagePointerDown) return;
               const el = e.currentTarget.getBoundingClientRect();
@@ -225,7 +229,9 @@ export function PdfViewer({
                   <div
                     key={`${flashKey}-${i}`}
                     data-testid="pdf-highlight"
-                    className="pointer-events-none absolute animate-pulse rounded-sm border-2 border-amber-500 bg-amber-300/30"
+                    // 깜빡임을 끄면 테두리와 틴트는 남는다 — 위치를 알리는 일은
+                    // 움직임이 아니라 색이 하므로, 동작을 줄여도 정보는 잃지 않는다.
+                    className="pointer-events-none absolute animate-pulse rounded-sm border-2 border-amber-500 bg-amber-300/30 motion-reduce:animate-none"
                     style={{
                       left: s.x0,
                       top: s.y0,

@@ -68,7 +68,9 @@ export function StartupGate({ children }: { children: React.ReactNode }) {
     >
       <span
         aria-hidden
-        className="h-8 w-8 animate-spin rounded-full border-4 border-blue-200 border-t-blue-600"
+        // 회전을 멈춰도 정보를 잃지 않는다 — 진행 중이라는 사실은 옆의 문장이
+        // 말하고, 이 원은 aria-hidden이라 애초에 보조기술에는 없는 요소다.
+        className="h-8 w-8 animate-spin rounded-full border-4 border-blue-200 border-t-blue-600 motion-reduce:animate-none"
       />
       <h1 className="text-lg font-semibold">MedBridge를 준비하고 있습니다.</h1>
       <p className="text-sm text-slate-600">

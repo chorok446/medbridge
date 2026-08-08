@@ -132,7 +132,7 @@ function InstallGuide({
           다시 확인
         </button>
       </div>
-      {note && <p className="text-xs text-slate-400">{note}</p>}
+      {note && <p className="text-xs text-slate-500">{note}</p>}
     </div>
   );
 }
@@ -355,7 +355,7 @@ function ReadyPanel({ onRecheck }: { onRecheck: () => void }) {
       <button
         type="button"
         onClick={onRecheck}
-        className="w-fit text-xs text-slate-400 underline hover:text-slate-600"
+        className="w-fit text-xs text-slate-500 underline hover:text-slate-600"
       >
         상태 다시 확인
       </button>
@@ -403,7 +403,7 @@ function DownloadProgress({
           중단
         </button>
       </div>
-      <p className="mt-2 text-xs text-slate-400">
+      <p className="mt-2 text-xs text-slate-500">
         앱을 종료하면 다음 실행에서 설치 상태를 다시 확인해요.
       </p>
     </div>
@@ -443,7 +443,7 @@ function ReadyWithModels({
               className="h-4 w-4"
             />
             <span>
-              {m.label} <span className="text-xs text-slate-400">({formatSize(m.approxBytes)})</span>
+              {m.label} <span className="text-xs text-slate-500">({formatSize(m.approxBytes)})</span>
             </span>
           </label>
         ))}

@@ -137,7 +137,7 @@ export function SummaryView({ doc, fileUrl }: Props) {
                   type="button"
                   onClick={() => retryMutation.mutate()}
                   disabled={retryMutation.isPending || isActiveStatus(status.status)}
-                  className="mt-1.5 rounded bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+                  className="mt-1.5 rounded bg-amber-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-800 disabled:opacity-50"
                 >
                   다시 요약하기
                 </button>
@@ -159,7 +159,7 @@ export function SummaryView({ doc, fileUrl }: Props) {
                   type="button"
                   onClick={() => retryMutation.mutate()}
                   disabled={retryMutation.isPending || isActiveStatus(status.status)}
-                  className="mt-1.5 rounded bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+                  className="mt-1.5 rounded bg-amber-700 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-800 disabled:opacity-50"
                 >
                   다시 요약하기
                 </button>
