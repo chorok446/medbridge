@@ -31,7 +31,13 @@ interface RenderedPage {
   baseHeight: number;
 }
 
-function rotateRect(rect: Rect, rotate: 0 | 90 | 180 | 270, w: number, h: number): Rect {
+/** 사각형을 페이지 크기 기준으로 회전한다. w·h는 **회전 전** 페이지 크기(pt).
+ *
+ * 하이라이트 위치와 원문 클릭 역변환이 둘 다 이 함수를 지난다. 여기가 틀리면
+ * "표 제목을 눌러 원문 확인"이 엉뚱한 자리를 가리키고, 사용자는 근거를 못 찾는다.
+ * 컴포넌트를 거쳐서는 pdfjs 캔버스 렌더가 필요해 이 수학을 볼 수 없어 따로 연다.
+ */
+export function rotateRect(rect: Rect, rotate: 0 | 90 | 180 | 270, w: number, h: number): Rect {
   const { x0, y0, x1, y1 } = rect;
   switch (rotate) {
     case 90:
