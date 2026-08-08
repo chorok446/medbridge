@@ -473,7 +473,13 @@ async def execute_hierarchical_summary(
             sections=len(structured["sections"]),
             top_level_nodes=len(level_nodes),
         )
-    return finalize_artifacts(
+    # 스레드로 보낸다. 이 안에서 문서 전체 텍스트에 정규식 6종을 finditer로 훑고
+    # 모든 청크를 문장 단위로 쪼개 다시 정규식을 돌린다 — 1,060쪽·16,226청크 교재면
+    # 수 초가 걸리고, 그동안 이벤트 루프가 통째로 멈춘다. 같은 시각 열려 있는 Q&A
+    # 스트림이 heartbeat를 못 보내 클라이언트에서 연결 끊김으로 처리되고, 진행 중이던
+    # 답변이 중단된 것으로 표시된다.
+    return await asyncio.to_thread(
+        finalize_artifacts,
         structured,
         lookup,
         learner_level=learner_level,
@@ -936,12 +942,24 @@ def _pack_within_contract(parts: list[_AdaptiveResult]) -> list[_AdaptiveResult]
 
 
 def _truncate_on_boundary(text: str) -> str:
-    """계약 길이로 자르되 마지막 공백까지만 남긴다(문장 중간 절단 완화)."""
+    """계약 길이로 자르되 **문장 경계**까지만 남긴다.
+
+    예전에는 마지막 공백에서 잘랐다. 의료 문장에서 그건 뜻을 뒤집는다 —
+    "이 약은 임신부에게 금기가 아니다"가 "이 약은 임신부에게 금기가"로 잘리면
+    정반대를 읽게 된다. 같은 위험 때문에 schema.py의 `_clean_text`가 이미 문장
+    경계 절단으로 옮겼는데, 저장 경로인 여기만 공백 절단으로 남아 있었다. 규칙이
+    두 벌이면 다음 사람이 어느 쪽을 따라야 하는지 알 수 없다.
+
+    문장 경계를 하나도 못 찾으면 `_clean_text`는 통째로 버린다. 여기서는 버릴 수
+    없다 — 이건 이미 실패한 요약에서 그나마 건진 텍스트라, 버리면 그 그룹은 아무
+    내용도 남기지 못한다. 그래서 경계가 없을 때만 길이로 자른다.
+    """
+    from app.services.summary.schema import _clean_text
+
     if len(text) <= GROUP_SUMMARY_MAX_CHARS:
         return text
-    cut = text[:GROUP_SUMMARY_MAX_CHARS]
-    space = cut.rfind(" ")
-    return (cut[:space] if space > GROUP_SUMMARY_MAX_CHARS // 2 else cut).rstrip()
+    kept = _clean_text(text, GROUP_SUMMARY_MAX_CHARS, field_name="group_summary_salvage")
+    return kept or text[:GROUP_SUMMARY_MAX_CHARS].rstrip()
 
 
 async def _bump_completed(session, run_id: uuid.UUID) -> None:

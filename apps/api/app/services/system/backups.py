@@ -20,6 +20,18 @@ logger = get_logger(__name__)
 # 소진하지 않도록 여유를 둔다.
 BACKUP_KEEP = 3
 
+# 백업 전체가 차지해도 되는 총량.
+#
+# 개수만으로는 디스크를 지킬 수 없다. BACKUP_KEEP이 접두사별로 적용되고 접두사가
+# 둘이라 정상 상태의 상한이 6개인데, 이건 이 모듈 docstring이 '고쳐야 할 상태'로
+# 지목한 바로 그 개수다. DB가 2.5GB인 기기라면 6개가 15GB이고, 같은 기기의 실제
+# PDF(0.99GB)의 15배다. 사본 크기는 DB에 비례해 자라므로 개수 상한은 총량을 전혀
+# 묶지 못한다.
+#
+# 8GiB로 잡는 근거: 실기기 DB 2.5GB 기준 되돌리기용 두 벌(마이그레이션·업데이트
+# 직전)이 5GB로 들어가고, 실측된 11.5GB는 막는다.
+BACKUP_TOTAL_BUDGET_BYTES = 8 * 1024**3
+
 # `pre-migration-0.1.0-20260804-015839.db`, 같은 초 충돌 시 `...-015839-1.db`
 _STAMP_RE = re.compile(r"-(\d{8})-(\d{6})(?:-(\d+))?\.db$")
 
@@ -84,3 +96,67 @@ def prune_backups(directory: Path, prefix: str, keep: int = BACKUP_KEEP) -> list
             "backups_pruned", prefix=prefix, removed=len(removed), kept=min(len(backups), keep)
         )
     return removed
+
+
+def enforce_total_budget(
+    directory: Path, budget_bytes: int = BACKUP_TOTAL_BUDGET_BYTES
+) -> list[str]:
+    """백업 전체가 `budget_bytes`를 넘지 않게 오래된 것부터 지운다.
+
+    종류별 **최신 한 벌**은 예산을 넘겨도 지키지 않는다 — 되돌릴 사본을 용량 때문에
+    지우면 그건 백업이 아니다. 그래서 이 함수는 총량을 반드시 예산 아래로 낮춘다고
+    약속하지 않는다. 지울 수 있는 것을 다 지워도 남는 두 벌이 예산보다 크면, 그건
+    디스크가 아니라 DB가 커진 문제다.
+
+    `prune_backups`(개수)와 함께 쓴다. 개수만으로는 총량이 묶이지 않는데, 사본 크기가
+    DB에 비례해 자라기 때문이다.
+
+    실패해도 예외를 올리지 않는다 — 청소는 마이그레이션·업데이트를 막을 이유가 없다.
+    """
+    try:
+        files = [p for p in directory.glob("pre-*.db") if p.is_file()]
+        sized = [(p, p.stat().st_size) for p in files]
+    except OSError:
+        logger.warning("backup_budget_scan_failed")
+        return []
+    if not sized:
+        return []
+
+    # 종류별 최신 한 벌은 건드리지 않는다.
+    protected: set[Path] = set()
+    for prefix in {_kind_prefix(p.name) for p, _ in sized}:
+        same_kind = [p for p, _ in sized if _kind_prefix(p.name) == prefix]
+        protected.add(max(same_kind, key=_sort_key))
+
+    total = sum(size for _, size in sized)
+    removed: list[str] = []
+    # 오래된 것부터 지운다.
+    for path, size in sorted(sized, key=lambda pair: _sort_key(pair[0])):
+        if total <= budget_bytes:
+            break
+        if path in protected:
+            continue
+        try:
+            path.unlink()
+        except OSError:
+            logger.warning("backup_budget_prune_failed", backup=path.name)
+            continue
+        total -= size
+        removed.append(path.name)
+
+    if removed:
+        logger.info(
+            "backups_budget_pruned",
+            removed=len(removed),
+            remaining_bytes=total,
+            budget_bytes=budget_bytes,
+        )
+    return removed
+
+
+def _kind_prefix(name: str) -> str:
+    """`pre-migration-0.1.0-...db` → `pre-migration-`. 모르는 이름은 통째로 한 종류로."""
+    for prefix in ("pre-migration-", "pre-update-"):
+        if name.startswith(prefix):
+            return prefix
+    return name

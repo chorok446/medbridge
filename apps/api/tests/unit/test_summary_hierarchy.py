@@ -54,6 +54,11 @@ class TestBoundedPacking:
 
         작은 절을 합치는 것 자체는 옳다(제목마다 끊으면 호출이 폭증한다). 합쳤다는
         사실을 제목이 숨기지 않으면 된다.
+
+        제목을 통째로 비우는 것도 답이 아니었다 — GROUP_MIN_CHARS 때문에 실제 교재의
+        그룹은 거의 항상 여러 절을 삼키므로 '섹션별 요약' 카드 대부분이 제목을 잃고,
+        사용자는 제목 없는 문단만 보며 각 요약이 문서의 어디인지 알 수 없게 된다.
+        첫 절을 밝히되 더 있다는 사실을 함께 적는다.
         """
         chunks = [
             _chunk(0, title="적응증", chars=800),
@@ -63,9 +68,12 @@ class TestBoundedPacking:
         groups = build_groups(chunks)
 
         assert len(groups) == 1, "이 크기면 한 그룹으로 합쳐지는 게 맞다"
-        assert groups[0].section_title is None, (
-            f"합친 그룹이 한 절의 제목을 주장한다: {groups[0].section_title}"
-        )
+        title = groups[0].section_title
+        assert title is not None, "제목을 통째로 잃으면 요약이 문서의 어디인지 알 수 없다"
+        # 첫 절을 밝히되, 그 절만 있는 것처럼 보이지 않는다.
+        assert title.startswith("적응증")
+        assert title != "적응증", f"합친 그룹이 한 절의 제목을 주장한다: {title}"
+        assert "2개" in title, f"몇 개 절이 더 있는지 알려야 한다: {title}"
 
     def test_single_section_group_keeps_its_title(self):
         chunks = [_chunk(i, title="적응증", chars=800) for i in range(3)]

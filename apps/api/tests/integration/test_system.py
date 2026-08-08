@@ -46,6 +46,31 @@ class TestPrepareUpdate:
         after = set(p.name for p in backups.glob("pre-update-*.db"))
         assert backup_file in after - before
 
+    async def test_backup_is_a_usable_database(self, client):
+        """되돌릴 수 있어야 백업이다 — 열리고, 온전하고, 내용이 들어 있어야 한다.
+
+        파일을 그냥 읽어 복사하면 수 GB DB를 뜨는 수십 초 동안 들어온 쓰기 때문에
+        앞부분과 뒷부분이 서로 다른 시점이 되어 'database disk image is malformed'로
+        열리지 않는다. 되돌릴 목적으로 만든 사본이 되돌릴 수 없는 파일이 되는 것이
+        최악이라, 결과물이 실제로 쓸 수 있는 DB인지 확인한다.
+        """
+        import sqlite3
+
+        res = await client.post("/api/system/prepare-update")
+        backup = get_path_provider().backups_dir / res.json()["data"]["backupFile"]
+
+        with sqlite3.connect(backup) as conn:
+            assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+        # 스키마가 통째로 실려야 한다 — 빈 껍데기로는 되돌릴 수 없다.
+        assert "documents" in tables, sorted(tables)
+        assert "alembic_version" in tables, sorted(tables)
+
     async def test_prunes_old_backups(self, client):
         """백업 생성 경로가 오래된 사본을 정리한다.
 

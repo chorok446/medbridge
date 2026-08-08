@@ -738,9 +738,24 @@ class TestRunRowsAreClosed:
         doc = await upload_extracted(client, fx.blank_image_page())
         await client.post(f"/api/documents/{doc['id']}/ocr")
 
-        # 잡을 태우기 전에 취소한다 — 열린 run 행이 남는 실제 경로다.
+        # 진행 중인 실행을 재현한다. 백그라운드 잡이 먼저 끝나 버리면 cancel_ocr이
+        # 409로 거절돼(취소할 작업 없음) 정리 자체가 돌지 않으므로, 잡 상태를 직접
+        # RUNNING으로 고정해 경쟁을 없앤다.
         async with get_session_factory()() as session:
             row = await session.get(Document, uuid.UUID(doc["id"]))
+            job = (
+                await session.execute(
+                    select(DocumentJob)
+                    .where(
+                        DocumentJob.document_id == row.id,
+                        DocumentJob.job_type == JobType.OCR_DOCUMENT,
+                    )
+                    .order_by(DocumentJob.created_at.desc())
+                    .limit(1)
+                )
+            ).scalars().one()
+            job.status = JobStatus.RUNNING
+            job.completed_at = None
             session.add(
                 OcrRun(
                     document_id=row.id,
