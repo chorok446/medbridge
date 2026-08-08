@@ -20,7 +20,9 @@ export function ErrorReportButton({
   className?: string;
 }) {
   const desktop = useIsTauri();
-  const [saved, setSaved] = useState(false);
+  // 성공만 상태로 두면 실패가 "아무 일도 안 일어남"과 같은 모양이 된다. 사용자는
+  // 버튼이 죽은 줄 알고 계속 누르고, 정작 지원 요청에 필요한 파일은 없다.
+  const [result, setResult] = useState<"idle" | "saved" | "failed">("idle");
 
   // 브라우저 개발 모드에는 저장할 진단 파일이 없다. 오류 안내 안에서는 아무것도
   // 보여주지 않는 편이 낫다(눌러도 안 되는 버튼을 두지 않는다).
@@ -31,7 +33,10 @@ export function ErrorReportButton({
   }
 
   async function save() {
-    setSaved(await saveErrorReport().catch(() => false));
+    // 예외와 "false를 돌려준 실패"를 같게 다룬다 — 사용자에게는 둘 다 "파일이
+    // 만들어지지 않았다"로 똑같고, 원인은 화면에 내보이지 않는다(경로·디스크 오류).
+    const ok = await saveErrorReport().catch(() => false);
+    setResult(ok ? "saved" : "failed");
   }
 
   if (variant === "inline") {
@@ -44,9 +49,14 @@ export function ErrorReportButton({
         >
           오류 정보 저장
         </button>
-        {saved && (
+        {result === "saved" && (
           <span role="status" className="ml-2 text-green-700">
             저장했어요
+          </span>
+        )}
+        {result === "failed" && (
+          <span role="alert" className="ml-2 text-red-700">
+            저장하지 못했어요
           </span>
         )}
       </span>
@@ -62,9 +72,14 @@ export function ErrorReportButton({
       >
         오류 정보 저장
       </button>
-      {saved && (
+      {result === "saved" && (
         <p role="status" className="mt-2 text-sm text-green-700">
           오류 정보를 저장했습니다.
+        </p>
+      )}
+      {result === "failed" && (
+        <p role="alert" className="mt-2 text-sm text-red-700">
+          오류 정보를 저장하지 못했습니다. 저장 공간이 넉넉한지 확인한 뒤 다시 시도해 주세요.
         </p>
       )}
     </div>
