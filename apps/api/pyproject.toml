@@ -34,6 +34,16 @@ dev = [
     "pyinstaller>=6.10",
 ]
 
+[tool.uv]
+# 우리가 import하지 않는 transitive의 하한을 올린다. 직접 의존성으로 만들면
+# "이 앱이 쓰는 것"과 "취약해서 붙잡아 둔 것"이 뒤섞인다.
+#
+# cryptography: keyring -> secretstorage(리눅스 키링 백엔드) -> cryptography.
+# 49.0.0에 PYSEC-2026-3552가 있다. 이 경로는 sys_platform == 'linux'에서만 살아
+# 있고 배포 대상은 Windows라 사용자에게 닿지 않지만, CI가 리눅스에서 돌아 스캔에
+# 잡힌다 — 남겨두면 진짜 문제가 이 잡음에 묻힌다.
+constraint-dependencies = ["cryptography>=50.0.0"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_test_loop_scope = "session"
