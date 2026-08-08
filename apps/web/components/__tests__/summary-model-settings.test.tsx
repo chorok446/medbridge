@@ -62,12 +62,15 @@ describe("SummaryModelSection", () => {
     apiMock.getSummarySettings.mockResolvedValue(
       settings({ enabled: true, providerType: "openai_compatible", hasApiKey: true }),
     );
-    const { container } = renderSection();
+    renderSection();
     await screen.findByText("요약 모델 사용");
     expect(screen.getByText("(설정됨)")).toBeInTheDocument();
-    // 키 입력란은 비어 있어야 한다(값을 되돌려 채우지 않는다)
-    const keyInput = container.querySelector('input[type="password"]') as HTMLInputElement;
-    expect(keyInput.value).toBe("");
+    // 키 입력란은 비어 있어야 한다(값을 되돌려 채우지 않는다).
+    //
+    // CSS 셀렉터(input[type="password"])가 아니라 라벨로 찾는다. 셀렉터로 찾으면
+    // 라벨과 입력란의 연결이 끊겨도 통과해서, 정작 "스크린리더 사용자가 이 칸을
+    // 찾을 수 있는가"라는 이 테스트가 보증해야 할 성질이 검증되지 않는다.
+    expect(screen.getByLabelText(/API 키/)).toHaveValue("");
   });
 
   it("연결 확인 버튼을 누르면 결과 메시지를 보여준다", async () => {

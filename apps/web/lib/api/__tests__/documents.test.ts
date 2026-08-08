@@ -29,10 +29,13 @@ describe("업로드·오류 보고서도 같은 런타임 포트를 쓴다", () 
     const file = new File(["dummy"], "test.pdf", { type: "application/pdf" });
     uploadDocument(file, undefined, () => undefined);
 
-    // getApiConfig()가 resolve될 때까지 xhr.open은 마이크로태스크 이후에 호출된다
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(openSpy).toHaveBeenCalledWith("POST", "http://127.0.0.1:59001/api/documents");
+    // xhr.open은 getApiConfig()가 resolve된 뒤에 불린다. setTimeout(0) 한 번으로
+    // 기다리면 그 체인이 한 틱만 길어져도 깨진다 — 로컬에서는 통과하고 부하 걸린
+    // CI에서만 실패하거나, 반대로 우연히 맞아 회귀를 놓친다. 조건이 성립할 때까지
+    // 기다린다.
+    await vi.waitFor(() =>
+      expect(openSpy).toHaveBeenCalledWith("POST", "http://127.0.0.1:59001/api/documents"),
+    );
     openSpy.mockRestore();
   });
 

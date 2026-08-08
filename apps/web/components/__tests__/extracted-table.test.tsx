@@ -39,8 +39,10 @@ describe("ExtractedTable", () => {
     expect(within(grid).getByRole("cell", { name: "mmHg" })).toBeInTheDocument();
 
     // DESIGN.md가 이름을 들어 금지한 것 — 사용자에게 `| 파이프 |`를 보이지 않는다.
+    // 화면에 안 보이는지만 본다. <pre> 태그의 부재를 함께 확인하면 원문을 <code>나
+    // readOnly textarea로 옮기는 리팩터링에서 아무 이유 없이 깨지고, 정작 CSS로
+    // white-space를 준 <span>에 파이프가 남는 회귀는 이 줄이 잡아준다.
     expect(screen.queryByText(/\|---\|/)).not.toBeInTheDocument();
-    expect(document.querySelector("pre")).toBeNull();
   });
 
   it("정상 추출된 표에는 경고를 붙이지 않는다", () => {

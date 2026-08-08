@@ -1,4 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { type CitationSlots, CitedText, SourceList } from "@/components/citations";
 import type { CitationSource } from "@/lib/citations";
@@ -18,7 +19,7 @@ const PAGE7: CitationSource = {
 const SLOTS: CitationSlots = [[PAGE3], [PAGE7]];
 
 describe("CitedText", () => {
-  it("renders a clickable number for each marker", () => {
+  it("renders a clickable number for each marker", async () => {
     const onNavigate = vi.fn();
     render(
       <CitedText
@@ -27,7 +28,7 @@ describe("CitedText", () => {
         onNavigate={onNavigate}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: /3쪽 근거 보기/ }));
+    await userEvent.click(screen.getByRole("button", { name: /3쪽 근거 보기/ }));
     expect(onNavigate).toHaveBeenCalledWith(PAGE3);
   });
 
@@ -68,10 +69,10 @@ describe("SourceList", () => {
     expect(screen.getByText(/순환계/)).toBeInTheDocument();
   });
 
-  it("navigates to the picked source", () => {
+  it("navigates to the picked source", async () => {
     const onNavigate = vi.fn();
     render(<SourceList groups={groups} onNavigate={onNavigate} />);
-    fireEvent.click(screen.getByRole("button", { name: /7쪽 근거 보기/ }));
+    await userEvent.click(screen.getByRole("button", { name: /7쪽 근거 보기/ }));
     expect(onNavigate).toHaveBeenCalledWith({ ...PAGE7, bboxes: [PAGE7.bbox] });
   });
 
@@ -94,7 +95,7 @@ describe("SourceList", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("collapses sources that look identical on screen", () => {
+  it("collapses sources that look identical on screen", async () => {
     // 한 주장이 같은 페이지의 블록 여러 개에 근거를 두면 화면에는 같은 줄이
     // 수십 번 반복된다 — 사용자는 어느 줄도 구분할 수 없다. 한 줄로 접는다.
     const onNavigate = vi.fn();
@@ -117,7 +118,7 @@ describe("SourceList", () => {
     expect(buttons).toHaveLength(1);
     // 접혀도 근거 위치는 잃지 않는다 — 클릭하면 세 블록 모두 하이라이트되도록
     // 모든 bbox를 실어 보낸다.
-    fireEvent.click(buttons[0]);
+    await userEvent.click(buttons[0]);
     expect(onNavigate).toHaveBeenCalledWith({
       ...PAGE3,
       bbox: [0, 0, 1, 1],

@@ -301,6 +301,10 @@ describe("LocalAiSection", () => {
     await userEvent.click(await screen.findByRole("button", { name: "기본 모델로 사용" }));
     const confirm = await screen.findByRole("button", { name: "로컬 AI로 변경" });
     await waitFor(() => expect(confirm).toBeEnabled());
+    // 여기만 userEvent가 아니라 fireEvent다. userEvent는 상호작용을 순차 처리해
+    // 앞 클릭의 처리가 끝난 뒤에야 다음 클릭을 보내므로, 정작 재현하려는 "한 프레임
+    // 안의 연타"가 만들어지지 않는다. 잠금이 풀린 틈으로 두 번째 요청이 들어가는
+    // 경쟁 상태를 보려면 합성 이벤트를 연달아 쏘아야 한다.
     fireEvent.click(confirm);
     fireEvent.click(confirm);
 

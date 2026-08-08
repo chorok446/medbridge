@@ -81,7 +81,7 @@ async def _run(args: argparse.Namespace) -> int:
 
     if args.provider == "local":
         try:
-            ready, reason = ollama.preflight(args.model)
+            ready, reason = await ollama.preflight(args.model)
         except ollama.ModelNotAllowedError as exc:
             print(f"[오류] {exc}", file=sys.stderr)
             return EXIT_GATE
