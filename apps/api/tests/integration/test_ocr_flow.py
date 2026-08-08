@@ -594,6 +594,63 @@ class TestLowConfidenceIsolation:
         # 같은 실패 코드라도 "엔진이 죽었다"와 "읽긴 읽었는데 노이즈다"는 대응이 다르다.
         assert job.failure_reason == "unreliable_pages"
 
+    async def test_one_bad_page_does_not_fail_a_document_that_mostly_read(
+        self, client, monkeypatch
+    ):
+        """한 쪽이 흐려도 나머지가 읽혔으면 그 실행은 실패가 아니다.
+
+        `incomplete = failed + unreliable`이면 45쪽 중 44쪽이 멀쩡히 읽혀도 1쪽이
+        저신뢰라는 이유로 잡이 FAILED로 마감된다. 재시도는 같은 원본을 다시 읽을
+        뿐이라 흐린 스캔은 매번 같은 결과를 내고, 사용자는 손쓸 방법 없이 'OCR
+        실패'를 보며 누를 때마다 오류 보고서에 실패가 한 건씩 더 쌓인다.
+
+        저신뢰는 엔진 실패가 아니라 **결과**다 — 페이지별 ocr_low_confidence로
+        이미 기록되고 lowConfidencePages로 화면에 전달된다.
+        """
+        # 2쪽짜리 문서: 1쪽은 잘 읽히고 1쪽은 노이즈.
+        good = OcrResult(
+            page_number=1,
+            words=[
+                OcrWord(bbox=(10, 10 + i * 12, 100, 20 + i * 12), text=f"단어{i}",
+                        confidence=0.95, block_index=1, paragraph_index=1,
+                        line_index=1, word_index=i + 1)
+                for i in range(8)
+            ],
+            mean_confidence=0.95,
+        )
+        results = [good, _low_confidence_result(["ㄱㅂㅅ", "ㅁㄴㅇ", "ㄹㅇㅋ", "ㅍㅌㅊ"])]
+        calls = {"n": 0}
+
+        class _PerPage:
+            available = True
+            version = "5.4.0"
+
+            def recognize_page(self, *a, **k):
+                r = results[min(calls["n"], len(results) - 1)]
+                calls["n"] += 1
+                return r
+
+        monkeypatch.setattr(ocr_service, "engine", lambda: _PerPage())
+        doc = await upload_extracted(client, fx.blank_image_page(pages=2))
+        await client.post(f"/api/documents/{doc['id']}/ocr")
+        await drain_jobs()
+
+        async with get_session_factory()() as session:
+            job = (
+                await session.execute(
+                    select(DocumentJob)
+                    .where(
+                        DocumentJob.document_id == uuid.UUID(doc["id"]),
+                        DocumentJob.job_type == JobType.OCR_DOCUMENT,
+                    )
+                    .order_by(DocumentJob.created_at.desc())
+                    .limit(1)
+                )
+            ).scalars().one()
+
+        assert job.status == JobStatus.SUCCEEDED, job.failure_reason
+        assert job.failure_code is None
+
     async def test_all_low_confidence_does_not_report_chunking_success(
         self, client, monkeypatch
     ):

@@ -216,14 +216,25 @@ async def run_ocr_job(
         job = await session.get(DocumentJob, job_id)
         doc = await session.get(Document, document_id)
         if job is not None:
-            # 빈 페이지는 그 자체로 실패가 아니다. 다만 **전부** 비었다면 OCR이 한 것이
-            # 없다는 뜻이라 보고해야 한다 — 그건 사용자가 스캔 품질로 대응할 수 있다.
-            nothing_read = processed > 0 and empty == processed
-            incomplete = failed + unreliable
+            # 실패로 마감하는 기준은 "어느 한 쪽이라도 나빴나"가 아니라 "쓸 수 있는
+            # 본문이 하나도 안 나왔나"다.
+            #
+            # failed + unreliable을 그대로 세면 45쪽 중 44쪽이 멀쩡히 읽혀도 1쪽이
+            # 흐리다는 이유로 잡이 FAILED가 된다. 재시도는 같은 원본을 다시 읽을
+            # 뿐이라 흐린 스캔은 매번 같은 결과를 내고, 사용자는 손쓸 방법 없이
+            # 'OCR 실패'를 보며 누를 때마다 오류 보고서에 실패가 한 건씩 더 쌓인다.
+            # 저신뢰·백지는 엔진 실패가 아니라 결과이고, 페이지별 상태와
+            # lowConfidencePages로 이미 화면에 전달된다.
+            #
+            # 엔진 오류(failed)는 다르다 — 설치·경로 문제라 사용자가 대응할 수 있고,
+            # 한 쪽이라도 나면 알려야 한다.
+            usable = processed - empty - unreliable
+            nothing_usable = processed > 0 and usable <= 0
+            incomplete = failed
             job.status = (
-                JobStatus.FAILED if incomplete or nothing_read else JobStatus.SUCCEEDED
+                JobStatus.FAILED if incomplete or nothing_usable else JobStatus.SUCCEEDED
             )
-            if incomplete or nothing_read:
+            if incomplete or nothing_usable:
                 job.failure_code = "OCR_PARTIAL_FAILURE"
                 # 같은 코드라도 대응이 다르다. "엔진이 죽었다"는 설치·경로 문제고,
                 # "읽긴 읽었는데 노이즈다"는 원본 스캔 품질 문제다. "한 글자도 못 읽었다"는

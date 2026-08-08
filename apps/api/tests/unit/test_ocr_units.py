@@ -78,6 +78,45 @@ class TestClassify:
         status, _, _ = classify_result(_result([0.9]))
         assert status == OcrRunStatus.OCR_EMPTY
 
+    def test_dropped_noise_counts_against_the_page(self):
+        """임계값 미만이라 버린 단어도 판정 모수에 든다.
+
+        OCR_MIN_WORD_CONFIDENCE 필터가 OcrResult를 만들기 전에 걸리므로, 버려진
+        몫을 세지 않으면 100단어 중 85개가 노이즈인 쪽이 '남은 15개가 깨끗하니
+        정상 완료'로 통과한다. 그러면 rollup은 이 쪽을 unresolved로 세지 않아
+        문서를 EXTRACTED로 승격시키고, chunking의 저신뢰 제외에도 걸리지 않아
+        15단어짜리 잔해가 요약·검색의 근거가 된다. 사용자는 본문 85%가 빠진
+        문서를 '다 읽었다'로 신뢰한다.
+        """
+        result = _result([0.75] * 15)
+        result.low_quality_dropped = 85
+
+        status, low, _ = classify_result(result)
+
+        assert status == OcrRunStatus.OCR_LOW_CONFIDENCE
+        # 버린 85개는 임계값 미만이 확실하므로 저신뢰로 센다.
+        assert low == pytest.approx(0.85)
+
+    def test_a_few_dropped_words_do_not_condemn_a_clean_page(self):
+        # 깨끗한 쪽에도 얼룩 몇 개는 늘 섞인다 — 그것만으로 저신뢰가 되면
+        # 정상 문서마다 'OCR 실패'가 뜬다.
+        result = _result([0.9] * 95)
+        result.low_quality_dropped = 5
+
+        status, low, _ = classify_result(result)
+
+        assert status == OcrRunStatus.OCR_COMPLETED
+        assert low == pytest.approx(0.05)
+
+    def test_all_words_dropped_is_empty_not_completed(self):
+        # 전부 노이즈라 하나도 안 남았으면 '읽을 글자가 없었다'와 같다.
+        result = _result([])
+        result.low_quality_dropped = 40
+
+        status, _, _ = classify_result(result)
+
+        assert status == OcrRunStatus.OCR_EMPTY
+
 
 class TestRenderGuards:
     def test_dpi_reduced_for_huge_page(self, tmp_path):

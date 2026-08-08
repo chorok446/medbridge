@@ -147,11 +147,27 @@ async def _latest_ocr_job(db: AsyncSession, document_id: uuid.UUID) -> DocumentJ
 
 
 def classify_result(result: OcrResult) -> tuple[OcrRunStatus, float, float]:
-    """반환: (상태, 낮은 신뢰 비율, 중앙값)."""
+    """반환: (상태, 낮은 신뢰 비율, 중앙값).
+
+    **버려진 단어도 모수에 넣는다.** OCR_MIN_WORD_CONFIDENCE 필터는 OcrResult를
+    만들기 전에 걸리므로, `result.words`만 보면 노이즈가 대부분인 쪽이 "남은
+    몇 개가 깨끗하니 정상"으로 통과한다 — 100단어 중 85개가 신뢰도 0.1이라
+    버려지고 남은 15개가 0.75면 low_ratio가 0이 된다.
+
+    그 판정이 두 곳으로 흘러 같은 방향으로 틀린다: rollup_document_status가 이
+    쪽을 unresolved로 세지 않아 문서를 EXTRACTED로 승격시키고, chunking의 저신뢰
+    제외에도 걸리지 않아 15단어짜리 잔해가 요약·검색의 근거가 된다. 사용자는
+    본문 85%가 통째로 빠진 문서를 '다 읽었다'로 신뢰하고 재시도 안내조차 받지
+    못한다. 버려진 단어는 임계값 미만인 것이 확실하므로 저신뢰로 세면 된다.
+    """
     if len(result.words) < OCR_EMPTY_MIN_WORDS:
         return OcrRunStatus.OCR_EMPTY, 1.0, 0.0
     confs = [w.confidence for w in result.words]
-    low_ratio = sum(1 for c in confs if c < OCR_LOW_CONFIDENCE_WORD) / len(confs)
+    dropped = max(0, result.low_quality_dropped)
+    low_ratio = (sum(1 for c in confs if c < OCR_LOW_CONFIDENCE_WORD) + dropped) / (
+        len(confs) + dropped
+    )
+    # 중앙값은 살아남은 단어로만 낸다 — 버린 단어의 실제 신뢰도는 이미 없다.
     median = statistics.median(confs)
     if low_ratio > OCR_LOW_CONFIDENCE_RATIO_WARN:
         return OcrRunStatus.OCR_LOW_CONFIDENCE, low_ratio, median
