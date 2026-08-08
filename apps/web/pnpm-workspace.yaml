@@ -1,3 +1,40 @@
 allowBuilds:
   sharp: true
   unrs-resolver: true
+
+# transitive 의존성 취약점 대응.
+#
+# 전부 우리가 직접 고른 패키지가 아니라 next·eslint·vite가 데리고 오는 것이라,
+# 그쪽이 올려줄 때까지 기다리려면 프레임워크 메이저를 올려야 한다. 수정본이 모두
+# 같은 메이저 안의 패치라 여기서 좁게 끌어올린다.
+#
+# 각 줄은 GHSA 하나에 대응한다. 상위 패키지가 그 버전을 품게 되면 이 줄은 지운다 —
+# 남겨두면 무엇을 왜 붙잡고 있는지 아무도 모르는 채로 굳는다.
+# 값은 반드시 **같은 메이저 안**으로 묶는다(`^`). ">=8.5.18" 같은 열린 하한을 주면
+# 상위 메이저까지 전부 만족해서, 패치를 올리려던 것이 조용히 메이저 점프가 된다
+# (실측: nanoid 3.x -> 6.0.1, js-yaml 4.x -> 5.2.3). 상위 패키지가 기대하는 API가
+# 그대로일 보장이 사라진다.
+#
+# 계열이 여럿이면 `패키지@범위`로 나눠 지정한다.
+overrides:
+  # GHSA-6g55-p6wh-862q, GHSA-r28c-9q8g-f849
+  # sourceMappingURL 주석으로 임의 파일 읽기 — 빌드 시 CSS를 파싱하는 경로다.
+  postcss: "^8.5.18"
+
+  # GHSA-2v37-7h3g-55p8 (예측 가능한 ID 생성)
+  # next·vite·vitest·tailwind가 각각 물고 온다. 취약한 것은 3.x 계열뿐이라
+  # 5.x 이상을 쓰는 소비자는 건드리지 않는다.
+  nanoid@3: "^3.3.17"
+
+  # GHSA-f88m-g3jw-g9cj (libvips CVE 4건)
+  # 이 앱에는 닿지 않는다 — output: "export" + images.unoptimized라 Next 이미지
+  # 최적화가 꺼져 있고 sharp는 optional이다. 그래도 설치는 되므로 올려 둔다.
+  sharp: "^0.35.0"
+
+  # ReDoS — eslint 계열 전용(dev)이라 사용자에게 닿지 않는다. 두 계열이 동시에
+  # 걸려 있어 각각 지정한다.
+  brace-expansion@1: "^1.1.18"
+  brace-expansion@5: "^5.0.9"
+
+  # prototype pollution — eslint 설정 로딩 경로(dev). 4.x 계열만 취약하다.
+  js-yaml@4: "^4.3.1"
