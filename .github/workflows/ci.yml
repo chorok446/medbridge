@@ -5,6 +5,10 @@ on:
     branches: [develop]
   pull_request:
     branches: [develop, main]
+    # 기본값은 opened·synchronize·reopened뿐이라, draft로 열어 두고 작업하다
+    # "Ready for review"로 바꾸면 그 시점에 CI가 돌지 않는다. 마지막 push 이후
+    # 아무 검증 없이 리뷰에 들어가게 되므로 그 전환도 트리거로 잡는다.
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
 # 같은 PR에 연달아 push하면 이전 실행은 이미 낡은 커밋을 검증하는 중이다. PR에서만
