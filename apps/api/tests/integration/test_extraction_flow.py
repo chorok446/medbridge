@@ -80,6 +80,20 @@ class TestExtractionFlow:
         assert t["rowCount"] >= 3 and t["columnCount"] == 3
         assert "심박수" in t["markdownText"]
 
+    async def test_tables_expose_cells_so_the_screen_can_draw_a_real_table(self, client):
+        """셀 격자가 없으면 화면은 `| 파이프 |` 마크다운 원문을 그대로 내보이게 된다.
+
+        DESIGN.md가 이름을 들어 금지한 것이고, 실제로 표 탭이 그렇게 보이고 있었다.
+        """
+        doc = await upload_extracted(client, fx.with_table())
+        t = (await client.get(f"/api/documents/{doc['id']}/tables")).json()["data"][0]
+
+        cells = t["cells"]
+        assert len(cells) == t["rowCount"]
+        assert all(len(row) == t["columnCount"] for row in cells), cells
+        flat = [c for row in cells for c in row if c]
+        assert any("심박수" in c for c in flat), cells
+
     async def test_caption_marked(self, client):
         doc = await upload_extracted(client, fx.image_with_caption())
         blocks = (
