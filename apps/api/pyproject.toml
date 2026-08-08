@@ -12,7 +12,7 @@ dependencies = [
     "aiosqlite>=0.20",
     "alembic>=1.13",
     "platformdirs>=4.2",
-    "pypdf>=4.2",
+    "pypdf>=6.15.0",
     "python-multipart>=0.0.9",
     "structlog>=24.1",
     "pymupdf==1.26.*",
