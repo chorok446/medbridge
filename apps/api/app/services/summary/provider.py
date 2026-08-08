@@ -579,23 +579,29 @@ class OpenAICompatibleSummaryProvider:
                 external_max_tokens=max_tokens,
             )
 
-        try:
-            raw = call(SUMMARY_MAP_MAX_TOKENS)
-        except SummaryNetworkError as exc:
-            if exc.reason != "finish_length":
-                raise
-            # 출력 상한에 걸려 JSON이 잘렸다 — 응답이 파싱조차 안 되므로 그대로 두면
-            # 그 노드는 영구 실패한다(temperature 0이라 재시도해도 같은 지점에서 잘린다).
-            # 예산을 늘려 한 번만 다시 부른다. 그래도 넘치면 별도 reason으로 올려
-            # executor가 입력을 나눠 적응할 수 있게 한다.
+        def call_with_budget(*, allow_error: bool = True) -> str:
+            """출력 상한에 걸리면 예산을 한 번 늘려 다시 부른다.
+
+            temperature 0이라 같은 예산으로 재시도하면 같은 지점에서 잘린다. 그래도
+            넘치면 별도 reason으로 올려 executor가 입력을 나눠 적응하게 한다 —
+            날것의 `finish_length`를 올리면 `_is_input_too_large()`가 그것을 명시적으로
+            제외하므로 적응 분할이 발동하지 못하고 그 그룹은 그냥 실패한다.
+            """
             try:
-                raw = call(SUMMARY_MAP_RETRY_MAX_TOKENS)
-            except SummaryNetworkError as retry_exc:
-                if retry_exc.reason == "finish_length":
-                    raise SummaryNetworkError(
-                        "bad_response", "map_finish_length"
-                    ) from retry_exc
-                raise
+                return call(SUMMARY_MAP_MAX_TOKENS, allow_error=allow_error)
+            except SummaryNetworkError as exc:
+                if exc.reason != "finish_length":
+                    raise
+                try:
+                    return call(SUMMARY_MAP_RETRY_MAX_TOKENS, allow_error=allow_error)
+                except SummaryNetworkError as retry_exc:
+                    if retry_exc.reason == "finish_length":
+                        raise SummaryNetworkError(
+                            "bad_response", "map_finish_length"
+                        ) from retry_exc
+                    raise
+
+        raw = call_with_budget()
         parsed = self._parse_json_object(raw, stage="map")
         summary = parsed.get("summary")
         if not isinstance(summary, str):
@@ -606,8 +612,13 @@ class OpenAICompatibleSummaryProvider:
             # 초과 징후가 없는 error다 — 스키마가 열어 준 탈출구를 모델이 고른 것이므로
             # 오류 형태를 뺀 문법으로 한 번 더 물어본다. 이게 없으면 그 청크는 영구히
             # 요약되지 않고 문서 전체가 실패한다.
+            #
+            # 이 재질의도 예산 확대를 거친다. error를 못 쓰게 됐으니 모델은 이제 긴
+            # 요약을 쓰기 시작하고, 첫 호출보다 오히려 상한에 걸리기 쉽다. 예산 확대
+            # 밖에 두면 그 자리에서 날것의 finish_length가 올라가고, _is_input_too_large()가
+            # 그것을 제외하므로 executor의 적응 분할도 발동하지 않아 복구 경로가 사라진다.
             parsed = self._parse_json_object(
-                call(SUMMARY_MAP_MAX_TOKENS, allow_error=False), stage="map"
+                call_with_budget(allow_error=False), stage="map"
             )
             summary = parsed.get("summary")
         if not isinstance(summary, str):
