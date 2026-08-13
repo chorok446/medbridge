@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DocumentQa } from "@/components/document-qa";
@@ -114,7 +114,11 @@ function renderQa() {
 
 // 학습 수준은 localStorage에 남는다 — 초기화하지 않으면 앞 테스트의 선택이 뒤 테스트로
 // 새어 기본값 검증이 순서에 따라 깨진다.
-beforeEach(() => window.localStorage.clear());
+beforeEach(() => {
+  window.localStorage.clear();
+  for (const mock of Object.values(apiMock)) mock.mockReset();
+  for (const mock of Object.values(streamMock)) mock.mockReset();
+});
 
 describe("DocumentQa", () => {
   afterEach(() => vi.restoreAllMocks());
@@ -125,6 +129,117 @@ describe("DocumentQa", () => {
     expect(await screen.findByText("이 문서에 대해 질문해 보세요.")).toBeInTheDocument();
     expect(screen.getByText(/실제 진단·처방·응급 판단에 사용하지 마세요/)).toBeInTheDocument();
     expect(screen.getByText("이 문서의 핵심 내용은 무엇인가요?")).toBeInTheDocument();
+  });
+
+  it("대화 목록을 확인하는 동안 질문 입력과 예시 질문을 잠근다", async () => {
+    let resolveThreads!: (threads: (typeof thread)[]) => void;
+    apiMock.listThreads.mockReturnValue(
+      new Promise((resolve) => {
+        resolveThreads = resolve;
+      }),
+    );
+    renderQa();
+
+    expect(await screen.findByText("대화 목록을 불러오는 중…")).toBeInTheDocument();
+    const example = screen.getByRole("button", {
+      name: "이 문서의 핵심 내용은 무엇인가요?",
+    });
+    expect(example).toBeDisabled();
+    expect(screen.getByLabelText("질문 입력")).toBeDisabled();
+    await userEvent.click(example);
+    expect(apiMock.createThread).not.toHaveBeenCalled();
+
+    await act(async () => resolveThreads([]));
+    await waitFor(() => expect(screen.getByLabelText("질문 입력")).not.toBeDisabled());
+    expect(example).not.toBeDisabled();
+  });
+
+  it("대화 목록 오류를 빈 대화 상태와 구분하고 다시 불러올 수 있게 한다", async () => {
+    apiMock.listThreads.mockRejectedValue(new Error("list failed"));
+    renderQa();
+
+    expect(await screen.findByText("대화 목록을 불러오지 못했습니다.")).toBeInTheDocument();
+    expect(screen.queryByText(/저장된 대화가 없습니다/)).toBeNull();
+    expect(screen.getByLabelText("질문 입력")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "목록 다시 불러오기" })).toBeInTheDocument();
+  });
+
+  it("첫 질문의 새 대화 생성이 실패하면 질문을 보존하고 재시도를 안내한다", async () => {
+    apiMock.listThreads.mockResolvedValue([]);
+    apiMock.createThread.mockRejectedValue(new Error("create failed"));
+    renderQa();
+
+    await screen.findByText("이 문서에 대해 질문해 보세요.");
+    await userEvent.type(screen.getByLabelText("질문 입력"), "보존할 질문");
+    await userEvent.click(screen.getByRole("button", { name: "보내기" }));
+
+    expect(
+      await screen.findByText(/질문을 시작할 새 대화를 만들지 못했습니다/),
+    ).toBeInTheDocument();
+    expect(screen.getByLabelText("질문 입력")).toHaveValue("보존할 질문");
+    expect(streamMock.streamQuestion).not.toHaveBeenCalled();
+  });
+
+  it("선택한 대화 상세 오류를 목록 오류·빈 대화와 구분한다", async () => {
+    apiMock.listThreads.mockResolvedValue([thread]);
+    apiMock.getThread.mockRejectedValue(new Error("detail failed"));
+    renderQa();
+
+    expect(
+      await screen.findByText("선택한 대화 내용을 불러오지 못했습니다."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("대화 목록을 불러오지 못했습니다.")).toBeNull();
+    expect(screen.queryByText(/이 대화에는 아직 질문이 없습니다/)).toBeNull();
+    expect(screen.getByLabelText("질문 입력")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "대화 다시 불러오기" })).toBeInTheDocument();
+  });
+
+  it("빈 목록과 메시지가 없는 기존 대화를 서로 다른 상태로 안내한다", async () => {
+    apiMock.listThreads.mockResolvedValue([]);
+    const first = renderQa();
+    expect(await screen.findByText(/저장된 대화가 없습니다/)).toBeInTheDocument();
+    first.unmount();
+
+    apiMock.listThreads.mockResolvedValue([thread]);
+    apiMock.getThread.mockResolvedValue({ thread, messages: [] });
+    renderQa();
+    expect(await screen.findByText("이 대화에는 아직 질문이 없습니다.")).toBeInTheDocument();
+  });
+
+  it("답변 스트리밍 중 대화 선택·새 대화·삭제를 명확히 차단한다", async () => {
+    const secondThread = { ...thread, id: "t2", title: "폐" };
+    apiMock.listThreads.mockResolvedValue([thread, secondThread]);
+    apiMock.getThread.mockResolvedValue(answerDetail);
+    streamMock.cancelStream.mockResolvedValue({ id: "m3", status: "cancelled", errorCode: null });
+    streamMock.streamQuestion.mockImplementation(
+      async (
+        _d: string,
+        _t: string,
+        _q: string,
+        opts: { signal: AbortSignal; onEvent: (e: QaStreamEvent) => void },
+      ) => {
+        opts.onEvent({ type: "started", requestId: "r1", messageId: "m3" });
+        opts.onEvent({ type: "phase", phase: "generating" });
+        await new Promise<void>((resolve) => {
+          opts.signal.addEventListener("abort", () => resolve());
+        });
+      },
+    );
+    renderQa();
+
+    await screen.findByText("심장은 혈액을 보냅니다.");
+    await userEvent.type(screen.getByLabelText("질문 입력"), "계속 설명해 주세요");
+    await userEvent.click(screen.getByRole("button", { name: "보내기" }));
+
+    expect(
+      await screen.findByText(/답변을 만드는 동안에는 대화를 바꾸거나 삭제할 수 없습니다/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "이전 대화 선택" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "새 대화" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "삭제" })).toBeDisabled();
+
+    await userEvent.click(screen.getByRole("button", { name: "중단" }));
+    await waitFor(() => expect(streamMock.cancelStream).toHaveBeenCalled());
   });
 
   it("스트리밍으로 진행 중 검증된 주장을 점진적으로 보여준다", async () => {
@@ -150,6 +265,8 @@ describe("DocumentQa", () => {
     await screen.findByText("이 문서에 대해 질문해 보세요.");
     await userEvent.type(screen.getByLabelText("질문 입력"), "심장은 무엇을 하나요?");
     await userEvent.click(screen.getByRole("button", { name: "보내기" }));
+    await waitFor(() => expect(apiMock.createThread).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(streamMock.streamQuestion).toHaveBeenCalledTimes(1));
     // 스트림 종료 후 확정 답변이 표시된다.
     expect(await screen.findByText("심장은 혈액을 보냅니다.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "2쪽" })).toBeInTheDocument();

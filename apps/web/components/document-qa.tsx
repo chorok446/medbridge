@@ -78,6 +78,8 @@ export function DocumentQa({ doc, fileUrl }: Props) {
   const queryClient = useQueryClient();
   const nav = usePdfNavigation();
   const [input, setInput] = useState("");
+  const [isSubmittingQuestion, setIsSubmittingQuestion] = useState(false);
+  const [questionStartError, setQuestionStartError] = useState(false);
   const [confirmDeleteThread, setConfirmDeleteThread] = useState(false);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
@@ -111,6 +113,8 @@ export function DocumentQa({ doc, fileUrl }: Props) {
   const newThreadMutation = useMutation({
     mutationFn: () => createThread(doc.id),
     onSuccess: (created) => {
+      stream.reset();
+      setPendingQuestion(null);
       setSelectedThreadId(created.thread.id);
       void queryClient.invalidateQueries({ queryKey: ["qa-threads", doc.id] });
     },
@@ -119,10 +123,20 @@ export function DocumentQa({ doc, fileUrl }: Props) {
   const deleteMutation = useMutation({
     mutationFn: (threadId: string) => deleteThread(doc.id, threadId),
     onSuccess: () => {
+      stream.reset();
+      setPendingQuestion(null);
       setSelectedThreadId(null);
       void queryClient.invalidateQueries({ queryKey: ["qa-threads", doc.id] });
     },
   });
+
+  const threadTransitionPending = newThreadMutation.isPending || deleteMutation.isPending;
+  const streamBusy = stream.active || isSubmittingQuestion;
+  const threadListReady = threadsQuery.isSuccess;
+  const threadControlsLocked = !threadListReady || streamBusy || threadTransitionPending;
+  const threadDetailReady = effectiveThreadId === null || detailQuery.isSuccess;
+  const questionsReady = threadListReady && threadDetailReady;
+  const questionControlsLocked = !questionsReady || streamBusy || threadTransitionPending;
 
   const lastAssistant = messages.filter((m) => m.role === "assistant").at(-1);
   const lastFollowups = lastAssistant?.followups ?? [];
@@ -140,7 +154,7 @@ export function DocumentQa({ doc, fileUrl }: Props) {
     !providerUnavailable &&
     !consentNeeded &&
     !notReady;
-  const busy = stream.active;
+  const busy = streamBusy;
 
   const navigate = nav.navigate;
 
@@ -151,12 +165,14 @@ export function DocumentQa({ doc, fileUrl }: Props) {
 
   async function askQuestion(raw: string) {
     const q = raw.trim();
-    if (!q || busy) return;
+    if (!q || questionControlsLocked) return;
     // busy는 렌더 시점 값이라 createThread를 기다리는 동안 아직 false다. 예시·후속 질문
     // 버튼을 연타하면 그 틈으로 두 번째 클릭이 들어와 스레드가 둘 생기고, 두 번째 요청이
     // 첫 번째를 abort해 첫 질문은 답을 못 받은 채 남는다. ref로 즉시 잠근다.
     if (sendingRef.current) return;
     sendingRef.current = true;
+    setIsSubmittingQuestion(true);
+    setQuestionStartError(false);
     try {
       let threadId = effectiveThreadId;
       if (threadId === null) {
@@ -169,17 +185,29 @@ export function DocumentQa({ doc, fileUrl }: Props) {
       setInput("");
       await stream.ask(threadId, q, level);
       // 스트림 종료(완료/취소/중단/실패) → DB에 확정된 메시지를 다시 불러온다.
-      setPendingQuestion(null);
       void queryClient.invalidateQueries({ queryKey: ["qa-thread", doc.id, threadId] });
       void queryClient.invalidateQueries({ queryKey: ["qa-threads", doc.id] });
+    } catch {
+      // 스레드 생성 자체가 실패하면 스트림 상태 머신까지 도달하지 못한다. 질문은
+      // 입력란에 그대로 남겨 두고, 별도 오류로 다음 행동을 안내한다.
+      setQuestionStartError(true);
     } finally {
+      setPendingQuestion(null);
+      setIsSubmittingQuestion(false);
       sendingRef.current = false;
     }
   }
 
   async function retryLastAnswer() {
-    if (!effectiveThreadId || busy || sendingRef.current || !canRetryLastAnswer) return;
+    if (
+      !effectiveThreadId ||
+      questionControlsLocked ||
+      sendingRef.current ||
+      !canRetryLastAnswer
+    )
+      return;
     sendingRef.current = true;
+    setIsSubmittingQuestion(true);
     try {
       setPendingQuestion(null);
       await stream.retry(effectiveThreadId, level);
@@ -188,8 +216,16 @@ export function DocumentQa({ doc, fileUrl }: Props) {
       });
       void queryClient.invalidateQueries({ queryKey: ["qa-threads", doc.id] });
     } finally {
+      setIsSubmittingQuestion(false);
       sendingRef.current = false;
     }
+  }
+
+  function selectThread(threadId: string) {
+    if (threadControlsLocked) return;
+    stream.reset();
+    setPendingQuestion(null);
+    setSelectedThreadId(threadId);
   }
 
   return (
@@ -205,21 +241,29 @@ export function DocumentQa({ doc, fileUrl }: Props) {
         />
       </div>
 
-      <aside className="flex h-[640px] flex-col rounded-lg border border-slate-200 bg-white">
+      <aside
+        aria-busy={threadsQuery.isLoading || detailQuery.isLoading || streamBusy}
+        className="flex h-[640px] flex-col rounded-lg border border-slate-200 bg-white"
+      >
         <div className="flex items-center gap-2 border-b border-slate-100 p-2 text-sm">
           <button
             type="button"
-            onClick={() => newThreadMutation.mutate()}
-            className="rounded border border-slate-300 px-2.5 py-1 hover:bg-slate-50"
+            onClick={() => {
+              setQuestionStartError(false);
+              newThreadMutation.mutate();
+            }}
+            disabled={threadControlsLocked}
+            className="rounded border border-slate-300 px-2.5 py-1 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
           >
             새 대화
           </button>
           {threads.length > 0 && (
             <select
               value={effectiveThreadId ?? ""}
-              onChange={(e) => setSelectedThreadId(e.target.value)}
+              onChange={(e) => selectThread(e.target.value)}
               aria-label="이전 대화 선택"
-              className="min-w-0 flex-1 truncate rounded border border-slate-300 px-2 py-1"
+              disabled={threadControlsLocked}
+              className="min-w-0 flex-1 truncate rounded border border-slate-300 px-2 py-1 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {threads.map((t) => (
                 <option key={t.id} value={t.id}>
@@ -232,7 +276,8 @@ export function DocumentQa({ doc, fileUrl }: Props) {
             <button
               type="button"
               onClick={() => setConfirmDeleteThread(true)}
-              className="rounded border border-red-200 px-2.5 py-1 text-red-700 hover:bg-red-50"
+              disabled={threadControlsLocked}
+              className="rounded border border-red-200 px-2.5 py-1 text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
               삭제
             </button>
@@ -240,10 +285,74 @@ export function DocumentQa({ doc, fileUrl }: Props) {
         </div>
 
         <div className="flex-1 overflow-auto p-3">
-          {messages.length === 0 && !busy && (
+          {streamBusy && (
+            <p role="status" className="mb-3 rounded bg-blue-50 px-3 py-2 text-sm text-blue-800">
+              답변을 만드는 동안에는 대화를 바꾸거나 삭제할 수 없습니다. 먼저 중단해 주세요.
+            </p>
+          )}
+
+          {threadsQuery.isLoading && (
+            <p role="status" className="mb-3 rounded bg-slate-50 px-3 py-2 text-sm text-slate-600">
+              대화 목록을 불러오는 중…
+            </p>
+          )}
+          {threadsQuery.isError && (
+            <div role="alert" className="mb-3 rounded bg-red-50 px-3 py-2 text-sm text-red-700">
+              <p>대화 목록을 불러오지 못했습니다.</p>
+              <button
+                type="button"
+                onClick={() => void threadsQuery.refetch()}
+                className="mt-1.5 rounded border border-red-300 px-3 py-1.5 text-xs hover:bg-red-100"
+              >
+                목록 다시 불러오기
+              </button>
+            </div>
+          )}
+          {effectiveThreadId !== null && detailQuery.isLoading && (
+            <p role="status" className="mb-3 rounded bg-slate-50 px-3 py-2 text-sm text-slate-600">
+              선택한 대화 내용을 불러오는 중…
+            </p>
+          )}
+          {effectiveThreadId !== null && detailQuery.isError && (
+            <div role="alert" className="mb-3 rounded bg-red-50 px-3 py-2 text-sm text-red-700">
+              <p>선택한 대화 내용을 불러오지 못했습니다.</p>
+              <button
+                type="button"
+                onClick={() => void detailQuery.refetch()}
+                className="mt-1.5 rounded border border-red-300 px-3 py-1.5 text-xs hover:bg-red-100"
+              >
+                대화 다시 불러오기
+              </button>
+            </div>
+          )}
+          {newThreadMutation.isError && (
+            <p role="alert" className="mb-3 rounded bg-red-50 px-3 py-2 text-sm text-red-700">
+              새 대화를 만들지 못했습니다. 다시 시도해 주세요.
+            </p>
+          )}
+          {deleteMutation.isError && (
+            <p role="alert" className="mb-3 rounded bg-red-50 px-3 py-2 text-sm text-red-700">
+              대화를 삭제하지 못했습니다. 다시 시도해 주세요.
+            </p>
+          )}
+          {questionStartError && (
+            <p role="alert" className="mb-3 rounded bg-red-50 px-3 py-2 text-sm text-red-700">
+              질문을 시작할 새 대화를 만들지 못했습니다. 잠시 후 다시 보내 주세요.
+            </p>
+          )}
+          {(threadsQuery.isLoading || (questionsReady && messages.length === 0)) && !busy && (
             <div className="flex flex-col items-center gap-4 px-2 py-6 text-center">
+              {threadListReady && (
+                <p role="status" className="text-sm text-slate-500">
+                  {threads.length === 0
+                    ? "저장된 대화가 없습니다. 질문하면 새 대화가 시작됩니다."
+                    : "이 대화에는 아직 질문이 없습니다."}
+                </p>
+              )}
               <p className="text-lg font-semibold text-slate-900">
-                이 문서에 대해 질문해 보세요.
+                {threadsQuery.isLoading
+                  ? "대화 목록을 확인한 뒤 질문할 수 있어요."
+                  : "이 문서에 대해 질문해 보세요."}
               </p>
               <ul className="flex w-full flex-col gap-2">
                 {EXAMPLE_QUESTIONS.map((q) => (
@@ -251,7 +360,8 @@ export function DocumentQa({ doc, fileUrl }: Props) {
                     <button
                       type="button"
                       onClick={() => void askQuestion(q)}
-                      className="w-full rounded-lg border border-slate-200 px-4 py-3 text-left text-sm hover:bg-slate-50"
+                      disabled={questionControlsLocked}
+                      className="w-full rounded-lg border border-slate-200 px-4 py-3 text-left text-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {q}
                     </button>
@@ -343,6 +453,7 @@ export function DocumentQa({ doc, fileUrl }: Props) {
                   <button
                     type="button"
                     onClick={() => void askQuestion(q)}
+                    disabled={questionControlsLocked}
                     className="rounded-full border border-slate-200 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50"
                   >
                     {q}
@@ -386,6 +497,7 @@ export function DocumentQa({ doc, fileUrl }: Props) {
                   className="sr-only"
                   checked={level === l.key}
                   onChange={() => chooseLevel(l.key)}
+                  disabled={streamBusy}
                 />
                 {l.label}
               </label>
@@ -407,11 +519,12 @@ export function DocumentQa({ doc, fileUrl }: Props) {
               onChange={(e) => setInput(e.target.value)}
               placeholder="이 문서에 대해 질문하기"
               aria-label="질문 입력"
-              className="flex-1 rounded border border-slate-300 px-3 py-2 text-sm"
+              disabled={questionControlsLocked}
+              className="flex-1 rounded border border-slate-300 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500"
             />
             <button
               type="submit"
-              disabled={busy || !input.trim()}
+              disabled={questionControlsLocked || !input.trim()}
               className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
             >
               보내기
@@ -556,4 +669,3 @@ function SourceBadges({
     </div>
   );
 }
-
