@@ -42,6 +42,11 @@ class SummaryRun(Base):
     document_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("documents.id", ondelete="CASCADE"), index=True
     )
+    # 재기동 복구는 "최신 잡"을 추측하지 않고 이 실행을 만든 정확한 잡만 다시 큐에
+    # 넣는다. 기존 DB 행은 대응 관계를 증명할 수 없으므로 nullable이며 복구하지 않는다.
+    job_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("document_jobs.id", ondelete="SET NULL"), nullable=True, unique=True
+    )
     status: Mapped[SummaryRunStatus] = mapped_column(
         _str_enum(SummaryRunStatus, "summary_run_status"), default=SummaryRunStatus.QUEUED
     )
@@ -53,6 +58,20 @@ class SummaryRun(Base):
     source_chunk_hash: Mapped[str] = mapped_column(String(64))
     learner_level: Mapped[str] = mapped_column(String(30))
     language: Mapped[str] = mapped_column(String(10), default="ko")
+    include_sections: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    include_prerequisites: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="1"
+    )
+    # endpoint 원문/API key는 저장하지 않는다. 모델 digest와 설치별 credential HMAC을
+    # 포함한 비밀 없는 SHA-256 지문만 보존해 재기동 시 설정 일치를 fail-closed로 확인한다.
+    provider_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # 모델 digest 등 재기동 뒤 동일성을 증명할 identity가 모두 해석된 실행만 True다.
+    provider_identity_resumable: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0"
+    )
+    # 앱 크래시/강제 종료가 provider 실패 횟수를 소모하지 않도록 별도 복구 횟수를 둔다.
+    # 반복 크래시 무한 루프는 이 영속 카운터의 상한으로 차단한다.
+    resume_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     # 계층 요약 진행률 — 계획된 노드 수와 완료(재사용 포함) 노드 수. 0이면 아직 계획 전.
     planned_nodes: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     completed_nodes: Mapped[int] = mapped_column(Integer, default=0, server_default="0")

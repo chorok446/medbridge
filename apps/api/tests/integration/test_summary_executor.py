@@ -215,6 +215,123 @@ class TestCheckpointing:
             ).scalar_one()
             assert reused == await _node_count(run2_id)
 
+    async def test_same_run_restart_reuses_rows_without_unique_collision(self, client):
+        """프로세스 재기동은 같은 run의 성공 행을 INSERT하지 않고 진행률을 복원한다."""
+
+        doc_id = await _upload_chunked(client, fx.single_column_korean(pages=3))
+        first = CountingProvider()
+        run_id, job_id, revision, chunk_hash = await _make_run(doc_id, first)
+        await _run_executor(doc_id, run_id, job_id, revision, chunk_hash, first)
+        node_count = await _node_count(run_id)
+        assert node_count > 0
+        async with get_session_factory()() as session:
+            before_ids = set(
+                (
+                    await session.execute(
+                        select(SummaryNode.id).where(SummaryNode.summary_run_id == run_id)
+                    )
+                ).scalars()
+            )
+            run = await session.get(SummaryRun, run_id)
+            assert run is not None
+            run.completed_nodes = 0  # 중단 직전 카운터 write 유실/오염도 실제 행으로 복원
+            await session.commit()
+
+        resumed = CountingProvider()
+        drafts = await _run_executor(doc_id, run_id, job_id, revision, chunk_hash, resumed)
+
+        assert drafts
+        assert resumed.group_calls == 0
+        assert resumed.document_calls == 1
+        assert await _node_count(run_id) == node_count
+        async with get_session_factory()() as session:
+            after_ids = set(
+                (
+                    await session.execute(
+                        select(SummaryNode.id).where(SummaryNode.summary_run_id == run_id)
+                    )
+                ).scalars()
+            )
+            run = await session.get(SummaryRun, run_id)
+            assert run is not None
+            assert run.planned_nodes == node_count
+            assert run.completed_nodes == node_count
+        assert after_ids == before_ids
+
+    async def test_same_run_degraded_row_is_recomputed_in_place(self, client):
+        """열화 checkpoint는 잃거나 중복 INSERT하지 않고 같은 행에서 개선한다."""
+
+        doc_id = await _upload_chunked(client, fx.single_column_korean(pages=3))
+        first = CountingProvider()
+        run_id, job_id, revision, chunk_hash = await _make_run(doc_id, first)
+        await _run_executor(doc_id, run_id, job_id, revision, chunk_hash, first)
+        node_count = await _node_count(run_id)
+        async with get_session_factory()() as session:
+            node = (
+                (
+                    await session.execute(
+                        select(SummaryNode)
+                        .where(
+                            SummaryNode.summary_run_id == run_id,
+                            SummaryNode.level == 0,
+                        )
+                        .order_by(SummaryNode.position)
+                        .limit(1)
+                    )
+                )
+                .scalars()
+                .one()
+            )
+            degraded_id = node.id
+            previous_attempts = node.attempt_count
+            node.status = "degraded"
+            await session.commit()
+
+        resumed = CountingProvider()
+        drafts = await _run_executor(doc_id, run_id, job_id, revision, chunk_hash, resumed)
+
+        assert drafts
+        assert resumed.group_calls == 1
+        assert await _node_count(run_id) == node_count
+        async with get_session_factory()() as session:
+            node = await session.get(SummaryNode, degraded_id)
+            run = await session.get(SummaryRun, run_id)
+            assert node is not None and node.status == "succeeded"
+            assert node.attempt_count > previous_attempts
+            assert run is not None and run.completed_nodes == node_count
+
+    async def test_same_run_checkpoint_hash_mismatch_fails_before_provider_call(
+        self, client, monkeypatch
+    ):
+        """동일 위치가 다른 입력이면 overwrite/재전송하지 않고 fail-closed한다."""
+
+        _set_concurrency(monkeypatch, 1)
+        doc_id = await _upload_chunked(client, fx.single_column_korean(pages=3))
+        provider = CountingProvider()
+        run_id, job_id, revision, chunk_hash = await _make_run(doc_id, provider)
+        async with get_session_factory()() as session:
+            session.add(
+                SummaryNode(
+                    document_id=doc_id,
+                    summary_run_id=run_id,
+                    level=0,
+                    position=0,
+                    status="succeeded",
+                    input_hash="0" * 64,
+                    output_hash="1" * 64,
+                    summary_text="현재 계획과 다른 체크포인트",
+                    source_chunk_ids_json=[],
+                )
+            )
+            await session.commit()
+
+        with pytest.raises(executor_mod.SummaryCheckpointChanged):
+            await _run_executor(doc_id, run_id, job_id, revision, chunk_hash, provider)
+
+        assert provider.group_calls == 0
+        assert provider.document_calls == 0
+        assert await _node_count(run_id) == 1
+
     async def test_reused_node_rebuilds_bounded_evidence_from_current_full_coverage(
         self, client
     ):

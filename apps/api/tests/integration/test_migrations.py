@@ -366,6 +366,127 @@ def test_0014_downgrade_promotes_only_active_generation(tmp_path, monkeypatch):
         assert get_settings().database_url_sync == original_url
 
 
+def test_0015_summary_resume_contract_upgrade_and_downgrade(tmp_path, monkeypatch):
+    """기존 run은 보존하되 증명 불가능한 job 연결은 만들지 않고 rollback도 가능해야 한다."""
+
+    database = tmp_path / "summary-resume-0015.db"
+    original_url = get_settings().database_url_sync
+    original_database_env = os.environ.get("DATABASE_URL")
+    try:
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{database.as_posix()}")
+        get_settings.cache_clear()
+        cfg = alembic_config()
+        command.upgrade(cfg, "0014")
+
+        user_id = uuid.uuid4().hex
+        document_id = uuid.uuid4().hex
+        legacy_run_id = uuid.uuid4().hex
+        with closing(sqlite3.connect(str(database))) as conn:
+            conn.execute("PRAGMA foreign_keys=ON")
+            conn.execute("INSERT INTO app_profile (id) VALUES (?)", (user_id,))
+            conn.execute(
+                """
+                INSERT INTO documents (
+                    id, user_id, title, original_filename, sha256, file_size
+                ) VALUES (?, ?, 'resume', 'resume.pdf', ?, 1024)
+                """,
+                (document_id, user_id, "a" * 64),
+            )
+            conn.execute(
+                """
+                INSERT INTO summary_runs (
+                    id, document_id, status, provider_name, model_name, prompt_version,
+                    schema_version, source_revision, source_chunk_hash, learner_level, language
+                ) VALUES (?, ?, 'RUNNING', 'deterministic', 'model', 'v1',
+                          1, 1, ?, 'nursing_student', 'ko')
+                """,
+                (legacy_run_id, document_id, "b" * 64),
+            )
+            conn.commit()
+
+        command.upgrade(cfg, "0015")
+        with closing(sqlite3.connect(str(database))) as conn:
+            conn.execute("PRAGMA foreign_keys=ON")
+            columns = {row[1] for row in conn.execute("PRAGMA table_info('summary_runs')")}
+            assert {
+                "job_id",
+                "include_sections",
+                "include_prerequisites",
+                "provider_fingerprint",
+                "provider_identity_resumable",
+                "resume_count",
+            } <= columns
+            # 이전 버전은 run/job 대응과 옵션을 증명할 수 없다. 옵션 기본값은 읽기 호환용,
+            # NULL job/fingerprint는 자동 재개 금지 표식이다.
+            assert conn.execute(
+                """
+                SELECT job_id, include_sections, include_prerequisites,
+                       provider_fingerprint, provider_identity_resumable, resume_count
+                  FROM summary_runs WHERE id = ?
+                """,
+                (legacy_run_id,),
+            ).fetchone() == (None, 1, 1, None, 0, 0)
+
+            job_id = uuid.uuid4().hex
+            linked_run_id = uuid.uuid4().hex
+            conn.execute(
+                """
+                INSERT INTO document_jobs (
+                    id, document_id, job_type, status, correlation_id
+                ) VALUES (?, ?, 'SUMMARIZE', 'RUNNING', 'restart-test')
+                """,
+                (job_id, document_id),
+            )
+            conn.execute(
+                """
+                INSERT INTO summary_runs (
+                    id, document_id, job_id, status, provider_name, model_name,
+                    prompt_version, schema_version, source_revision, source_chunk_hash,
+                    learner_level, language, include_sections, include_prerequisites,
+                    provider_fingerprint
+                ) VALUES (?, ?, ?, 'RUNNING', 'deterministic', 'model', 'v1', 1, 1, ?,
+                          'nursing_student', 'ko', 0, 1, ?)
+                """,
+                (linked_run_id, document_id, job_id, "b" * 64, "c" * 64),
+            )
+            with pytest.raises(sqlite3.IntegrityError):
+                conn.execute(
+                    """
+                    INSERT INTO summary_runs (
+                        id, document_id, job_id, status, provider_name, model_name,
+                        prompt_version, schema_version, source_revision, source_chunk_hash,
+                        learner_level, language, provider_fingerprint
+                    ) VALUES (?, ?, ?, 'RUNNING', 'deterministic', 'model', 'v1', 1, 1, ?,
+                              'nursing_student', 'ko', ?)
+                    """,
+                    (uuid.uuid4().hex, document_id, job_id, "b" * 64, "c" * 64),
+                )
+            conn.rollback()
+            assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+        command.downgrade(cfg, "0014")
+        with closing(sqlite3.connect(str(database))) as conn:
+            columns = {row[1] for row in conn.execute("PRAGMA table_info('summary_runs')")}
+            assert "job_id" not in columns
+            assert "include_sections" not in columns
+            assert "include_prerequisites" not in columns
+            assert "provider_fingerprint" not in columns
+            assert "provider_identity_resumable" not in columns
+            assert "resume_count" not in columns
+            assert conn.execute(
+                "SELECT id FROM summary_runs WHERE id = ?", (legacy_run_id,)
+            ).fetchone() == (legacy_run_id,)
+            assert conn.execute("PRAGMA quick_check").fetchone() == ("ok",)
+            assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    finally:
+        if original_database_env is None:
+            monkeypatch.delenv("DATABASE_URL", raising=False)
+        else:
+            monkeypatch.setenv("DATABASE_URL", original_database_env)
+        get_settings.cache_clear()
+        assert get_settings().database_url_sync == original_url
+
+
 def test_sqlite_online_backup_includes_committed_wal_rows(tmp_path):
     from app.main import _backup_sqlite_database
 

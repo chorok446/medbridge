@@ -108,6 +108,10 @@ class SummaryProviderChanged(Exception):
     """실행 중 공급자 설정이 바뀜 — 이전 설정 객체로 계속 보내지 않는다."""
 
 
+class SummaryCheckpointChanged(Exception):
+    """같은 run의 체크포인트 위치가 현재 계획과 다름 — 결과를 섞지 않는다."""
+
+
 class SummaryNoContent(Exception):
     """요약할 본문이 없다."""
 
@@ -254,6 +258,29 @@ async def _find_reusable(session, document_id: uuid.UUID, input_hash: str) -> Su
     )
 
 
+async def _find_same_run_checkpoint(
+    session,
+    run_id: uuid.UUID,
+    level: int,
+    position: int,
+) -> SummaryNode | None:
+    """같은 실행의 정확한 계획 위치에 이미 commit된 체크포인트를 찾는다."""
+
+    return (
+        (
+            await session.execute(
+                select(SummaryNode).where(
+                    SummaryNode.summary_run_id == run_id,
+                    SummaryNode.level == level,
+                    SummaryNode.position == position,
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+
+
 def _output_hash(text: str) -> str:
     import hashlib
 
@@ -284,7 +311,8 @@ def _representative_error(group: BaseExceptionGroup) -> BaseException:
             SummaryCancelled
             | SummaryRevisionChanged
             | SummaryConsentRevoked
-            | SummaryProviderChanged,
+            | SummaryProviderChanged
+            | SummaryCheckpointChanged,
         ):
             return exc
     # 남은 게 없으면 실행 자체가 밖에서 취소된 것이다 — 그대로 전파한다.
@@ -370,8 +398,21 @@ async def execute_hierarchical_summary(
     async with factory() as session:
         run = await session.get(SummaryRun, run_id)
         if run is not None:
+            # 프로세스 중단 전 commit된 노드는 같은 run을 재개할 때 이미 완료한 작업이다.
+            # succeeded는 그대로 재사용하고 degraded는 같은 행을 재계산·교체하므로 둘 다
+            # 현재 진행률에 포함한다. 오래된 카운터를 신뢰하지 않고 실제 행으로 복원한다.
+            completed = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(SummaryNode)
+                    .where(
+                        SummaryNode.summary_run_id == run_id,
+                        SummaryNode.status.in_(["succeeded", "degraded"]),
+                    )
+                )
+            ).scalar_one()
             run.planned_nodes = planned
-            run.completed_nodes = 0
+            run.completed_nodes = min(completed, planned)
             await session.commit()
 
     group_chars = [g.char_count for g in groups]
@@ -673,12 +714,43 @@ async def _process_node(
     DB에 저장된 evidence-only 배열을 읽어 coverage로 승격하지 않는다. 레벨 0은 자기
     자신, 레벨 1+는 자식 노드의 coverage이며, 분할·열화로 버린 조각은 제외한다.
     """
+    replace_checkpoint_id: uuid.UUID | None = None
     async with factory() as session:
         await _assert_runnable(
             session, check_full_hash=counter.next_needs_full_check(), **guard_args
         )
+        same_run = await _find_same_run_checkpoint(session, run_id, level, position)
+        if same_run is not None:
+            if same_run.input_hash != input_hash:
+                # source/provider/prompt 계약이 같다면 같은 위치의 hash도 같아야 한다.
+                # 코드 변경이나 DB 손상을 추측해 덮어쓰지 않고 run 전체를 안전하게 멈춘다.
+                raise SummaryCheckpointChanged
+            if same_run.status == "succeeded":
+                if not same_run.summary_text.strip() or same_run.output_hash != _output_hash(
+                    same_run.summary_text
+                ):
+                    raise SummaryCheckpointChanged
+                evidence_ids = bounded_evidence_chunk_ids(source_ids)
+                counter.processed += 1
+                return _NodeResult(
+                    node_id=same_run.id,
+                    input_hash=input_hash,
+                    summary_text=same_run.summary_text,
+                    # DB 배열은 사용자 근거용 bounded evidence일 뿐이다. reduce coverage는
+                    # 반드시 이번 실행 계획의 current source ids로 다시 구성한다.
+                    coverage_chunk_ids=list(source_ids),
+                    evidence_chunk_ids=evidence_ids,
+                    section_title=section_title,
+                )
+            if same_run.status == "degraded":
+                # 열화 결과는 모델/컨텍스트 여유가 생기면 개선할 수 있으므로 재사용하지
+                # 않는다. 네트워크 실패 시 checkpoint를 잃지 않도록 같은 행을 나중에 교체한다.
+                replace_checkpoint_id = same_run.id
+            else:
+                raise SummaryCheckpointChanged
+
         reusable = await _find_reusable(session, document_id, input_hash)
-        if reusable is not None:
+        if reusable is not None and replace_checkpoint_id is None:
             evidence_ids = bounded_evidence_chunk_ids(source_ids)
             node = SummaryNode(
                 document_id=document_id,
@@ -769,24 +841,43 @@ async def _process_node(
 
     async def _persist() -> uuid.UUID:
         async with factory() as session:
-            node = SummaryNode(
-                document_id=document_id,
-                summary_run_id=run_id,
-                level=level,
-                position=position,
-                # 열화 결과(모델이 만든 완결 요약이 아니라 이어붙인 축약본)는 succeeded로
-                # 두지 않는다. 그러면 _find_reusable이 이후 모든 재시도에 같은 축약본을
-                # 돌려줘, 사용자가 컨텍스트를 늘려도 더 나은 요약을 받을 수 없다.
-                status="degraded" if result.degraded else "succeeded",
-                input_hash=input_hash,
-                output_hash=_output_hash(text),
-                summary_text=text,
-                source_chunk_ids_json=evidence_ids,
-                attempt_count=max(attempt_counter.attempts, request_budget.requests_started),
-                reused=False,
-            )
-            session.add(node)
-            await _bump_completed(session, run_id)
+            attempts = max(attempt_counter.attempts, request_budget.requests_started)
+            if replace_checkpoint_id is not None:
+                node = await session.get(SummaryNode, replace_checkpoint_id)
+                if (
+                    node is None
+                    or node.summary_run_id != run_id
+                    or node.level != level
+                    or node.position != position
+                    or node.input_hash != input_hash
+                    or node.status != "degraded"
+                ):
+                    raise SummaryCheckpointChanged
+                node.status = "degraded" if result.degraded else "succeeded"
+                node.output_hash = _output_hash(text)
+                node.summary_text = text
+                node.source_chunk_ids_json = evidence_ids
+                node.attempt_count = (node.attempt_count or 0) + attempts
+                node.reused = False
+            else:
+                node = SummaryNode(
+                    document_id=document_id,
+                    summary_run_id=run_id,
+                    level=level,
+                    position=position,
+                    # 열화 결과(모델이 만든 완결 요약이 아니라 이어붙인 축약본)는 succeeded로
+                    # 두지 않는다. 그러면 _find_reusable이 이후 모든 재시도에 같은 축약본을
+                    # 돌려줘, 사용자가 컨텍스트를 늘려도 더 나은 요약을 받을 수 없다.
+                    status="degraded" if result.degraded else "succeeded",
+                    input_hash=input_hash,
+                    output_hash=_output_hash(text),
+                    summary_text=text,
+                    source_chunk_ids_json=evidence_ids,
+                    attempt_count=attempts,
+                    reused=False,
+                )
+                session.add(node)
+                await _bump_completed(session, run_id)
             await session.commit()
             await session.refresh(node)
             return node.id

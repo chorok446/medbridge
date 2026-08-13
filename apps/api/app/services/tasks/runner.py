@@ -299,8 +299,18 @@ class LocalTaskRunner:
             )
         to_enqueue.extend(ocr_docs)
 
-        # RUNNING/QUEUED로 남은 stale 잡 정리 — OCR은 위에서 재개한 문서를 제외하고,
-        # 청크·요약은 재개 지점이 없어 실패로 확정해 사용자가 다시 요청하게 한다.
+        # 요약은 성공 노드가 run에 체크포인트로 저장되므로 조건이 모두 같으면 같은
+        # run/job으로 재개할 수 있다. source/provider/동의/시도 상한 검증은 전송 전에
+        # 서비스가 fail-closed로 수행한다.
+        from app.services.summary import service as summary_service
+
+        async with get_session_factory()() as session:
+            summary_resumes = await summary_service.prepare_interrupted_summary_resumes(session)
+        resumed_summary_job_ids = {item.job_id for item in summary_resumes}
+        resumed_summary_run_ids = {item.run_id for item in summary_resumes}
+
+        # RUNNING/QUEUED로 남은 stale 잡 정리. OCR과 검증을 통과한 요약은 제외한다.
+        # 청크 rebuild와 안전성을 증명할 수 없었던 legacy 요약만 실패로 확정한다.
         from datetime import UTC as _UTC
         from datetime import datetime as _dt
 
@@ -321,6 +331,8 @@ class LocalTaskRunner:
                     (DocumentJob.job_type != JobType.OCR_DOCUMENT)
                     | DocumentJob.document_id.notin_(ocr_docs)
                 )
+            if resumed_summary_job_ids:
+                stale_stmt = stale_stmt.where(DocumentJob.id.notin_(resumed_summary_job_ids))
             stale_jobs = (await session.execute(stale_stmt)).scalars().all()
             for job in stale_jobs:
                 job.status = JobStatus.FAILED
@@ -341,10 +353,36 @@ class LocalTaskRunner:
                 .all()
             )
             for run in stale_runs:
+                if run.id in resumed_summary_run_ids:
+                    continue
                 run.status = SummaryRunStatus.FAILED
                 run.error_code = "INTERRUPTED"
                 run.completed_at = _dt.now(_UTC)
             await session.commit()
+
+        # 오래된 실패/취소 체크포인트는 기동당 유계 행만 작은 트랜잭션으로 정리한다.
+        # 복구 태스크 등록 전에 끝내 SQLite writer와 모델 실행의 checkpoint 저장이
+        # 경쟁하지 않게 한다. 실패는 핵심 기동·복구를 막지 않고 다음 기동에 재시도한다.
+        try:
+            async with get_session_factory()() as session:
+                removed_summary_rows = await summary_service.cleanup_summary_history(session)
+        except Exception:
+            removed_summary_rows = 0
+            logger.warning("summary_history_cleanup_failed")
+        if removed_summary_rows:
+            logger.info("summary_history_cleaned", rows=removed_summary_rows)
+
+        # stale 정리와 history cleanup이 재개할 행을 건드리지 않은 뒤 태스크를 등록한다.
+        # 같은 run/job과 저장된 옵션을 그대로 넘기며 job 진입에서만 attempt가 증가한다.
+        for item in summary_resumes:
+            self.enqueue_summary(
+                item.document_id,
+                item.correlation_id,
+                run_id=item.run_id,
+                job_id=item.job_id,
+                include_sections=item.include_sections,
+                include_prerequisites=item.include_prerequisites,
+            )
 
         # 이전 프로세스의 활성 Q&A 스트림(pending/streaming/finalizing)을 interrupted로
         # 확정한다 — 사용자 질문은 보존, 초안은 최종으로 승격하지 않는다(재시도 가능).
@@ -352,14 +390,15 @@ class LocalTaskRunner:
 
         recovered_streams = await recover_interrupted_streams()
 
-        if docs or recovered_streams:
+        if docs or recovered_streams or summary_resumes:
             logger.info(
                 "recovered_interrupted_jobs",
                 requeued=len(to_enqueue),
                 total=len(docs),
                 streams=recovered_streams,
+                summaries=len(summary_resumes),
             )
-        return len(to_enqueue)
+        return len(to_enqueue) + len(summary_resumes)
 
     async def drain(self) -> None:
         """남은 작업 완료 대기 — 작업이 새 작업을 연쇄 등록(검증→추출)해도 전부 기다린다."""

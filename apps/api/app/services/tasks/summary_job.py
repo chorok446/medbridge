@@ -4,6 +4,7 @@
 크래시·중단은 실패로 확정해 사용자가 재실행할 수 있게 한다(OCR/청크와 동일 원칙).
 """
 
+import hmac
 import uuid
 from datetime import UTC, datetime
 
@@ -19,6 +20,7 @@ from app.services.summary import service as summary_service
 from app.services.summary.endpoint import SummaryNetworkError
 from app.services.summary.executor import (
     SummaryCancelled,
+    SummaryCheckpointChanged,
     SummaryConsentRevoked,
     SummaryNoContent,
     SummaryProviderChanged,
@@ -26,6 +28,7 @@ from app.services.summary.executor import (
     execute_hierarchical_summary,
 )
 from app.services.summary.factory import get_summary_provider
+from app.services.summary.provider import provider_checkpoint_fingerprint
 from app.services.tasks.jobs import latest_job
 
 logger = get_logger(__name__)
@@ -110,6 +113,8 @@ async def run_summary_job(
         job = await session.get(DocumentJob, job_id)
         if doc is None or doc.deleted_at is not None or run is None or job is None:
             return
+        if run.job_id is not None and run.job_id != job.id:
+            return
         if not await _job_is_current(session, document_id, job_id):
             return  # 이미 취소·교체됨
         job.status = JobStatus.RUNNING
@@ -121,6 +126,11 @@ async def run_summary_job(
         start_hash = run.source_chunk_hash
         learner_level = run.learner_level
         language = run.language
+        # 호출자가 넘긴 transient 값이 아니라 run에 영속화된 옵션이 실행 계약이다.
+        include_sections = run.include_sections
+        include_prerequisites = run.include_prerequisites
+        expected_provider_fingerprint = run.provider_fingerprint
+        provider_identity_resumable = run.provider_identity_resumable
         await session.commit()
 
     # 2) 청크 스냅샷 + 공급자 해석 → 파이프라인(네트워크 I/O 가능하므로 스레드에서)
@@ -129,6 +139,21 @@ async def run_summary_job(
             provider = await get_summary_provider(session, resolve_identity=True)
             if not provider.available:
                 await _fail_run(session, run_id, job_id, "PROVIDER_UNAVAILABLE")
+                return
+            if expected_provider_fingerprint is not None and not hmac.compare_digest(
+                expected_provider_fingerprint,
+                provider_checkpoint_fingerprint(
+                    provider,
+                    include_fail_safe_generation=provider_identity_resumable,
+                ),
+            ):
+                await _fail_run(
+                    session,
+                    run_id,
+                    job_id,
+                    "PROVIDER_CHANGED",
+                    "provider_settings_changed",
+                )
                 return
             # 전송 직전 동의 재확인 — 시작 후 사용자가 외부 전송을 껐을 수 있다
             if summary_service.provider_is_external(provider):
@@ -191,6 +216,18 @@ async def run_summary_job(
                     job_id,
                     "PROVIDER_CHANGED",
                     "provider_settings_changed",
+                )
+        return
+    except SummaryCheckpointChanged:
+        logger.info("summary_checkpoint_changed", document_id=str(document_id))
+        async with factory() as session:
+            if await _job_is_current(session, document_id, job_id):
+                await _fail_run(
+                    session,
+                    run_id,
+                    job_id,
+                    "SUMMARY_RESUME_UNSAFE",
+                    "checkpoint_changed",
                 )
         return
     except SummaryNoContent:
@@ -292,7 +329,24 @@ async def mark_summary_crashed(document_id: uuid.UUID, *, job_id: uuid.UUID) -> 
             job.status = JobStatus.FAILED
             job.failure_code = "SUMMARY_CRASHED"
             job.completed_at = datetime.now(UTC)
-        run = await summary_service._latest_run(session, document_id)
+        run = (
+            (
+                await session.execute(
+                    select(SummaryRun).where(
+                        SummaryRun.document_id == document_id,
+                        SummaryRun.job_id == job_id,
+                    )
+                )
+            )
+            .scalars()
+            .first()
+        )
+        # 0015 이전 legacy 행은 job 연결이 없다. 그 경우에만 기존 최신-run 동작으로
+        # 호환하고, 새 행은 정확한 연결 없이는 다른 실행을 실패 처리하지 않는다.
+        if run is None:
+            latest = await summary_service._latest_run(session, document_id)
+            if latest is not None and latest.job_id is None:
+                run = latest
         if run is not None and run.status in (
             SummaryRunStatus.QUEUED,
             SummaryRunStatus.RUNNING,
