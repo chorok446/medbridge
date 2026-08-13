@@ -146,15 +146,9 @@ jobs:
             정적 export 빌드|${{ steps.build.outcome }}|
         run: python3 "$GITHUB_WORKSPACE/scripts/ci_summary.py"
 
-  # 의존성 취약점 스캔.
-  #
-  # **비차단으로 시작한다.** 지금 이미 JS 쪽 high 7건, Python 쪽 2건(pypdf)이 잡히므로
-  # 차단형으로 넣으면 첫날부터 모든 PR이 빨간불이 되고, 그러면 사람들은 CI를 읽지 않게
-  # 된다. 리포트를 먼저 쌓아 무엇이 실제로 우리에게 닿는 취약점인지 가려낸 뒤 차단으로
-  # 올린다.
-  #
-  # 이 앱은 사용자 PC에서 임의의 PDF를 연다 — 파서 취약점이 곧 공격면이라 리포트만으로도
-  # 값어치가 있다(첫 실행에서 pypdf 6.14.2의 GHSA 2건이 걸렸다).
+  # 의존성 취약점 스캔. 사용자 PC에서 임의의 PDF를 여는 앱이라 parser/웹 의존성의
+  # high 취약점은 곧 실제 공격면이다. 현재 잠금 파일의 JS·Python 감사가 모두 깨끗하므로
+  # 새 high 취약점은 CI를 fail-closed로 중단한다.
   security:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -174,7 +168,6 @@ jobs:
           cache-dependency-glob: apps/api/uv.lock
       - name: JS 의존성 스캔 (pnpm audit, high 이상)
         id: jsaudit
-        continue-on-error: true
         working-directory: apps/web
         run: |
           pnpm install --frozen-lockfile
@@ -185,7 +178,6 @@ jobs:
           exit $status
       - name: Python 의존성 스캔 (pip-audit)
         id: pyaudit
-        continue-on-error: true
         working-directory: apps/api
         run: |
           # 잠금 파일을 그대로 감사한다 — 설치된 환경이 아니라 우리가 고정한 버전이
@@ -201,7 +193,7 @@ jobs:
         if: always()
         env:
           CI_SUMMARY_ICON: 🔒
-          CI_SUMMARY_TITLE: 의존성 보안 스캔 (비차단)
+          CI_SUMMARY_TITLE: 의존성 보안 스캔 (차단)
           CI_SUMMARY_ROWS: |
             JS (pnpm audit)|${{ steps.jsaudit.outcome }}|${{ steps.jsaudit.outputs.result }}
             Python (pip-audit)|${{ steps.pyaudit.outcome }}|${{ steps.pyaudit.outputs.result }}
@@ -212,7 +204,7 @@ jobs:
     runs-on: windows-latest
     # Windows 러너는 분당 과금이 Linux의 2배이고 이 잡만 15분을 넘는다. lint·테스트가
     # 이미 깨진 커밋에 그 시간을 쓰지 않는다(대신 시작이 1~2분 늦어진다).
-    needs: [versions, backend, frontend]
+    needs: [versions, backend, frontend, security]
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -396,12 +388,10 @@ jobs:
           설치 파일 업로드|$UPLOAD|"
           python "$GITHUB_WORKSPACE/scripts/ci_summary.py"
 
-  # 잡 4개의 결과를 한 표로 모은다. 개별 잡 요약은 각자의 섹션에 흩어져 있어, 실행을
+  # 잡 5개의 결과를 한 표로 모은다. 개별 잡 요약은 각자의 섹션에 흩어져 있어, 실행을
   # 열자마자 "무엇이 깨졌나"를 보려면 종합이 하나 필요하다.
   summary:
     if: always()
-    # security는 비차단이라 잡 결과가 항상 success다(단계에 continue-on-error).
-    # 종합 표에는 실려야 하므로 needs에 넣되, 이 때문에 전체가 빨개지지는 않는다.
     needs: [versions, backend, frontend, security, windows-build]
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -416,7 +406,7 @@ jobs:
             버전 일치|${{ needs.versions.result }}|
             백엔드 (ubuntu)|${{ needs.backend.result }}|
             프런트엔드 (ubuntu)|${{ needs.frontend.result }}|
-            의존성 보안 스캔|${{ needs.security.result }}|비차단 — 표는 위 섹션 참고
+            의존성 보안 스캔|${{ needs.security.result }}|high 이상 차단
             Windows 빌드|${{ needs['windows-build'].result }}|
         run: python3 scripts/ci_summary.py
       - name: 실패한 잡이 있으면 이 잡도 실패시킨다
