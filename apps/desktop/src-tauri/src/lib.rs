@@ -127,10 +127,7 @@ mod process_tree {
 
         pub(super) fn assign(&self, child: &Child) -> io::Result<()> {
             let assigned = unsafe {
-                AssignProcessToJobObject(
-                    self.handle as Handle,
-                    child.as_raw_handle() as Handle,
-                )
+                AssignProcessToJobObject(self.handle as Handle, child.as_raw_handle() as Handle)
             };
             if assigned == 0 {
                 return Err(io::Error::last_os_error());
@@ -257,8 +254,10 @@ async fn save_error_report(
         let file = std::fs::File::create(&path).map_err(|e| e.to_string())?;
         let mut z = zip::ZipWriter::new(file);
         let opts: zip::write::SimpleFileOptions = Default::default();
-        z.start_file("report.json", opts).map_err(|e| e.to_string())?;
-        z.write_all(report_body.as_bytes()).map_err(|e| e.to_string())?;
+        z.start_file("report.json", opts)
+            .map_err(|e| e.to_string())?;
+        z.write_all(report_body.as_bytes())
+            .map_err(|e| e.to_string())?;
         z.start_file("app.json", opts).map_err(|e| e.to_string())?;
         z.write_all(meta.as_bytes()).map_err(|e| e.to_string())?;
         z.finish().map_err(|e| e.to_string())?;
@@ -362,7 +361,11 @@ fn spawn_sidecar(
         .env("MEDBRIDGE_BOUND_PORT", port.to_string())
         .env(
             "APP_ENV",
-            if cfg!(debug_assertions) { "development" } else { "production" },
+            if cfg!(debug_assertions) {
+                "development"
+            } else {
+                "production"
+            },
         )
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -383,7 +386,11 @@ fn spawn_sidecar(
 
 /// sidecar가 실제로 우리 포트에 떠서 /health에 정상 응답할 때까지 대기.
 /// 다른 프로세스가 포트를 선점한 경우 응답 검증에서 걸러진다.
-fn wait_for_sidecar(port: u16, child: &Mutex<Option<Child>>, timeout: Duration) -> Result<(), String> {
+fn wait_for_sidecar(
+    port: u16,
+    child: &Mutex<Option<Child>>,
+    timeout: Duration,
+) -> Result<(), String> {
     let deadline = std::time::Instant::now() + timeout;
     let addr = format!("127.0.0.1:{port}");
     while std::time::Instant::now() < deadline {
@@ -483,8 +490,7 @@ pub fn run() {
                     // 느린 디스크에서 수 분이 걸릴 수 있다 — 120초로 자르면 그 기기는
                     // 업데이트 직후 매번 '시작 실패'가 뜨고 마이그레이션이 영영 끝나지
                     // 않는다. 죽은 sidecar는 try_wait로 즉시 감지되므로 넉넉히 잡는다.
-                    let result =
-                        wait_for_sidecar(port, &state.child, Duration::from_secs(600));
+                    let result = wait_for_sidecar(port, &state.child, Duration::from_secs(600));
                     match result {
                         Ok(()) => {
                             // 포트만 기록한다 — 토큰은 절대 로그에 남기지 않는다.
@@ -567,12 +573,17 @@ mod tests {
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         guard.configure_command(&mut command);
-        let mut child = command.spawn().expect("long-running Windows process must start");
+        let mut child = command
+            .spawn()
+            .expect("long-running Windows process must start");
         guard
             .assign(&child)
             .expect("process must be assignable to the Job Object");
         assert!(
-            child.try_wait().expect("process state must be readable").is_none(),
+            child
+                .try_wait()
+                .expect("process state must be readable")
+                .is_none(),
             "test process exited before KILL_ON_JOB_CLOSE could be exercised"
         );
 

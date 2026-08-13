@@ -98,7 +98,7 @@ jobs:
         if: steps.gate.outputs.proceed == 'true'
         working-directory: apps/api
         run: |
-          uv sync
+          uv sync --locked
           uv run ruff check .
           uv run pytest -q
 
@@ -139,8 +139,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          pnpm install
-          pnpm tauri build
+          pnpm install --frozen-lockfile
+          pnpm tauri build -- --locked
 
       - name: 게시 installer가 실기기 검증 대상과 동일한지 확인
         if: steps.gate.outputs.proceed == 'true'
