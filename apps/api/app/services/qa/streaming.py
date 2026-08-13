@@ -64,9 +64,7 @@ class QaStreamingProvider(Protocol):
     available: bool
     is_local: bool
 
-    def stream_answer(
-        self, request: QaRequest, cancel_token: CancelToken
-    ) -> Iterator[dict]: ...
+    def stream_answer(self, request: QaRequest, cancel_token: CancelToken) -> Iterator[dict]: ...
 
 
 class DeterministicStreamingQaProvider:

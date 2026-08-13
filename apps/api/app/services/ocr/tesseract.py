@@ -142,9 +142,7 @@ class TesseractEngine:
     def _locate(self) -> None:
         ocr_dir = strip_extended_prefix(os.environ.get("MEDBRIDGE_OCR_DIR"))
         if ocr_dir:
-            candidate = Path(ocr_dir) / (
-                "tesseract.exe" if os.name == "nt" else "tesseract"
-            )
+            candidate = Path(ocr_dir) / ("tesseract.exe" if os.name == "nt" else "tesseract")
             if candidate.is_file():
                 self._binary = str(candidate)
                 tessdata = Path(ocr_dir) / "tessdata"
@@ -187,9 +185,7 @@ class TesseractEngine:
         있나, 언어가 깔렸나, tsv 설정이 있나"이고 전부 경로 없이 답할 수 있다.
         """
         tessdata = Path(self._tessdata) if self._tessdata else None
-        langs = (
-            sorted(p.stem for p in tessdata.glob("*.traineddata")) if tessdata else []
-        )
+        langs = sorted(p.stem for p in tessdata.glob("*.traineddata")) if tessdata else []
         return {
             "binary_found": self._binary is not None,
             "version": self._version,
@@ -223,6 +219,7 @@ class TesseractEngine:
             env = dict(os.environ)
             if self._tessdata:
                 env["TESSDATA_PREFIX"] = self._tessdata
+
             def run_psm(psm: str) -> tuple[list[TsvWord], int]:
                 """반환: (임계값을 넘긴 단어, 임계값 미만이라 버린 단어 수)."""
                 cmd = [
@@ -252,9 +249,7 @@ class TesseractEngine:
                     # 실패·DLL 문제를 구분할 수 없어, 실기기에서 45페이지가 전부 같은
                     # "RuntimeError"로만 기록되고 원인을 좁힐 단서가 0이었다.
                     # tesseract stderr에는 문서 본문이 들어가지 않는다(경고·오류 문구뿐).
-                    raise RuntimeError(
-                        f"tesseract exited {proc.returncode}: {_tail(stderr)}"
-                    )
+                    raise RuntimeError(f"tesseract exited {proc.returncode}: {_tail(stderr)}")
                 if "Can't open tsv" in stderr:
                     # tessdata/configs/tsv 누락 — 조용한 빈 결과 대신 명시적 실패
                     raise RuntimeError(f"tesseract tsv config missing: {_tail(stderr)}")
@@ -300,9 +295,7 @@ class TesseractEngine:
                     )
                 )
             duration_ms = int((time.monotonic() - started) * 1000)
-            mean_conf = (
-                sum(w.confidence for w in words) / len(words) if words else 0.0
-            )
+            mean_conf = sum(w.confidence for w in words) / len(words) if words else 0.0
             return OcrResult(
                 page_number=page_number,
                 words=words,

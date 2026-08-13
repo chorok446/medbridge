@@ -39,9 +39,7 @@ class LowConfidenceOnlyDocument(Exception):
     """
 
     def __init__(self, suppressed_blocks: int) -> None:
-        super().__init__(
-            f"저신뢰로 제외된 블록 {suppressed_blocks}개 외에 청크로 쓸 내용이 없다"
-        )
+        super().__init__(f"저신뢰로 제외된 블록 {suppressed_blocks}개 외에 청크로 쓸 내용이 없다")
         self.suppressed_blocks = suppressed_blocks
 
 
@@ -342,9 +340,7 @@ def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-async def rebuild_chunks(
-    session: AsyncSession, document_id: uuid.UUID
-) -> ChunkRebuildResult:
+async def rebuild_chunks(session: AsyncSession, document_id: uuid.UUID) -> ChunkRebuildResult:
     """문서 청크를 원자적으로 재계산·교체한다. 반환: 청크 수 + 저신뢰로 뺀 블록 수."""
     pages = list(
         (
@@ -363,9 +359,7 @@ async def rebuild_chunks(
     tables = list(
         (
             await session.execute(
-                select(DocumentTable).where(
-                    DocumentTable.page_id.in_([p.id for p in pages])
-                )
+                select(DocumentTable).where(DocumentTable.page_id.in_([p.id for p in pages]))
             )
         ).scalars()
     )
@@ -417,9 +411,7 @@ async def rebuild_chunks(
 
     # 원자적 교체: 기존 청크 + FTS 미러를 지우고 새로 넣는다 (재실행 누적 방지).
     # 지우는 일은 새 행이 확정된 뒤에 한다.
-    await session.execute(
-        delete(DocumentChunk).where(DocumentChunk.document_id == document_id)
-    )
+    await session.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document_id))
     await session.execute(
         text("DELETE FROM document_chunks_fts WHERE document_id = :doc_id"),
         {"doc_id": str(document_id)},

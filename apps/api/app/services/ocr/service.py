@@ -119,9 +119,7 @@ async def start_ocr(
 async def cancel_ocr(db: AsyncSession, doc: Document) -> Document:
     job = await _latest_ocr_job(db, doc.id)
     if job is None or job.status not in (JobStatus.QUEUED, JobStatus.RUNNING):
-        raise AppError(
-            ErrorCode.INVALID_STATE, "지금은 취소할 작업이 없습니다.", status_code=409
-        )
+        raise AppError(ErrorCode.INVALID_STATE, "지금은 취소할 작업이 없습니다.", status_code=409)
     job.status = JobStatus.FAILED
     job.failure_code = "CANCELLED"
     job.completed_at = datetime.now(UTC)
@@ -141,9 +139,7 @@ async def cancel_ocr(db: AsyncSession, doc: Document) -> Document:
     return doc
 
 
-async def _close_open_runs(
-    db: AsyncSession, document_id: uuid.UUID, status: OcrRunStatus
-) -> None:
+async def _close_open_runs(db: AsyncSession, document_id: uuid.UUID, status: OcrRunStatus) -> None:
     """RUNNING으로 남은 실행 기록을 끝난 것으로 확정한다.
 
     `apply_ocr_result`의 "본문이 실제로 바뀌었나" 판정은 직전 OcrRun의 status를
@@ -265,13 +261,17 @@ async def apply_ocr_result(
     # 등록하는 순간 이미 pending으로 덮여 있어, 그걸 기준으로 삼으면 결과가 완전히 같은
     # 재실행도 항상 "바뀜"으로 판정된다.
     previous_status = (
-        await db.execute(
-            select(OcrRun.status)
-            .where(OcrRun.page_id == page.id, OcrRun.id != run.id)
-            .order_by(OcrRun.created_at.desc())
-            .limit(1)
+        (
+            await db.execute(
+                select(OcrRun.status)
+                .where(OcrRun.page_id == page.id, OcrRun.id != run.id)
+                .order_by(OcrRun.created_at.desc())
+                .limit(1)
+            )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
     digital_boxes = await _digital_text_bboxes(db, page.id)
     await _delete_ocr_rows(db, page.id)
 
@@ -279,9 +279,7 @@ async def apply_ocr_result(
     kept = [
         w
         for w in result.words
-        if not any(
-            overlap_ratio(w.bbox, box) >= OCR_DEDUPE_OVERLAP_RATIO for box in digital_boxes
-        )
+        if not any(overlap_ratio(w.bbox, box) >= OCR_DEDUPE_OVERLAP_RATIO for box in digital_boxes)
     ]
 
     max_order, max_block_index = (
@@ -390,10 +388,10 @@ async def apply_ocr_result(
 async def rollup_document_status(db: AsyncSession, doc: Document) -> None:
     """OCR 후 문서 상태 상향: 남은 requires_ocr·실패 페이지 기준으로 재계산."""
     pages = (
-        await db.execute(
-            select(DocumentPage).where(DocumentPage.document_id == doc.id)
-        )
-    ).scalars().all()
+        (await db.execute(select(DocumentPage).where(DocumentPage.document_id == doc.id)))
+        .scalars()
+        .all()
+    )
     if not pages:
         return
     remaining_ocr = sum(1 for p in pages if p.requires_ocr)

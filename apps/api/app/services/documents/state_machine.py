@@ -20,9 +20,7 @@ ALLOWED_TRANSITIONS: dict[S, frozenset[S]] = {
     # 추출 결과 상태들: 재처리(→extracting), OCR 완료 시 상향, 삭제 가능
     S.EXTRACTED: frozenset({S.EXTRACTING, S.DELETING}),
     S.PARTIALLY_EXTRACTED: frozenset({S.EXTRACTING, S.EXTRACTED, S.DELETING}),
-    S.OCR_REQUIRED: frozenset(
-        {S.EXTRACTING, S.EXTRACTED, S.PARTIALLY_EXTRACTED, S.DELETING}
-    ),
+    S.OCR_REQUIRED: frozenset({S.EXTRACTING, S.EXTRACTED, S.PARTIALLY_EXTRACTED, S.DELETING}),
     S.EXTRACTION_FAILED: frozenset({S.EXTRACTING, S.DELETING}),
     S.FAILED: frozenset({S.QUEUED, S.DELETING}),
     S.DELETING: frozenset({S.DELETED}),  # 객체 삭제 실패 시 deleting 유지 (전이 없음)

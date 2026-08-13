@@ -185,29 +185,29 @@ def _prepare_page_rows(document_id: uuid.UUID, page: PageData) -> _PreparedPage:
 
     page_id = uuid.uuid4()
     page_row = DocumentPage(
-            id=page_id,
-            document_id=document_id,
-            page_number=page.page_number,
-            width=page.width,
-            height=page.height,
-            rotation=page.rotation,
-            raw_text=page.raw_text,
-            normalized_text=normalized,
-            extraction_method="digital",
-            extraction_status=(
-                PageExtractionStatus.OCR_REQUIRED
-                if scan.requires_ocr
-                else PageExtractionStatus.EXTRACTED
-            ),
-            extraction_confidence=scan.confidence,
-            reading_order_confidence=order.confidence,
-            scan_verdict=scan.verdict,
-            text_character_count=char_count,
-            word_count=len(page.words),
-            # OCR이 덮지 않는 기준선 — 재실행 때 디지털 몫을 되찾는 유일한 값이다.
-            digital_word_count=len(page.words),
-            image_area_ratio=round(page.image_area_ratio, 4),
-            requires_ocr=scan.requires_ocr,
+        id=page_id,
+        document_id=document_id,
+        page_number=page.page_number,
+        width=page.width,
+        height=page.height,
+        rotation=page.rotation,
+        raw_text=page.raw_text,
+        normalized_text=normalized,
+        extraction_method="digital",
+        extraction_status=(
+            PageExtractionStatus.OCR_REQUIRED
+            if scan.requires_ocr
+            else PageExtractionStatus.EXTRACTED
+        ),
+        extraction_confidence=scan.confidence,
+        reading_order_confidence=order.confidence,
+        scan_verdict=scan.verdict,
+        text_character_count=char_count,
+        word_count=len(page.words),
+        # OCR이 덮지 않는 기준선 — 재실행 때 디지털 몫을 되찾는 유일한 값이다.
+        digital_word_count=len(page.words),
+        image_area_ratio=round(page.image_area_ratio, 4),
+        requires_ocr=scan.requires_ocr,
     )
 
     block_rows: list[DocumentBlock] = []
@@ -418,20 +418,14 @@ async def run_extraction(
             try:
                 page = await asyncio.to_thread(engine_mod.extract_page, fitz_doc, i)
             except Exception as exc:  # 페이지 실패 격리
-                logger.warning(
-                    "page_extract_failed", document_id=str(document_id), page=i + 1
-                )
+                logger.warning("page_extract_failed", document_id=str(document_id), page=i + 1)
                 error_name = type(exc).__name__
 
             if page is not None:
                 try:
-                    prepared = await asyncio.to_thread(
-                        _prepare_page_rows, document_id, page
-                    )
+                    prepared = await asyncio.to_thread(_prepare_page_rows, document_id, page)
                 except Exception as exc:
-                    logger.warning(
-                        "page_prepare_failed", document_id=str(document_id), page=i + 1
-                    )
+                    logger.warning("page_prepare_failed", document_id=str(document_id), page=i + 1)
                     error_name = type(exc).__name__
 
             async with session_factory() as session:
@@ -442,9 +436,7 @@ async def run_extraction(
                     summary.failed += 1
                 else:
                     try:
-                        requires_ocr = await _persist_page(
-                            session, document_id, prepared
-                        )
+                        requires_ocr = await _persist_page(session, document_id, prepared)
                         if requires_ocr:
                             summary.ocr_required += 1
                         else:
@@ -455,9 +447,7 @@ async def run_extraction(
                         )
                         await session.rollback()
                         # 이전 결과가 남지 않도록 실패 페이지로 교체 기록
-                        await _write_failed_page(
-                            session, document_id, i + 1, "persist_failed"
-                        )
+                        await _write_failed_page(session, document_id, i + 1, "persist_failed")
                         summary.failed += 1
 
                 doc = await session.get(Document, document_id)

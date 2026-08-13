@@ -102,9 +102,7 @@ async def retry_ocr(
         ).all()
         pages = [r[0] for r in rows]
         if not pages:
-            raise AppError(
-                ErrorCode.INVALID_STATE, "다시 읽을 페이지가 없습니다.", status_code=409
-            )
+            raise AppError(ErrorCode.INVALID_STATE, "다시 읽을 페이지가 없습니다.", status_code=409)
     doc, targets = await ocr_service.start_ocr(
         db,
         doc,
@@ -135,10 +133,10 @@ async def ocr_status(
 ) -> dict:
     await get_owned_document(db, user, document_id)
     pages = (
-        await db.execute(
-            select(DocumentPage).where(DocumentPage.document_id == document_id)
-        )
-    ).scalars().all()
+        (await db.execute(select(DocumentPage).where(DocumentPage.document_id == document_id)))
+        .scalars()
+        .all()
+    )
     job = await latest_job(db, document_id, JobType.OCR_DOCUMENT)
     in_progress = [p for p in pages if p.ocr_status in ("pending", "running")]
     # 진행률은 최근 잡 범위로 한정한다 — 과거 실행의 완료 페이지를 합산하지 않는다

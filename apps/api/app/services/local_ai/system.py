@@ -10,6 +10,7 @@ def total_ram_bytes() -> int | None:
         import ctypes
 
         if hasattr(ctypes, "windll"):
+
             class _MEMORYSTATUSEX(ctypes.Structure):
                 _fields_ = [
                     ("dwLength", ctypes.c_ulong),

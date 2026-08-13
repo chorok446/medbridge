@@ -17,9 +17,7 @@ from app.services.tasks.jobs import latest_job
 logger = get_logger(__name__)
 
 _ATTEMPTS_EXHAUSTED_CODE = "EXTRACTION_MAX_ATTEMPTS"
-_ATTEMPTS_EXHAUSTED_MESSAGE = (
-    "문서 내용을 읽는 작업이 반복해서 중단되었습니다. 다시 시도해 주세요."
-)
+_ATTEMPTS_EXHAUSTED_MESSAGE = "문서 내용을 읽는 작업이 반복해서 중단되었습니다. 다시 시도해 주세요."
 
 
 async def _latest_job(session: AsyncSession, document_id: uuid.UUID) -> DocumentJob | None:

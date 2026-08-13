@@ -219,9 +219,7 @@ def sanitize_followups(raw) -> list[str]:
     if not isinstance(raw, list):
         return []
     return [
-        item.strip()[:FOLLOWUP_MAX_CHARS]
-        for item in raw
-        if isinstance(item, str) and item.strip()
+        item.strip()[:FOLLOWUP_MAX_CHARS] for item in raw if isinstance(item, str) and item.strip()
     ][:MAX_FOLLOWUPS]
 
 
@@ -311,9 +309,7 @@ def verify(
         # 원문은 남기지 않고 개수만 남긴다.
         logger.info("qa_citations_dropped", dropped=dropped_citations)
 
-    return VerifiedAnswer(
-        answer=answer, answer_status=status, claims=verified, followups=followups
-    )
+    return VerifiedAnswer(answer=answer, answer_status=status, claims=verified, followups=followups)
 
 
 def _truncate_answer(answer: str) -> str:
@@ -337,9 +333,7 @@ def _rewrite_citations(
     지어내거나 번호를 잘못 써도 화면에는 인용 번호가 뜨지 않는다.
     """
     valid = {
-        c.claim_index
-        for c in claims
-        if c.verification_status != QaClaimVerification.UNSUPPORTED
+        c.claim_index for c in claims if c.verification_status != QaClaimVerification.UNSUPPORTED
     }
     dropped = 0
 

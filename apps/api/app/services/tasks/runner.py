@@ -27,9 +27,7 @@ class TaskRunner(Protocol):
 
 class LocalTaskRunner:
     def __init__(self, max_concurrent: int | None = None) -> None:
-        self._semaphore = asyncio.Semaphore(
-            max_concurrent or get_settings().max_concurrent_jobs
-        )
+        self._semaphore = asyncio.Semaphore(max_concurrent or get_settings().max_concurrent_jobs)
         self._tasks: set[asyncio.Task] = set()
 
     def enqueue_validate(self, document_id: uuid.UUID, correlation_id: str) -> None:
@@ -92,9 +90,7 @@ class LocalTaskRunner:
                 try:
                     await mark_crashed()
                 except Exception:
-                    logger.error(
-                        "mark_crashed_failed", job=job_name, document_id=str(document_id)
-                    )
+                    logger.error("mark_crashed_failed", job=job_name, document_id=str(document_id))
 
     async def _run_summary(
         self,
@@ -142,9 +138,7 @@ class LocalTaskRunner:
         await self._run_guarded(
             "ocr",
             document_id,
-            lambda: run_ocr_job(
-                document_id, correlation_id, language=language, quality=quality
-            ),
+            lambda: run_ocr_job(document_id, correlation_id, language=language, quality=quality),
             lambda: mark_ocr_job_crashed(document_id),
         )
 
@@ -209,9 +203,7 @@ class LocalTaskRunner:
                     doc.processing_status = ProcessingStatus.FAILED  # 내부 복구 경로
                     doc.storage_key = None
                     doc.failure_code = "VALIDATION_FAILED"
-                    doc.failure_message = (
-                        "업로드가 중단되었습니다. 파일을 다시 업로드해 주세요."
-                    )
+                    doc.failure_message = "업로드가 중단되었습니다. 파일을 다시 업로드해 주세요."
                 elif doc.processing_status == ProcessingStatus.EXTRACTING:
                     job = await _latest_job(session, doc.id)
                     if job is not None and job.attempt_count >= job.max_attempts:
@@ -310,14 +302,18 @@ class LocalTaskRunner:
                 job.completed_at = _dt.now(_UTC)
             # 중단된 요약 run도 잡과 같은 원칙으로 실패 확정한다.
             stale_runs = (
-                await session.execute(
-                    select(SummaryRun).where(
-                        SummaryRun.status.in_(
-                            [SummaryRunStatus.QUEUED, SummaryRunStatus.RUNNING]
+                (
+                    await session.execute(
+                        select(SummaryRun).where(
+                            SummaryRun.status.in_(
+                                [SummaryRunStatus.QUEUED, SummaryRunStatus.RUNNING]
+                            )
                         )
                     )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             for run in stale_runs:
                 run.status = SummaryRunStatus.FAILED
                 run.error_code = "INTERRUPTED"

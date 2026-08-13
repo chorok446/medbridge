@@ -87,16 +87,20 @@ async def run_ocr_job(
                 logger.info("ocr_job_superseded_or_cancelled", document_id=str(document_id))
                 return
             page = (
-                await session.execute(
-                    select(DocumentPage)
-                    .where(
-                        DocumentPage.document_id == document_id,
-                        DocumentPage.ocr_status == PENDING,
+                (
+                    await session.execute(
+                        select(DocumentPage)
+                        .where(
+                            DocumentPage.document_id == document_id,
+                            DocumentPage.ocr_status == PENDING,
+                        )
+                        .order_by(DocumentPage.page_number)
+                        .limit(1)
                     )
-                    .order_by(DocumentPage.page_number)
-                    .limit(1)
                 )
-            ).scalars().first()
+                .scalars()
+                .first()
+            )
             if page is None:
                 break
             page.ocr_status = OcrRunStatus.RUNNING.value
@@ -121,24 +125,30 @@ async def run_ocr_job(
                 if not await _job_is_current(session, document_id, job_id):
                     return
                 page = (
-                    await session.execute(
-                        select(DocumentPage).where(
-                            DocumentPage.document_id == document_id,
-                            DocumentPage.page_number == page_number,
+                    (
+                        await session.execute(
+                            select(DocumentPage).where(
+                                DocumentPage.document_id == document_id,
+                                DocumentPage.page_number == page_number,
+                            )
                         )
                     )
-                ).scalars().one()
-                run_row = (
-                    await session.execute(
-                        select(OcrRun)
-                        .where(OcrRun.page_id == page.id)
-                        .order_by(OcrRun.created_at.desc())
-                        .limit(1)
-                    )
-                ).scalars().one()
-                page_changed = await ocr_service.apply_ocr_result(
-                    session, page, result, run_row
+                    .scalars()
+                    .one()
                 )
+                run_row = (
+                    (
+                        await session.execute(
+                            select(OcrRun)
+                            .where(OcrRun.page_id == page.id)
+                            .order_by(OcrRun.created_at.desc())
+                            .limit(1)
+                        )
+                    )
+                    .scalars()
+                    .one()
+                )
+                page_changed = await ocr_service.apply_ocr_result(session, page, result, run_row)
                 await session.commit()
                 processed += 1
                 changed += int(page_changed)
@@ -187,23 +197,31 @@ async def run_ocr_job(
                 if not await _job_is_current(session, document_id, job_id):
                     return  # 취소·교체된 실행은 실패 기록도 남기지 않는다 (H4)
                 page = (
-                    await session.execute(
-                        select(DocumentPage).where(
-                            DocumentPage.document_id == document_id,
-                            DocumentPage.page_number == page_number,
+                    (
+                        await session.execute(
+                            select(DocumentPage).where(
+                                DocumentPage.document_id == document_id,
+                                DocumentPage.page_number == page_number,
+                            )
                         )
                     )
-                ).scalars().first()
+                    .scalars()
+                    .first()
+                )
                 if page is not None:
                     page.ocr_status = OcrRunStatus.OCR_FAILED.value
                     failed_run = (
-                        await session.execute(
-                            select(OcrRun)
-                            .where(OcrRun.page_id == page.id)
-                            .order_by(OcrRun.created_at.desc())
-                            .limit(1)
+                        (
+                            await session.execute(
+                                select(OcrRun)
+                                .where(OcrRun.page_id == page.id)
+                                .order_by(OcrRun.created_at.desc())
+                                .limit(1)
+                            )
                         )
-                    ).scalars().first()
+                        .scalars()
+                        .first()
+                    )
                     if failed_run is not None:
                         failed_run.status = OcrRunStatus.OCR_FAILED
                         failed_run.error_code = type(exc).__name__[:50]
@@ -231,9 +249,7 @@ async def run_ocr_job(
             usable = processed - empty - unreliable
             nothing_usable = processed > 0 and usable <= 0
             incomplete = failed
-            job.status = (
-                JobStatus.FAILED if incomplete or nothing_usable else JobStatus.SUCCEEDED
-            )
+            job.status = JobStatus.FAILED if incomplete or nothing_usable else JobStatus.SUCCEEDED
             if incomplete or nothing_usable:
                 job.failure_code = "OCR_PARTIAL_FAILURE"
                 # 같은 코드라도 대응이 다르다. "엔진이 죽었다"는 설치·경로 문제고,
@@ -309,7 +325,5 @@ async def mark_ocr_job_crashed(document_id: uuid.UUID) -> None:
             job.completed_at = datetime.now(UTC)
             # 실행 기록도 함께 닫는다 — RUNNING으로 남으면 다음 실행의 "바뀜" 판정이
             # 항상 참이 되어 요약 재사용 키가 통째로 무효가 된다.
-            await ocr_service._close_open_runs(
-                session, document_id, OcrRunStatus.OCR_FAILED
-            )
+            await ocr_service._close_open_runs(session, document_id, OcrRunStatus.OCR_FAILED)
             await session.commit()

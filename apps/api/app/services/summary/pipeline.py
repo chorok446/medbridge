@@ -69,9 +69,7 @@ def finalize_artifacts(
     # 수치·대상 집단은 결정론적 추출(원문 검증 포함) — 모델 출력을 쓰지 않는다.
     next_pos = len(drafts)
     number_drafts = extract_number_artifacts(lookup, start_position=next_pos)
-    pop_drafts = extract_population_artifacts(
-        lookup, start_position=next_pos + len(number_drafts)
-    )
+    pop_drafts = extract_population_artifacts(lookup, start_position=next_pos + len(number_drafts))
     drafts.extend(number_drafts)
     drafts.extend(pop_drafts)
 

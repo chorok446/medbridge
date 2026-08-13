@@ -114,9 +114,7 @@ def _opt_str(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def pull_model(
-    model: str, *, should_cancel: Callable[[], bool] | None = None
-) -> Iterator[dict]:
+def pull_model(model: str, *, should_cancel: Callable[[], bool] | None = None) -> Iterator[dict]:
     """POST /api/pull (stream=true) → NDJSON 진행 dict yield. model은 allowlist여야 한다.
 
     blob/digest/manifest/layer 같은 내부 용어는 그대로 노출하지 않고 상위에서 사용자

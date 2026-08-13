@@ -70,9 +70,10 @@ def _backup_sqlite_database(db_path: Path, backup_path: Path) -> None:
     backup_path.touch(exist_ok=False)
     source_uri = f"{db_path.resolve().as_uri()}?mode=ro"
     try:
-        with closing(sqlite3.connect(source_uri, uri=True)) as source, closing(
-            sqlite3.connect(str(backup_path))
-        ) as destination:
+        with (
+            closing(sqlite3.connect(source_uri, uri=True)) as source,
+            closing(sqlite3.connect(str(backup_path))) as destination,
+        ):
             source.backup(destination)
             check = destination.execute("PRAGMA quick_check").fetchone()
             if check is None or check[0] != "ok":

@@ -103,9 +103,7 @@ def build_markdown(
     if generated_at:
         lines.append(f"- 생성 시각: {generated_at}")
     lines.append(f"- 판정: **{gate.verdict}**")
-    lines.append(
-        f"- 안전 게이트(위해 노출): {'통과' if gate.explicit_safety_passed else '실패'}"
-    )
+    lines.append(f"- 안전 게이트(위해 노출): {'통과' if gate.explicit_safety_passed else '실패'}")
     lines.append(
         f"- 안전 중요 케이스 게이트(비위해 실패): "
         f"{'통과' if gate.critical_cases_passed else '실패'}"
@@ -173,8 +171,6 @@ def write_reports(
     json_path = out_dir / f"qa-eval-{slug}.json"
     md_path = out_dir / f"qa-eval-{slug}.md"
     payload = build_json(summary, gate, generated_at=generated_at)
-    json_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     md_path.write_text(build_markdown(summary, gate, generated_at=generated_at), encoding="utf-8")
     return json_path, md_path

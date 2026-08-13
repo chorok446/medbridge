@@ -70,13 +70,17 @@ async def retrieve(db: AsyncSession, document_id: uuid.UUID, question: str) -> R
     # document_id도 함께 건다 — 다른 문서 청크가 섞이지 않게 하는 방어선(id는 이미
     # document_id 범위 검색 결과지만 재조회에서도 소속을 강제한다).
     rows = (
-        await db.execute(
-            select(DocumentChunk).where(
-                DocumentChunk.id.in_(ordered_ids),
-                DocumentChunk.document_id == document_id,
+        (
+            await db.execute(
+                select(DocumentChunk).where(
+                    DocumentChunk.id.in_(ordered_ids),
+                    DocumentChunk.document_id == document_id,
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     by_id = {row.id: row for row in rows}
 
     chunks: list[QaContextChunk] = []
@@ -107,10 +111,7 @@ async def retrieve(db: AsyncSession, document_id: uuid.UUID, question: str) -> R
             )
         )
         # 출처 스냅샷에 sectionTitle을 덧붙여 보관한다
-        refs = [
-            {**ref, "sectionTitle": row.section_title}
-            for ref in (row.source_refs_json or [])
-        ]
+        refs = [{**ref, "sectionTitle": row.section_title} for ref in (row.source_refs_json or [])]
         lookup[sid] = QaChunkRef(
             chunk_id=sid,
             section_title=row.section_title,

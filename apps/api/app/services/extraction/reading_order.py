@@ -29,9 +29,7 @@ def compute_reading_order(
 ) -> OrderResult:
     text_blocks = [b for b in blocks if b.block_type == "text" and b.text.strip()]
     if not text_blocks:
-        return OrderResult(
-            order=[b.block_index for b in blocks], confidence=1.0, two_column=False
-        )
+        return OrderResult(order=[b.block_index for b in blocks], confidence=1.0, two_column=False)
 
     content_x0 = min(b.bbox[0] for b in text_blocks)
     content_width = max(max(b.bbox[2] for b in text_blocks) - content_x0, 1.0)

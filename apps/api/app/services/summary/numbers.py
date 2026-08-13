@@ -173,9 +173,7 @@ def extract_number_artifacts(
             source_chunk_ids=[cand.chunk_id],
             source_refs=_refs_for([cand.chunk_id], lookup),
         )
-        for i, cand in enumerate(
-            _pick(candidates, _MAX_NUMBERS, _MAX_NUMBERS_PER_CHUNK)
-        )
+        for i, cand in enumerate(_pick(candidates, _MAX_NUMBERS, _MAX_NUMBERS_PER_CHUNK))
     ]
 
 
@@ -220,9 +218,7 @@ def extract_population_artifacts(
             source_chunk_ids=[cand.chunk_id],
             source_refs=_refs_for([cand.chunk_id], lookup),
         )
-        for i, cand in enumerate(
-            _pick(candidates, _MAX_POPULATIONS, _MAX_POPULATIONS_PER_CHUNK)
-        )
+        for i, cand in enumerate(_pick(candidates, _MAX_POPULATIONS, _MAX_POPULATIONS_PER_CHUNK))
     ]
 
 

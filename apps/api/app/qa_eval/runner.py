@@ -24,10 +24,7 @@ async def run_evaluation(
 ) -> tuple[EvalSummary, GateResult, list[list[CaseResult]]]:
     """반환: (요약, 게이트, 케이스별 반복 결과)."""
     effective_repeat = max(1, repeat)  # 실행·게이트에 같은 값을 쓴다
-    cases = [
-        c for c in dataset.cases
-        if categories is None or c.category in categories
-    ]
+    cases = [c for c in dataset.cases if categories is None or c.category in categories]
     # 필터 없는 전체 실행만 출시 평가로 본다(필터링된 진단 실행은 게이트를 통과시키지 않는다).
     release_mode = categories is None
     expected_categories = {c.category for c in dataset.cases}
@@ -37,15 +34,21 @@ async def run_evaluation(
         results: list[CaseResult] = []
         for run_index in range(effective_repeat):
             run = await run_case(
-                factory, case, fixture,
-                provider_mode=provider_mode, model=model, timeout_sec=timeout_sec,
+                factory,
+                case,
+                fixture,
+                provider_mode=provider_mode,
+                model=model,
+                timeout_sec=timeout_sec,
             )
             results.append(evaluate_case(case, run, run_index=run_index))
         per_case.append(results)
 
     summary = summarize(model_label, per_case)
     gate = evaluate_gate(
-        summary, release_mode=release_mode,
-        expected_categories=expected_categories, repeat=effective_repeat,
+        summary,
+        release_mode=release_mode,
+        expected_categories=expected_categories,
+        repeat=effective_repeat,
     )
     return summary, gate, per_case

@@ -79,9 +79,7 @@ async def start_extraction(
 async def cancel_extraction(db: AsyncSession, doc: Document) -> Document:
     """진행 중 추출 취소 — 파이프라인은 상태 변화를 감지하고 페이지 경계에서 멈춘다."""
     if doc.processing_status != ProcessingStatus.EXTRACTING:
-        raise AppError(
-            ErrorCode.INVALID_STATE, "지금은 취소할 작업이 없습니다.", status_code=409
-        )
+        raise AppError(ErrorCode.INVALID_STATE, "지금은 취소할 작업이 없습니다.", status_code=409)
     transition(doc, ProcessingStatus.READY)
     doc.processing_progress = 0
     await db.commit()

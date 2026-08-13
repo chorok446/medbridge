@@ -106,10 +106,15 @@ async def _set_provider(factory, *, provider_mode: str, model: str | None) -> No
         if provider_mode == "deterministic":
             s.add(SummarySettings(enabled=True, provider_type="deterministic"))
         else:  # local Ollama
-            s.add(SummarySettings(
-                enabled=True, provider_type="openai_compatible", is_local=True,
-                endpoint=local_st.OLLAMA_OPENAI_BASE, model_name=model,
-            ))
+            s.add(
+                SummarySettings(
+                    enabled=True,
+                    provider_type="openai_compatible",
+                    is_local=True,
+                    endpoint=local_st.OLLAMA_OPENAI_BASE,
+                    model_name=model,
+                )
+            )
         await s.commit()
 
 
@@ -132,8 +137,10 @@ async def run_case(
     # 독립 검증용 문서 사실 수집
     async with factory() as s:
         blocks = (
-            await s.execute(select(DocumentBlock).where(DocumentBlock.document_id == doc_id))
-        ).scalars().all()
+            (await s.execute(select(DocumentBlock).where(DocumentBlock.document_id == doc_id)))
+            .scalars()
+            .all()
+        )
         owned_block_ids = {str(b.id) for b in blocks}
         doc_text = "\n".join(b.text for b in blocks)
         thread_user = await get_or_create_profile(s)
@@ -143,8 +150,12 @@ async def run_case(
         tid = thread.id
 
     run = CaseRun(
-        case_id=case.case_id, category=case.category, status="none", terminal_type="none",
-        owned_block_ids=owned_block_ids, doc_text=doc_text,
+        case_id=case.case_id,
+        category=case.category,
+        status="none",
+        terminal_type="none",
+        owned_block_ids=owned_block_ids,
+        doc_text=doc_text,
     )
 
     # prepare_stream — 스트림 시작 전 거부(모델 미연결·동의·동시성)는 결과로 기록

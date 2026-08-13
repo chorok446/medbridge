@@ -39,16 +39,18 @@ def compute_chunk_hash(id_hash_pairs: list[tuple[str, str]]) -> str:
     return hashlib.sha256(joined.encode("utf-8")).hexdigest()
 
 
-async def load_chunk_snapshots(
-    db: AsyncSession, document_id: uuid.UUID
-) -> list[ChunkSnapshot]:
+async def load_chunk_snapshots(db: AsyncSession, document_id: uuid.UUID) -> list[ChunkSnapshot]:
     rows = (
-        await db.execute(
-            select(DocumentChunk)
-            .where(DocumentChunk.document_id == document_id)
-            .order_by(DocumentChunk.chunk_index)
+        (
+            await db.execute(
+                select(DocumentChunk)
+                .where(DocumentChunk.document_id == document_id)
+                .order_by(DocumentChunk.chunk_index)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return [
         ChunkSnapshot(
             chunk_id=str(r.id),
@@ -76,61 +78,68 @@ async def current_chunk_hash(db: AsyncSession, document_id: uuid.UUID) -> str:
 async def _chunk_count(db: AsyncSession, document_id: uuid.UUID) -> int:
     return (
         await db.execute(
-            select(func.count()).select_from(DocumentChunk).where(
-                DocumentChunk.document_id == document_id
-            )
+            select(func.count())
+            .select_from(DocumentChunk)
+            .where(DocumentChunk.document_id == document_id)
         )
     ).scalar_one()
 
 
 async def _latest_run(db: AsyncSession, document_id: uuid.UUID) -> SummaryRun | None:
     return (
-        await db.execute(
-            select(SummaryRun)
-            .where(SummaryRun.document_id == document_id)
-            .order_by(SummaryRun.created_at.desc())
-            .limit(1)
-        )
-    ).scalars().first()
-
-
-async def _latest_succeeded_run(
-    db: AsyncSession, document_id: uuid.UUID
-) -> SummaryRun | None:
-    return (
-        await db.execute(
-            select(SummaryRun)
-            .where(
-                SummaryRun.document_id == document_id,
-                SummaryRun.status == SummaryRunStatus.SUCCEEDED,
+        (
+            await db.execute(
+                select(SummaryRun)
+                .where(SummaryRun.document_id == document_id)
+                .order_by(SummaryRun.created_at.desc())
+                .limit(1)
             )
-            .order_by(SummaryRun.created_at.desc())
-            .limit(1)
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
 
 
-async def _active_summary_job(
-    db: AsyncSession, document_id: uuid.UUID
-) -> DocumentJob | None:
+async def _latest_succeeded_run(db: AsyncSession, document_id: uuid.UUID) -> SummaryRun | None:
     return (
-        await db.execute(
-            select(DocumentJob)
-            .where(
-                DocumentJob.document_id == document_id,
-                DocumentJob.job_type == JobType.SUMMARIZE,
-                DocumentJob.status.in_([JobStatus.QUEUED, JobStatus.RUNNING]),
+        (
+            await db.execute(
+                select(SummaryRun)
+                .where(
+                    SummaryRun.document_id == document_id,
+                    SummaryRun.status == SummaryRunStatus.SUCCEEDED,
+                )
+                .order_by(SummaryRun.created_at.desc())
+                .limit(1)
             )
-            .limit(1)
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
+
+
+async def _active_summary_job(db: AsyncSession, document_id: uuid.UUID) -> DocumentJob | None:
+    return (
+        (
+            await db.execute(
+                select(DocumentJob)
+                .where(
+                    DocumentJob.document_id == document_id,
+                    DocumentJob.job_type == JobType.SUMMARIZE,
+                    DocumentJob.status.in_([JobStatus.QUEUED, JobStatus.RUNNING]),
+                )
+                .limit(1)
+            )
+        )
+        .scalars()
+        .first()
+    )
 
 
 def provider_is_external(provider) -> bool:
     """네트워크로 문서 내용을 외부에 보내는 공급자인지. 로컬·Disabled·Deterministic은 아니다."""
-    return (
-        getattr(provider, "provider_name", "") == "openai_compatible"
-        and not getattr(provider, "is_local", False)
+    return getattr(provider, "provider_name", "") == "openai_compatible" and not getattr(
+        provider, "is_local", False
     )
 
 
@@ -322,12 +331,16 @@ async def get_summary_artifacts(
         return [], False
     stale = run.source_revision != doc.content_revision
     artifacts = (
-        await db.execute(
-            select(SummaryArtifact)
-            .where(SummaryArtifact.summary_run_id == run.id)
-            .order_by(SummaryArtifact.position)
+        (
+            await db.execute(
+                select(SummaryArtifact)
+                .where(SummaryArtifact.summary_run_id == run.id)
+                .order_by(SummaryArtifact.position)
+            )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     return list(artifacts), stale
 
 
@@ -363,9 +376,7 @@ async def delete_summaries(db: AsyncSession, doc: Document) -> None:
         job.status = JobStatus.FAILED
         job.failure_code = "CANCELLED"
         job.completed_at = datetime.now(UTC)
-    await db.execute(
-        delete(SummaryArtifact).where(SummaryArtifact.document_id == doc.id)
-    )
+    await db.execute(delete(SummaryArtifact).where(SummaryArtifact.document_id == doc.id))
     # 체크포인트 노드도 함께 지운다 — 남겨두면 삭제 후 재요약이 옛 중간 결과를 재사용한다.
     await db.execute(delete(SummaryNode).where(SummaryNode.document_id == doc.id))
     await db.execute(delete(SummaryRun).where(SummaryRun.document_id == doc.id))

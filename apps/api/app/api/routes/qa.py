@@ -138,9 +138,7 @@ async def list_threads(
     return wrap([_thread_out(t) for t in threads])
 
 
-@router.get(
-    "/{document_id}/qa/threads/{thread_id}", response_model=Envelope[ThreadDetailOut]
-)
+@router.get("/{document_id}/qa/threads/{thread_id}", response_model=Envelope[ThreadDetailOut])
 async def get_thread(
     document_id: uuid.UUID,
     thread_id: uuid.UUID,
@@ -158,9 +156,7 @@ async def get_thread(
     )
 
 
-@router.patch(
-    "/{document_id}/qa/threads/{thread_id}", response_model=Envelope[ThreadOut]
-)
+@router.patch("/{document_id}/qa/threads/{thread_id}", response_model=Envelope[ThreadOut])
 async def patch_thread(
     document_id: uuid.UUID,
     thread_id: uuid.UUID,
@@ -170,15 +166,11 @@ async def patch_thread(
 ) -> dict:
     doc = await get_owned_document(db, user, document_id)
     thread = await qa_service.get_owned_thread(db, doc, thread_id)
-    thread = await qa_service.update_thread(
-        db, thread, title=body.title, archived=body.archived
-    )
+    thread = await qa_service.update_thread(db, thread, title=body.title, archived=body.archived)
     return wrap(_thread_out(thread))
 
 
-@router.delete(
-    "/{document_id}/qa/threads/{thread_id}", response_model=Envelope[ThreadOut]
-)
+@router.delete("/{document_id}/qa/threads/{thread_id}", response_model=Envelope[ThreadOut])
 async def delete_thread(
     document_id: uuid.UUID,
     thread_id: uuid.UUID,
@@ -213,9 +205,7 @@ async def post_message(
 ) -> dict:
     doc = await get_owned_document(db, user, document_id)
     thread = await qa_service.get_owned_thread(db, doc, thread_id)
-    await qa_service.ask(
-        db, doc, user, thread, body.question, learner_level=body.learner_level
-    )
+    await qa_service.ask(db, doc, user, thread, body.question, learner_level=body.learner_level)
     return wrap(await _answer_detail(db, thread))
 
 
@@ -270,8 +260,14 @@ async def stream_message(
     start_chunk_rev = doc.chunk_revision
 
     events = qa_stream.run_stream(
-        document_id, thread_id, aid, user_content, request_id,
-        start_content_rev, start_chunk_rev, request,
+        document_id,
+        thread_id,
+        aid,
+        user_content,
+        request_id,
+        start_content_rev,
+        start_chunk_rev,
+        request,
         learner_level=learner_level,
     )
     return StreamingResponse(
@@ -328,9 +324,7 @@ async def cancel_message(
     doc = await get_owned_document(db, user, document_id)
     thread = await qa_service.get_owned_thread(db, doc, thread_id)
     msg = await qa_stream.request_cancel(db, thread, message_id)
-    return wrap(
-        MessageStatusOut(id=msg.id, status=msg.status.value, error_code=msg.error_code)
-    )
+    return wrap(MessageStatusOut(id=msg.id, status=msg.status.value, error_code=msg.error_code))
 
 
 @router.get(
@@ -347,6 +341,4 @@ async def message_status(
     doc = await get_owned_document(db, user, document_id)
     thread = await qa_service.get_owned_thread(db, doc, thread_id)
     msg = await qa_stream.get_message_status(db, thread, message_id)
-    return wrap(
-        MessageStatusOut(id=msg.id, status=msg.status.value, error_code=msg.error_code)
-    )
+    return wrap(MessageStatusOut(id=msg.id, status=msg.status.value, error_code=msg.error_code))

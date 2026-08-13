@@ -58,10 +58,10 @@ async def _get_or_create(db: AsyncSession) -> SummarySettings:
         row = await load_settings_row(db)
     except DuplicateSummarySettingsError:
         rows = (
-            await db.execute(
-                select(SummarySettings).order_by(SummarySettings.updated_at.desc())
-            )
-        ).scalars().all()
+            (await db.execute(select(SummarySettings).order_by(SummarySettings.updated_at.desc())))
+            .scalars()
+            .all()
+        )
         row = rows[0]
         for stale in rows[1:]:
             await db.delete(stale)
@@ -124,9 +124,7 @@ async def update_settings(
         try:
             normalized_endpoint = validate_endpoint(raw_endpoint, is_local=eff_is_local)
         except SummaryNetworkError as exc:
-            raise AppError(
-                ErrorCode.VALIDATION_FAILED, exc.user_message, status_code=422
-            ) from exc
+            raise AppError(ErrorCode.VALIDATION_FAILED, exc.user_message, status_code=422) from exc
     elif endpoint is not None:
         normalized_endpoint = raw_endpoint or None
 

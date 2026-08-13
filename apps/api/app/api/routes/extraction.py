@@ -87,9 +87,7 @@ class TableOut(CamelModel):
     extraction_status: str
 
 
-async def _get_page(
-    db: AsyncSession, document_id: uuid.UUID, page_number: int
-) -> DocumentPage:
+async def _get_page(db: AsyncSession, document_id: uuid.UUID, page_number: int) -> DocumentPage:
     page = (
         await db.execute(
             select(DocumentPage).where(
@@ -214,9 +212,7 @@ async def page_detail(
     return wrap(PageDetailOut.model_validate(page))
 
 
-@router.get(
-    "/{document_id}/pages/{page_number}/blocks", response_model=Envelope[list[BlockOut]]
-)
+@router.get("/{document_id}/pages/{page_number}/blocks", response_model=Envelope[list[BlockOut]])
 async def page_blocks(
     document_id: uuid.UUID,
     page_number: int,

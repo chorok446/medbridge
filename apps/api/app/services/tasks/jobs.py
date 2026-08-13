@@ -19,13 +19,17 @@ async def latest_job(
     session: AsyncSession, document_id: uuid.UUID, job_type: JobType
 ) -> DocumentJob | None:
     return (
-        await session.execute(
-            select(DocumentJob)
-            .where(
-                DocumentJob.document_id == document_id,
-                DocumentJob.job_type == job_type,
+        (
+            await session.execute(
+                select(DocumentJob)
+                .where(
+                    DocumentJob.document_id == document_id,
+                    DocumentJob.job_type == job_type,
+                )
+                .order_by(DocumentJob.created_at.desc())
+                .limit(1)
             )
-            .order_by(DocumentJob.created_at.desc())
-            .limit(1)
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )

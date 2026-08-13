@@ -75,15 +75,17 @@ class ChunkStatus:
 async def get_chunk_status(db: AsyncSession, doc: Document) -> ChunkStatus:
     chunk_count = (
         await db.execute(
-            select(func.count()).select_from(DocumentChunk).where(
-                DocumentChunk.document_id == doc.id
-            )
+            select(func.count())
+            .select_from(DocumentChunk)
+            .where(DocumentChunk.document_id == doc.id)
         )
     ).scalar_one()
     job = await _latest_chunk_job(db, doc.id)
     suppressed = (
         await db.execute(
-            select(func.count()).select_from(DocumentPage).where(
+            select(func.count())
+            .select_from(DocumentPage)
+            .where(
                 DocumentPage.document_id == doc.id,
                 DocumentPage.ocr_status == OcrRunStatus.OCR_LOW_CONFIDENCE.value,
             )
@@ -103,9 +105,7 @@ async def search_document(
     db: AsyncSession, doc: Document, *, query: str, mode: str, limit: int
 ) -> list[SearchResult]:
     if not query or not query.strip():
-        raise AppError(
-            ErrorCode.VALIDATION_FAILED, "검색어를 입력해 주세요.", status_code=422
-        )
+        raise AppError(ErrorCode.VALIDATION_FAILED, "검색어를 입력해 주세요.", status_code=422)
     if mode not in SEARCH_MODES:
         raise AppError(
             ErrorCode.VALIDATION_FAILED, "지원하지 않는 검색 방식입니다.", status_code=422

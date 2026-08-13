@@ -152,9 +152,7 @@ def build_artifacts(
     # overview (단일)
     overview = structured.get("overview")
     if isinstance(overview, dict):
-        text = _clean_text(
-            overview.get("text"), OVERVIEW_MAX_CHARS, field_name="overview.text"
-        )
+        text = _clean_text(overview.get("text"), OVERVIEW_MAX_CHARS, field_name="overview.text")
         if text:
             add(
                 SummaryArtifactType.OVERVIEW,

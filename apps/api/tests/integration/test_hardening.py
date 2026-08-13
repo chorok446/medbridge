@@ -124,9 +124,7 @@ class TestDuplicateAfterFailure:
         assert second.status_code == 201
         assert second.json()["data"]["duplicate"] is False
         await drain_jobs()
-        detail = (await client.get(f"/api/documents/{second.json()['data']['id']}")).json()[
-            "data"
-        ]
+        detail = (await client.get(f"/api/documents/{second.json()['data']['id']}")).json()["data"]
         assert detail["processingStatus"] == "extracted"
 
 
@@ -184,9 +182,7 @@ class TestTokenGuard:
 
     async def test_real_request_after_preflight_still_requires_token(self, token_client):
         # preflight 통과가 실제 요청의 토큰 검증까지 면제해서는 안 된다
-        res = await token_client.get(
-            "/api/documents", headers={"Origin": "http://tauri.localhost"}
-        )
+        res = await token_client.get("/api/documents", headers={"Origin": "http://tauri.localhost"})
         assert res.status_code == 401
 
     async def test_valid_token_request_succeeds_with_cors_header(self, token_client):
@@ -206,9 +202,7 @@ class TestTokenGuard:
         헤더가 없으면 브라우저는 실제 401 본문을 읽지 못하고 'CORS 차단'으로만
         보고해, 프런트엔드가 원인(토큰 문제)을 전혀 구분할 수 없게 된다.
         """
-        res = await token_client.get(
-            "/api/documents", headers={"Origin": "http://tauri.localhost"}
-        )
+        res = await token_client.get("/api/documents", headers={"Origin": "http://tauri.localhost"})
         assert res.status_code == 401
         assert res.headers["access-control-allow-origin"] == "http://tauri.localhost"
 
