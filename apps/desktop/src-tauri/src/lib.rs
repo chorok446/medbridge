@@ -10,7 +10,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 #[cfg(windows)]
 #[allow(non_snake_case)]
@@ -496,6 +496,41 @@ pub fn run() {
                             // 포트만 기록한다 — 토큰은 절대 로그에 남기지 않는다.
                             println!("sidecar ready at {}", sidecar_base_url(port));
                             *state.startup.lock().unwrap() = Startup::Ready;
+
+                            // readiness는 한 번의 성공일 뿐 생존 보장이 아니다. 대형 문서
+                            // OCR·요약 중 OOM/충돌로 sidecar가 종료되면 저장된 enum만
+                            // 반환하던 이전 코드는 앱을 영원히 ready로 보이게 했다.
+                            loop {
+                                std::thread::sleep(Duration::from_secs(1));
+                                let stopped = match state.child.lock() {
+                                    Ok(mut child) => match child.as_mut() {
+                                        Some(child) => match child.try_wait() {
+                                            Ok(Some(status)) => Some(format!(
+                                                "sidecar exited after ready: {status}"
+                                            )),
+                                            Ok(None) => None,
+                                            Err(error) => Some(format!(
+                                                "sidecar status check failed after ready: {error}"
+                                            )),
+                                        },
+                                        // 정상 앱 종료는 kill_sidecar가 child를 먼저 꺼낸다.
+                                        None => break,
+                                    },
+                                    Err(_) => Some(
+                                        "sidecar process state lock was poisoned after ready"
+                                            .to_string(),
+                                    ),
+                                };
+                                let Some(reason) = stopped else {
+                                    continue;
+                                };
+                                eprintln!("{reason}");
+                                *state.startup.lock().unwrap() = Startup::Failed;
+                                // 프런트는 상태를 계속 폴링하지만 이벤트도 보내 즉시 복구
+                                // 화면으로 전환할 수 있는 확장 지점을 유지한다.
+                                let _ = handle.emit("sidecar-failed", ());
+                                break;
+                            }
                         }
                         Err(e) => {
                             eprintln!("sidecar startup failed (port {port}): {e}");
