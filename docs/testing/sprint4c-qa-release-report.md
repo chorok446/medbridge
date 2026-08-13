@@ -81,15 +81,28 @@ main 배포 워크플로(`.github/workflows/release.yml`)는 `scripts/check_rele
 artifact 파일로만 한정되는지(앱 코드·프롬프트·검색·출처 검증·평가기·release 워크플로가
 바뀌면 거부), (3) artifact SHA-256 일치를 확인한다.
 
-실제 평가·검증 완료 후 아래 형식으로 승인 파일을 작성하고, 이후에는 승인·보고·artifact
-파일만 커밋한다:
+실제 평가·검증 완료 후 [출시 승인 artifact 형식](release-approval-format.md)에 따라 Qwen
+평가 JSON과 Windows 실기기 검증 JSON을 작성한다. 게이트는 승인 문자열뿐 아니라 두 JSON의
+`testedCommit`, `modelDigest`, `installerSha256`과 파일 SHA-256을 교차검증한다. 이후에는
+승인·보고·artifact 파일만 커밋한다:
 
 ```json
 {
   "testedCommit": "<평가·검증을 수행한 코드 커밋 전체 SHA>",
-  "qwen3_8b": {"verdict": "default_recommended", "evalArtifact": "qa-eval-qwen3-8b.json"},
-  "windowsValidation": {"status": "passed", "date": "YYYY-MM-DD", "by": "검증자"},
-  "artifacts": [{"path": "docs/testing/qa-eval-qwen3-8b.json", "sha256": "<hex>"}]
+  "qwen3_8b": {
+    "verdict": "default_recommended",
+    "evalArtifact": "docs/testing/qa-eval-qwen3-8b.json",
+    "modelDigest": "sha256:<64자리 hex>"
+  },
+  "windowsValidation": {
+    "status": "passed",
+    "validationArtifact": "docs/testing/windows-release-validation.json",
+    "installerSha256": "<64자리 hex>"
+  },
+  "artifacts": [
+    {"kind": "qwen3_8b_evaluation", "path": "...", "sha256": "<64자리 hex>"},
+    {"kind": "windows_validation", "path": "...", "sha256": "<64자리 hex>"}
+  ]
 }
 ```
 
