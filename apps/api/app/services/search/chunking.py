@@ -14,13 +14,14 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import and_, bindparam, delete, or_, select, text, update
+from sqlalchemy import and_, bindparam, delete, exists, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql.selectable import Exists
 
 from app.db.session import get_session_factory
 from app.models.document import Document, DocumentJob
-from app.models.enums import JobStatus, OcrRunStatus, ProcessingStatus
+from app.models.enums import JobStatus, JobType, OcrRunStatus, ProcessingStatus
 from app.models.extraction import DocumentBlock, DocumentPage, DocumentTable
 from app.models.search import (
     DocumentChunk,
@@ -66,6 +67,19 @@ class ChunkRevisionChanged(Exception):
 
 class ChunkRebuildInProgress(Exception):
     """동일 문서의 다른 generation이 아직 작성 중이다."""
+
+
+class ChunkSourceUpdating(Exception):
+    """OCR이 원문을 페이지 단위로 갱신 중이라 일관된 청크 세대를 만들 수 없다."""
+
+
+def _active_ocr_exists(document_id: uuid.UUID) -> Exists:
+    """활성 OCR 잡 존재 조건 — 계획 전 검사와 전환 CAS가 같은 정의를 쓴다."""
+    return exists().where(
+        DocumentJob.document_id == document_id,
+        DocumentJob.job_type == JobType.OCR_DOCUMENT,
+        DocumentJob.status.in_([JobStatus.QUEUED, JobStatus.RUNNING]),
+    )
 
 
 def _is_generation_lease_conflict(exc: IntegrityError) -> bool:
@@ -773,6 +787,7 @@ async def _activate_generation(
                         [ProcessingStatus.DELETING, ProcessingStatus.DELETED]
                     ),
                     Document.content_revision == planned_revision,
+                    ~_active_ocr_exists(document_id),
                     generation_guard,
                 )
                 .values(
@@ -783,6 +798,10 @@ async def _activate_generation(
             )
         ).scalar_one_or_none()
         if guarded_document_id is None:
+            if await session.scalar(select(_active_ocr_exists(document_id))):
+                raise ChunkSourceUpdating(
+                    f"OCR 처리 중에는 청크 세대를 전환할 수 없습니다: {document_id}"
+                )
             current_revision = (
                 await session.execute(
                     select(Document.content_revision).where(Document.id == document_id)
@@ -801,6 +820,10 @@ async def rebuild_chunks(
     """bounded shadow generation을 만들고 revision-guarded 전환으로 활성화한다."""
     generation_id: uuid.UUID | None = None
     try:
+        if await session.scalar(select(_active_ocr_exists(document_id))):
+            raise ChunkSourceUpdating(
+                f"OCR 처리 중에는 청크를 재생성할 수 없습니다: {document_id}"
+            )
         document_state = (
             await session.execute(
                 select(

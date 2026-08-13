@@ -19,6 +19,7 @@ from app.services.ocr import service as ocr_service
 from app.services.search.chunking import (
     ChunkRebuildInProgress,
     ChunkRevisionChanged,
+    ChunkSourceUpdating,
     _is_generation_lease_conflict,
     rebuild_chunks,
 )
@@ -447,6 +448,58 @@ class TestChunkGenerationSafety:
                 )
             ).scalar_one()
             assert generations == 1  # 실패한 shadow는 삭제되고 이전 활성 generation만 남는다.
+
+    async def test_ocr_start_during_staging_blocks_generation_activation(
+        self, client, monkeypatch
+    ):
+        """페이지를 읽은 뒤 OCR이 시작되면 혼합 shadow를 활성화하지 않는다."""
+        from app.services.search import chunking
+
+        doc = await upload_extracted(client, fx.single_column_korean(pages=4))
+        doc_id = uuid.UUID(doc["id"])
+        await _rebuild(doc["id"])
+        async with get_session_factory()() as session:
+            before = await session.get(Document, doc_id)
+            assert before is not None
+            before_generation = before.active_chunk_generation_id
+
+        original_write = chunking._write_staging_batch
+        ocr_started = False
+
+        async def start_ocr_after_committed_batch(session, generation, chunks):
+            nonlocal ocr_started
+            written = await original_write(session, generation, chunks)
+            if not ocr_started:
+                ocr_started = True
+                async with get_session_factory()() as other:
+                    other.add(
+                        DocumentJob(
+                            document_id=doc_id,
+                            job_type=JobType.OCR_DOCUMENT,
+                            status=JobStatus.RUNNING,
+                            correlation_id="ocr-during-chunk-staging",
+                        )
+                    )
+                    await other.commit()
+            return written
+
+        monkeypatch.setattr(chunking, "_write_staging_batch", start_ocr_after_committed_batch)
+        async with get_session_factory()() as session:
+            with pytest.raises(ChunkSourceUpdating):
+                await rebuild_chunks(session, doc_id)
+
+        async with get_session_factory()() as session:
+            after = await session.get(Document, doc_id)
+            assert after is not None
+            assert after.active_chunk_generation_id == before_generation
+            generations = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(DocumentChunkGeneration)
+                    .where(DocumentChunkGeneration.document_id == doc_id)
+                )
+            ).scalar_one()
+            assert generations == 1
 
     async def test_cancellation_discards_shadow_and_keeps_previous_chunks(
         self, client, monkeypatch

@@ -11,7 +11,11 @@ from app.core.logging import correlation_id_var, get_logger
 from app.db.session import get_session_factory
 from app.models.document import Document, DocumentJob
 from app.models.enums import JobStatus, JobType
-from app.services.search.chunking import LowConfidenceOnlyDocument, rebuild_chunks
+from app.services.search.chunking import (
+    ChunkSourceUpdating,
+    LowConfidenceOnlyDocument,
+    rebuild_chunks,
+)
 from app.services.tasks.jobs import latest_job
 
 logger = get_logger(__name__)
@@ -54,6 +58,19 @@ async def run_chunk_rebuild_job(document_id: uuid.UUID, correlation_id: str) -> 
             document_id=str(document_id),
             suppressed_blocks=exc.suppressed_blocks,
         )
+        return
+    except ChunkSourceUpdating:
+        # OCR 완료 경로가 최신 revision으로 새 잡을 등록한다. 혼합 원문으로 만든 shadow를
+        # 활성화하는 대신 현재 잡은 안전하게 종료한다.
+        async with factory() as session:
+            job = await session.get(DocumentJob, job_id)
+            if job is not None:
+                job.status = JobStatus.FAILED
+                job.failure_code = "CHUNK_SOURCE_UPDATING"
+                job.failure_reason = "ocr_in_progress"
+                job.completed_at = datetime.now(UTC)
+            await session.commit()
+        logger.info("chunk_rebuild_deferred_for_ocr", document_id=str(document_id))
         return
 
     async with factory() as session:

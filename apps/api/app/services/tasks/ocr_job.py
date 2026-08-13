@@ -4,7 +4,7 @@ import asyncio
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.core.logging import correlation_id_var, get_logger
 from app.db.session import get_session_factory
@@ -149,6 +149,15 @@ async def run_ocr_job(
                     .one()
                 )
                 page_changed = await ocr_service.apply_ocr_result(session, page, result, run_row)
+                if page_changed:
+                    # 페이지 본문과 같은 트랜잭션에서 revision을 올린다. 문서 전체 OCR이
+                    # 끝날 때까지 미루면, 앞쪽 페이지는 새 본문인데 revision은 예전 값인
+                    # 창이 생겨 동시 청크 rebuild가 혼합 세대를 정상으로 활성화할 수 있다.
+                    await session.execute(
+                        update(Document)
+                        .where(Document.id == document_id)
+                        .values(content_revision=Document.content_revision + 1)
+                    )
                 await session.commit()
                 processed += 1
                 changed += int(page_changed)
@@ -267,11 +276,8 @@ async def run_ocr_job(
             job.completed_at = datetime.now(UTC)
         if doc is not None:
             await ocr_service.rollup_document_status(session, doc)
-            if changed > 0:
-                # 본문이 실제로 바뀜 — content revision을 올린다(기존 청크·요약 stale).
-                # `processed > 0`을 기준으로 삼으면 같은 결과를 다시 쓴 재실행도 revision을
-                # 올려, 이미 성공한 요약 노드 수백 개가 재사용 키에서 통째로 무효가 된다.
-                doc.content_revision = (doc.content_revision or 1) + 1
+            # content_revision은 각 변경 페이지의 본문과 같은 트랜잭션에서 이미 올렸다.
+            # 여기서 다시 올리면 실제 변경 횟수보다 revision이 하나 더 진행한다.
         await session.commit()
         logger.info(
             "ocr_job_done",

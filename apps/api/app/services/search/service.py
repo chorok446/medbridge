@@ -27,11 +27,33 @@ async def _latest_chunk_job(db: AsyncSession, document_id: uuid.UUID) -> Documen
     return await latest_job(db, document_id, JobType.CHUNK_REBUILD)
 
 
+async def _has_active_ocr_job(db: AsyncSession, document_id: uuid.UUID) -> bool:
+    return (
+        await db.execute(
+            select(DocumentJob.id)
+            .where(
+                DocumentJob.document_id == document_id,
+                DocumentJob.job_type == JobType.OCR_DOCUMENT,
+                DocumentJob.status.in_([JobStatus.QUEUED, JobStatus.RUNNING]),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none() is not None
+
+
 async def start_chunk_rebuild(
     db: AsyncSession, doc: Document, correlation_id: str
 ) -> tuple[bool, uuid.UUID | None]:
     """재생성 잡을 등록한다. 반환: (started, job_id). 이미 진행 중이면 (False, 기존 job_id)."""
     from app.services.tasks.runner import get_task_runner
+
+    if await _has_active_ocr_job(db, doc.id):
+        raise AppError(
+            ErrorCode.INVALID_STATE,
+            "OCR 처리가 끝난 뒤 검색 준비를 다시 시도해 주세요.",
+            status_code=409,
+            retryable=True,
+        )
 
     running = await _latest_chunk_job(db, doc.id)
     if running is not None and running.status in (JobStatus.QUEUED, JobStatus.RUNNING):
@@ -109,6 +131,20 @@ async def search_document(
     if mode not in SEARCH_MODES:
         raise AppError(
             ErrorCode.VALIDATION_FAILED, "지원하지 않는 검색 방식입니다.", status_code=422
+        )
+    current_revisions = (
+        await db.execute(
+            select(Document.content_revision, Document.chunk_revision).where(
+                Document.id == doc.id
+            )
+        )
+    ).one()
+    if await _has_active_ocr_job(db, doc.id) or current_revisions[0] != current_revisions[1]:
+        raise AppError(
+            ErrorCode.INVALID_STATE,
+            "문서 내용이 갱신 중입니다. 검색 준비가 끝난 뒤 다시 시도해 주세요.",
+            status_code=409,
+            retryable=True,
         )
     bounded_limit = max(1, min(limit, MAX_SEARCH_LIMIT)) if limit else DEFAULT_SEARCH_LIMIT
 
