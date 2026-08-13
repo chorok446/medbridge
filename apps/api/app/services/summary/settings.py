@@ -68,6 +68,14 @@ SECTION_SUMMARY_MAX_CHARS = 1500
 CONCEPT_EXPLANATION_MAX_CHARS = 800
 GENERIC_TEXT_MAX_CHARS = 800
 
+# 사용자에게 노출·저장하는 근거는 문서 전체 coverage와 분리한다. 계층 reduce는 모든
+# 원본 청크 id를 메모리에서 계속 전달하지만, 체크포인트/산출물 한 건이 수천 UUID와
+# bbox를 반복 저장하지 않도록 대표 근거만 균등하게 남긴다. ref 상한은 chunk 상한의
+# 두 배라 각 대표 청크의 첫 위치를 보장하면서, 중복 제거된 청크의 추가 페이지도 일부
+# 보여줄 수 있다.
+SUMMARY_EVIDENCE_CHUNK_LIMIT = 8
+SUMMARY_EVIDENCE_REF_LIMIT = 16
+
 DEFAULT_LEARNER_LEVEL = "nursing_student"
 VALID_LEARNER_LEVELS = ("concise", "nursing_student", "experienced_nurse")
 

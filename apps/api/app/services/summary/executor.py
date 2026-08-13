@@ -7,8 +7,9 @@
   (`docs/testing/windows-local-ai-activation-diagnosis.md` §2).
 - **재사용**: 노드 키(input_hash)가 같은 성공 노드가 이미 있으면 모델을 부르지 않고
   결과를 복사한다. 앱을 껐다 켜거나 실패 후 재시도해도 처음부터 다시 돌지 않는다.
-- **서버 소유 출처**: 레벨 0은 그룹에 든 chunk id, 레벨 1+는 자식 출처의 합집합을
-  서버가 계산한다. 모델이 돌려준 id는 쓰지 않는다.
+- **coverage/evidence 분리**: 레벨 0은 그룹에 든 chunk id, 레벨 1+는 자식 coverage의
+  합집합을 메모리에서 온전히 유지한다. DB와 사용자 산출물에는 서버가 그 범위에서 고른
+  작은 대표 evidence만 저장하며, 모델이 돌려준 원본 id는 쓰지 않는다.
 - **취소·revision 확인**: 모델 호출 사이마다 잡이 여전히 유효한지 확인하고, 문서가
   바뀌면 중간 결과를 저장하지 않고 중단한다.
 """
@@ -50,7 +51,7 @@ from app.services.summary.provider import (
     provider_request_budget_scope,
     providers_share_runtime_configuration,
 )
-from app.services.summary.schema import ArtifactDraft
+from app.services.summary.schema import ArtifactDraft, bounded_evidence_chunk_ids
 from app.services.summary.settings import (
     GROUP_SUMMARY_MAX_CHARS,
     PROMPT_VERSION,
@@ -118,7 +119,10 @@ class _NodeResult:
     node_id: uuid.UUID
     input_hash: str
     summary_text: str
-    source_chunk_ids: list[str]
+    # coverage는 reduce/hash/revision 의미를 위해 현재 실행 동안 온전히 유지한다.
+    # evidence만 DB와 최종 사용자 산출물에 들어가는 작은 대표 집합이다.
+    coverage_chunk_ids: list[str]
+    evidence_chunk_ids: list[str]
     section_title: str | None
 
 
@@ -445,11 +449,14 @@ async def execute_hierarchical_summary(
     level = 1
 
     def _reduce_spec(position: int, batch: list[_NodeResult], level: int) -> dict:
-        # 출처는 자식 출처의 합집합 — 서버가 계산하고 모델 출력은 쓰지 않는다.
+        # coverage는 자식 전체 범위의 합집합 — evidence로 줄이면 상위 hash/출처 의미가
+        # 매 단계마다 소실된다. 작은 대표 집합은 저장 직전에 별도로 계산한다.
         merged_source_ids: list[str] = []
+        seen_source_ids: set[str] = set()
         for child in batch:
-            for cid in child.source_chunk_ids:
-                if cid not in merged_source_ids:
+            for cid in child.coverage_chunk_ids:
+                if cid not in seen_source_ids:
+                    seen_source_ids.add(cid)
                     merged_source_ids.append(cid)
         return dict(
             provider=provider,
@@ -478,7 +485,9 @@ async def execute_hierarchical_summary(
             ),
             source_ids=merged_source_ids,
             # 레벨 1+의 요청 청크는 자식 노드다 — 그 노드의 출처가 원본 chunk id다.
-            chunk_sources={str(child.node_id): list(child.source_chunk_ids) for child in batch},
+            chunk_sources={
+                str(child.node_id): list(child.coverage_chunk_ids) for child in batch
+            },
             section_title=batch[0].section_title,
             counter=counter,
             guard_args=guard_args,
@@ -524,7 +533,7 @@ async def execute_hierarchical_summary(
                 group_id=f"g{i}",
                 section_title=n.section_title,
                 summary_text=n.summary_text,
-                source_chunk_ids=n.source_chunk_ids,
+                source_chunk_ids=n.coverage_chunk_ids,
             )
             for i, n in enumerate(nodes)
         ]
@@ -594,10 +603,10 @@ async def execute_hierarchical_summary(
             {
                 "title": node.section_title,
                 "summary": node.summary_text,
-                "sourceChunkIds": node.source_chunk_ids,
+                "sourceChunkIds": node.evidence_chunk_ids,
             }
             for node in section_nodes
-            if node.summary_text and node.source_chunk_ids
+            if node.summary_text and node.evidence_chunk_ids
         ]
         logger.info(
             "summary_sections_from_level",
@@ -660,9 +669,9 @@ async def _process_node(
 ) -> _NodeResult:
     """노드 하나: 가드 → 재사용 확인 → (필요 시) 모델 호출 → 체크포인트 저장.
 
-    `chunk_sources`는 요청 청크 id → 서버 소유 원본 chunk id 목록이다. 레벨 0은 자기
-    자신, 레벨 1+는 자식 노드의 출처다. 분할·열화로 일부 조각이 버려지면 그 조각의
-    출처는 저장하지 않는다.
+    `source_ids`와 `chunk_sources`는 현재 실행이 계산한 전체 coverage다. 재사용 노드도
+    DB에 저장된 evidence-only 배열을 읽어 coverage로 승격하지 않는다. 레벨 0은 자기
+    자신, 레벨 1+는 자식 노드의 coverage이며, 분할·열화로 버린 조각은 제외한다.
     """
     async with factory() as session:
         await _assert_runnable(
@@ -670,6 +679,7 @@ async def _process_node(
         )
         reusable = await _find_reusable(session, document_id, input_hash)
         if reusable is not None:
+            evidence_ids = bounded_evidence_chunk_ids(source_ids)
             node = SummaryNode(
                 document_id=document_id,
                 summary_run_id=run_id,
@@ -680,7 +690,7 @@ async def _process_node(
                 output_hash=reusable.output_hash,
                 summary_text=reusable.summary_text,
                 # 출처는 재사용본이 아니라 이번 실행에서 계산한 값을 쓴다(서버 소유).
-                source_chunk_ids_json=list(source_ids),
+                source_chunk_ids_json=evidence_ids,
                 attempt_count=0,
                 reused=True,
             )
@@ -693,7 +703,10 @@ async def _process_node(
                 node_id=node.id,
                 input_hash=input_hash,
                 summary_text=reusable.summary_text,
-                source_chunk_ids=list(source_ids),
+                # 과거 노드의 UUID를 복사하지 않는다. 같은 입력 hash를 재사용하더라도
+                # coverage/evidence는 이번 실행이 계산한 현재 id에서 다시 만든다.
+                coverage_chunk_ids=list(source_ids),
+                evidence_chunk_ids=evidence_ids,
                 section_title=section_title,
             )
 
@@ -752,6 +765,7 @@ async def _process_node(
     # 경로에서 요약에 들어가지도 않은 청크가 근거로 남아, 사용자가 '근거 보기'를 눌렀을 때
     # 요약문과 무관한 페이지로 이동하고 그 문장이 거기에 근거한 것으로 오인한다.
     covered_ids = _resolve_covered(result.covered_ids, chunk_sources) or list(source_ids)
+    evidence_ids = bounded_evidence_chunk_ids(covered_ids)
 
     async def _persist() -> uuid.UUID:
         async with factory() as session:
@@ -767,7 +781,7 @@ async def _process_node(
                 input_hash=input_hash,
                 output_hash=_output_hash(text),
                 summary_text=text,
-                source_chunk_ids_json=list(covered_ids),
+                source_chunk_ids_json=evidence_ids,
                 attempt_count=max(attempt_counter.attempts, request_budget.requests_started),
                 reused=False,
             )
@@ -794,7 +808,8 @@ async def _process_node(
         node_id=node_id,
         input_hash=input_hash,
         summary_text=text,
-        source_chunk_ids=list(covered_ids),
+        coverage_chunk_ids=list(covered_ids),
+        evidence_chunk_ids=evidence_ids,
         section_title=section_title,
     )
 
@@ -804,9 +819,11 @@ def _resolve_covered(
 ) -> list[str]:
     """요약에 반영된 요청 청크 id → 서버 소유 원본 chunk id(순서 유지·중복 제거)."""
     out: list[str] = []
+    seen: set[str] = set()
     for cid in covered_request_ids:
         for sid in chunk_sources.get(cid, ()):
-            if sid not in out:
+            if sid not in seen:
+                seen.add(sid)
                 out.append(sid)
     return out
 

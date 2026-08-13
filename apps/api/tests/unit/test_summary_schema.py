@@ -14,8 +14,16 @@ from app.services.summary.provider import (
     DocumentRequest,
     GroupRequest,
 )
-from app.services.summary.schema import ChunkRef, build_artifacts
-from app.services.summary.settings import OVERVIEW_MAX_CHARS
+from app.services.summary.schema import (
+    ChunkRef,
+    bounded_source_refs,
+    build_artifacts,
+)
+from app.services.summary.settings import (
+    OVERVIEW_MAX_CHARS,
+    SUMMARY_EVIDENCE_CHUNK_LIMIT,
+    SUMMARY_EVIDENCE_REF_LIMIT,
+)
 
 
 def _chunk(cid: str, text: str, page: int = 1) -> ChunkRef:
@@ -134,6 +142,78 @@ class TestBuildArtifacts:
         }
         arts = build_artifacts(structured, lookup, learner_level="nursing_student")
         assert arts == []
+
+    def test_thousands_of_sources_are_bounded_per_artifact_and_still_span_document(self):
+        """전체 coverage가 커도 각 artifact는 작고, 앞부분만 대표하지 않는다."""
+        count = 5_000
+        ids = [f"c{i:04d}" for i in range(count)]
+        lookup = {
+            cid: ChunkRef(
+                chunk_id=cid,
+                source_refs=[
+                    {
+                        "pageNumber": i + 1,
+                        "blockId": f"b{i}-a",
+                        "bbox": [0, 0, 1, 1],
+                        "readingOrder": i,
+                        "sourceMethod": "digital",
+                    },
+                    {
+                        "pageNumber": i + count + 1,
+                        "blockId": f"b{i}-b",
+                        "bbox": [1, 1, 2, 2],
+                        "readingOrder": i,
+                        "sourceMethod": "digital",
+                    },
+                ],
+                text=f"청크 {i} 본문",
+            )
+            for i, cid in enumerate(ids)
+        }
+        structured = {
+            "overview": {"text": "전체 개요다.", "sourceChunkIds": ids},
+            "sections": [
+                {"title": "첫 구역", "summary": "첫 요약이다.", "sourceChunkIds": ids},
+                {"title": "둘째 구역", "summary": "둘째 요약이다.", "sourceChunkIds": ids},
+            ],
+            "keyConcepts": [
+                {"term": "핵심", "explanation": "핵심 설명이다.", "sourceChunkIds": ids}
+            ],
+        }
+
+        first = build_artifacts(structured, lookup, learner_level="nursing_student")
+        second = build_artifacts(structured, lookup, learner_level="nursing_student")
+
+        assert len(first) == 4
+        assert [a.source_chunk_ids for a in first] == [a.source_chunk_ids for a in second]
+        valid_refs = {
+            (ref["pageNumber"], ref["blockId"])
+            for chunk in lookup.values()
+            for ref in chunk.source_refs
+        }
+        for artifact in first:
+            assert len(artifact.source_chunk_ids) == SUMMARY_EVIDENCE_CHUNK_LIMIT
+            assert artifact.source_chunk_ids[0] == ids[0]
+            assert artifact.source_chunk_ids[-1] == ids[-1]
+            assert len(artifact.source_refs) <= SUMMARY_EVIDENCE_REF_LIMIT
+            assert all(cid in lookup for cid in artifact.source_chunk_ids)
+            assert all(
+                (ref["pageNumber"], ref["blockId"]) in valid_refs
+                for ref in artifact.source_refs
+            )
+
+    def test_api_boundary_caps_legacy_unbounded_refs_deterministically(self):
+        refs = [
+            {"pageNumber": i + 1, "blockId": f"b{i}", "bbox": [0, 0, 1, 1]}
+            for i in range(5_000)
+        ]
+
+        bounded = bounded_source_refs(refs)
+
+        assert len(bounded) == SUMMARY_EVIDENCE_REF_LIMIT
+        assert bounded[0] == refs[0]
+        assert bounded[-1] == refs[-1]
+        assert bounded == bounded_source_refs(refs)
 
 
 class TestOverLimitFields:

@@ -32,7 +32,9 @@ from app.services.summary.executor import (
     execute_hierarchical_summary,
 )
 from app.services.summary.provider import (
+    ChunkInput,
     DeterministicSummaryProvider,
+    GroupRequest,
     GroupSummary,
     OpenAICompatibleSummaryProvider,
 )
@@ -40,6 +42,7 @@ from app.services.summary.settings import (
     GROUP_SUMMARY_MAX_CHARS,
     PROMPT_VERSION,
     SCHEMA_VERSION,
+    SUMMARY_EVIDENCE_CHUNK_LIMIT,
 )
 from app.services.tasks.summary_job import _job_is_current
 from tests import extraction_fixtures as fx
@@ -211,6 +214,75 @@ class TestCheckpointing:
                 )
             ).scalar_one()
             assert reused == await _node_count(run2_id)
+
+    async def test_reused_node_rebuilds_bounded_evidence_from_current_full_coverage(
+        self, client
+    ):
+        """재사용 출력은 과거 UUID를 복사하지 않고 이번 실행 coverage에서 근거를 만든다."""
+        document_id = await _upload_chunked(client, fx.single_column_korean(pages=1))
+        request = GroupRequest(
+            group_id="large-coverage",
+            section_title="대형 구역",
+            chunks=[ChunkInput("request-node", "대형 구역", "요약할 내용이다.", 1, 1)],
+            learner_level="nursing_student",
+            language="ko",
+        )
+        input_hash = "ab" * 32
+
+        async def process(provider, run_id, job_id, revision, chunk_hash, source_ids):
+            return await executor_mod._process_node(
+                get_session_factory(),
+                provider=provider,
+                run_id=run_id,
+                document_id=document_id,
+                level=0,
+                position=0,
+                input_hash=input_hash,
+                request=request,
+                source_ids=source_ids,
+                chunk_sources={"request-node": source_ids},
+                section_title="대형 구역",
+                counter=executor_mod._Counter(),
+                guard_args={
+                    "document_id": document_id,
+                    "job_id": job_id,
+                    "start_revision": revision,
+                    "start_hash": chunk_hash,
+                    "job_is_current": _job_is_current,
+                    "current_chunk_hash": summary_service.current_chunk_hash,
+                },
+            )
+
+        old_ids = [f"old-{i:04d}" for i in range(5_000)]
+        first_provider = CountingProvider()
+        run1, job1, rev1, hash1 = await _make_run(document_id, first_provider)
+        first = await process(first_provider, run1, job1, rev1, hash1, old_ids)
+
+        assert first.coverage_chunk_ids == old_ids
+        assert first.evidence_chunk_ids == executor_mod.bounded_evidence_chunk_ids(old_ids)
+        assert len(first.evidence_chunk_ids) == SUMMARY_EVIDENCE_CHUNK_LIMIT
+
+        current_ids = [f"current-{i:04d}" for i in range(5_000)]
+        second_provider = CountingProvider()
+        run2, job2, rev2, hash2 = await _make_run(document_id, second_provider)
+        second = await process(second_provider, run2, job2, rev2, hash2, current_ids)
+
+        assert second_provider.group_calls == 0
+        assert second.coverage_chunk_ids == current_ids
+        assert second.evidence_chunk_ids == executor_mod.bounded_evidence_chunk_ids(current_ids)
+        assert not set(second.evidence_chunk_ids) & set(old_ids)
+        async with get_session_factory()() as s:
+            stored = (
+                await s.execute(
+                    select(SummaryNode).where(
+                        SummaryNode.summary_run_id == run2,
+                        SummaryNode.level == 0,
+                        SummaryNode.position == 0,
+                    )
+                )
+            ).scalar_one()
+        assert stored.reused is True
+        assert stored.source_chunk_ids_json == second.evidence_chunk_ids
 
     async def test_provider_identity_change_does_not_reuse_old_nodes(self, client):
         """같은 모델명이어도 credential/deployment identity가 다르면 새로 실행한다."""
@@ -800,7 +872,9 @@ class TestMultiLevelReduce:
                 # 상위 노드 출처는 반드시 실제 청크 id여야 한다(노드 id가 새면 안 된다)
                 assert set(node.source_chunk_ids_json) <= level0_ids
 
-    async def test_reduce_node_sources_are_union_of_children(self, client, monkeypatch):
+    async def test_reduce_node_evidence_is_bounded_sample_of_child_coverage(
+        self, client, monkeypatch
+    ):
         monkeypatch.setattr(executor_mod, "REDUCE_FAN_IN", 2)
         # 픽스처 본문은 짧아 기본 상한이면 한 그룹에 다 들어간다 — 그룹을 잘게 나눠
         # reduce 레벨이 실제로 생기게 한다.
@@ -830,7 +904,10 @@ class TestMultiLevelReduce:
                 for cid in child.source_chunk_ids_json:
                     if cid not in expected:
                         expected.append(cid)
-            assert parent.source_chunk_ids_json == expected
+            assert parent.source_chunk_ids_json == executor_mod.bounded_evidence_chunk_ids(
+                expected
+            )
+            assert len(parent.source_chunk_ids_json) <= SUMMARY_EVIDENCE_CHUNK_LIMIT
 
     async def test_sections_scale_with_document_not_fan_in(self, client, monkeypatch):
         """섹션은 최상위 레벨이 아니라 그 아래 레벨에서 나온다.
