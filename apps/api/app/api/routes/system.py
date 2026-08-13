@@ -2,6 +2,7 @@
 
 import asyncio
 import platform
+from collections import deque
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -10,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import __version__
 from app.core.errors import AppError, ErrorCode
-from app.core.logging import get_logger
+from app.core.logging import get_logger, redact_diagnostic_text
 from app.core.paths import get_path_provider
 from app.db.session import get_db
 from app.models.document import Document, DocumentJob
@@ -111,7 +112,10 @@ async def error_report(db: AsyncSession = Depends(get_db)) -> dict:
     if log_file.is_file():
         # encoding을 지정하지 않으면 Windows에서 로케일 기본값(CP949)으로 읽어
         # UTF-8로 쓴 한글 로그가 전부 깨진다 — 오류 메시지를 못 읽게 된다.
-        log_tail = log_file.read_text(encoding="utf-8", errors="replace").splitlines()[-200:]
+        # 파일 전체를 read_text()하지 않는다. 회전 직전의 5 MiB 로그도 보고서 요청의
+        # Python heap에 통째로 올릴 이유가 없다.
+        with log_file.open(encoding="utf-8", errors="replace") as stream:
+            log_tail = [redact_diagnostic_text(line.rstrip("\r\n")) for line in deque(stream, 200)]
 
     report: dict[str, Any] = {
         "sidecarVersion": __version__,

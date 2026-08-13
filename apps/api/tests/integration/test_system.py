@@ -62,10 +62,7 @@ class TestPrepareUpdate:
         with sqlite3.connect(backup) as conn:
             assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
             tables = {
-                row[0]
-                for row in conn.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table'"
-                )
+                row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
             }
         # 스키마가 통째로 실려야 한다 — 빈 껍데기로는 되돌릴 수 없다.
         assert "documents" in tables, sorted(tables)
@@ -92,9 +89,7 @@ class TestPrepareUpdate:
 
 class TestErrorReport:
     async def test_report_shape_and_no_filenames(self, client):
-        await client.post(
-            "/api/documents", **upload_kwargs(make_pdf(), "환자기록_비밀문서.pdf")
-        )
+        await client.post("/api/documents", **upload_kwargs(make_pdf(), "환자기록_비밀문서.pdf"))
         await drain_jobs()
         # 사용자 자유 입력 신고는 zip 포함 대상 로그(sidecar.log)에 남지 않아야 한다
         await client.post(
@@ -126,6 +121,19 @@ class TestErrorReport:
 
         report = (await client.get("/api/system/error-report")).json()["data"]
         assert korean in report["logTail"]
+
+    async def test_log_tail_redacts_local_paths_and_document_names(self, client):
+        log_file = get_path_provider().logs_dir / "sidecar.log"
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        private_path = r"C:\Users\real-name\AppData\Local\Temp\환자기록.pdf"
+        with log_file.open("a", encoding="utf-8") as fh:
+            fh.write(f"render failed: {private_path}\n")
+
+        report = (await client.get("/api/system/error-report")).json()["data"]
+        raw = json.dumps(report["logTail"], ensure_ascii=False)
+        assert "real-name" not in raw
+        assert "환자기록.pdf" not in raw
+        assert "<home>" in raw
 
 
 class TestSingleInstance:
@@ -196,9 +204,7 @@ class TestQuiescence:
                 await asyncio.Event().wait()
 
         runner = NeverIdleRunner()
-        monkeypatch.setattr(
-            "app.services.tasks.runner.get_task_runner", lambda: runner
-        )
+        monkeypatch.setattr("app.services.tasks.runner.get_task_runner", lambda: runner)
         loop = asyncio.get_running_loop()
         started = loop.time()
         with pytest.raises(runtime.QuiescenceTimeout):
@@ -228,5 +234,7 @@ class TestVersionConsistency:
             cwd=repo_root,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         assert result.returncode == 0, result.stdout + result.stderr

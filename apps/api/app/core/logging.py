@@ -1,5 +1,11 @@
 import logging
+import os
+import re
+import tempfile
 from contextvars import ContextVar
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
+from typing import Any
 
 import structlog
 from structlog.typing import EventDict
@@ -15,6 +21,94 @@ correlation_id_var: ContextVar[str] = ContextVar("correlation_id", default="-")
 # `/{id}/extraction-status` — 각각 1초마다 폴링한다). 슬래시 형태만 보면 정작 잡아야
 # 할 잡음을 그대로 두게 된다.
 _POLL_PATH_SUFFIXES = ("/status", "-status", "/jobs")
+
+# 장시간 OCR·요약을 며칠씩 실행해도 진단 로그가 사용자 디스크를 무한히 점유하지
+# 않게 한다. 활성 파일 1개 + 백업 3개이므로 최대 약 20 MiB다.
+LOG_MAX_BYTES = 5 * 1024 * 1024
+LOG_BACKUP_COUNT = 3
+
+
+def _replace_path_prefix(text: str, raw_path: str, label: str) -> str:
+    """알려진 로컬 경로와 그 하위 이름을 하나의 진단용 표식으로 바꾼다.
+
+    JSONRenderer를 지난 로그는 역슬래시가 두 번 들어가므로 원문/JSON 표기와
+    슬래시 표기를 모두 처리한다. 하위 경로까지 지워 문서 파일명도 남기지 않는다.
+    """
+    raw_path = raw_path.rstrip("\\/")
+    if not raw_path:
+        return text
+    variants = {
+        raw_path,
+        raw_path.replace("\\", "/"),
+        raw_path.replace("/", "\\"),
+        raw_path.replace("\\", "\\\\"),
+    }
+    for variant in sorted(variants, key=len, reverse=True):
+        # 공백/JSON 구분자 전까지가 경로다. 파일명과 문서 디렉터리를 함께 제거한다.
+        pattern = re.escape(variant) + r"(?:[\\/]+[^\s\"'<>|,}\]]*)?"
+        text = re.sub(pattern, label, text, flags=re.IGNORECASE)
+    return text
+
+
+def redact_diagnostic_text(text: str) -> str:
+    """지원용 로그에서 사용자명·임시 경로·문서 파일명을 제거한다."""
+    candidates: list[tuple[str, str]] = []
+    try:
+        from app.core.paths import get_path_provider
+
+        candidates.append((str(get_path_provider().root), "<app-data>"))
+    except Exception:
+        pass
+    candidates.extend(
+        [
+            (tempfile.gettempdir(), "<temp>"),
+            (str(Path.home()), "<home>"),
+        ]
+    )
+    if resource_dir := os.environ.get("MEDBRIDGE_OCR_DIR"):
+        candidates.append((resource_dir, "<resource>"))
+
+    # 더 구체적인 경로를 먼저 지워야 app-data/temp라는 진단 의미가 유지된다.
+    for raw_path, label in sorted(candidates, key=lambda item: len(item[0]), reverse=True):
+        text = _replace_path_prefix(text, raw_path, label)
+
+    # 다른 계정에서 생성된 보고서나 fixture도 사용자명을 남기지 않는다. JSON 안의
+    # 이중 역슬래시까지 [\\/]+가 흡수한다.
+    text = re.sub(
+        r"(?i)(?:[\\/]{2}\?[\\/]+)?[a-z]:[\\/]+users[\\/]+"
+        r"[^\\/\"'<>|,}\]]+(?:[\\/]+[^\s\\/\"'<>|,}\]]+)*",
+        "<home>",
+        text,
+    )
+    text = re.sub(
+        r"(?i)(?<![\w.-])/(?:home|users)/[^\s\"'<>|,}\]]+",
+        "<home>",
+        text,
+    )
+    return text
+
+
+def _redact_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return redact_diagnostic_text(value)
+    if isinstance(value, dict):
+        return {key: _redact_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_redact_value(item) for item in value)
+    return value
+
+
+def _redact_log_fields(_logger: object, _name: str, event_dict: EventDict) -> EventDict:
+    return _redact_value(event_dict)
+
+
+class _RedactingFormatter(logging.Formatter):
+    """파일에 쓰기 직전 traceback을 포함한 최종 문자열을 다시 정제한다."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        return redact_diagnostic_text(super().format(record))
 
 
 class _AccessLogNoiseFilter(logging.Filter):
@@ -85,7 +179,14 @@ def configure_logging() -> None:
 
         provider = get_path_provider()
         provider.logs_dir.mkdir(parents=True, exist_ok=True)
-        handlers.append(logging.FileHandler(provider.logs_dir / "sidecar.log", encoding="utf-8"))
+        file_handler = RotatingFileHandler(
+            provider.logs_dir / "sidecar.log",
+            maxBytes=LOG_MAX_BYTES,
+            backupCount=LOG_BACKUP_COUNT,
+            encoding="utf-8",
+        )
+        file_handler.setFormatter(_RedactingFormatter("%(message)s"))
+        handlers.append(file_handler)
     except Exception:
         pass  # 로그 파일을 못 만들어도 앱은 기동한다
     logging.basicConfig(level=logging.INFO, format="%(message)s", handlers=handlers, force=True)
@@ -95,6 +196,7 @@ def configure_logging() -> None:
             structlog.processors.TimeStamper(fmt="iso"),
             structlog.processors.add_log_level,
             _add_correlation_id,
+            _redact_log_fields,
             structlog.processors.JSONRenderer(),
         ],
         logger_factory=structlog.stdlib.LoggerFactory(),

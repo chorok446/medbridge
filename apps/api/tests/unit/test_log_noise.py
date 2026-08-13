@@ -6,8 +6,15 @@
 """
 
 import logging
+from logging.handlers import RotatingFileHandler
 
-from app.core.logging import install_log_noise_filters
+from app.core.logging import (
+    LOG_BACKUP_COUNT,
+    LOG_MAX_BYTES,
+    configure_logging,
+    install_log_noise_filters,
+    redact_diagnostic_text,
+)
 
 
 def _access_record(message: str) -> logging.LogRecord:
@@ -154,3 +161,55 @@ def test_install_is_idempotent():
     install_log_noise_filters()
     install_log_noise_filters()
     assert len(logging.getLogger("uvicorn.access").filters) == first
+
+
+def test_diagnostic_text_redacts_windows_and_posix_home_paths():
+    raw = (
+        r"failed C:\Users\Alice Kim\AppData\Local\Temp\환자기록.pdf "
+        r"and C:\\Users\\bob\\Documents\\secret.pdf and /home/carol/private/report.pdf"
+    )
+    redacted = redact_diagnostic_text(raw)
+
+    assert "Alice" not in redacted
+    assert "bob" not in redacted
+    assert "carol" not in redacted
+    assert "환자기록" not in redacted
+    assert "secret.pdf" not in redacted
+    assert "report.pdf" not in redacted
+    assert "<home>" in redacted
+
+
+def test_configure_logging_uses_bounded_rotation():
+    configure_logging()
+    file_handlers = [
+        handler
+        for handler in logging.getLogger().handlers
+        if isinstance(handler, RotatingFileHandler)
+    ]
+
+    assert len(file_handlers) == 1
+    assert file_handlers[0].maxBytes == LOG_MAX_BYTES
+    assert file_handlers[0].backupCount == LOG_BACKUP_COUNT
+
+
+def test_file_formatter_redacts_plain_logging_and_tracebacks():
+    configure_logging()
+    file_handler = next(
+        handler
+        for handler in logging.getLogger().handlers
+        if isinstance(handler, RotatingFileHandler)
+    )
+    record = logging.LogRecord(
+        name="plain-library",
+        level=logging.ERROR,
+        pathname=__file__,
+        lineno=1,
+        msg=r"failed at C:\Users\private-user\Documents\환자기록.pdf",
+        args=(),
+        exc_info=None,
+    )
+
+    rendered = file_handler.format(record)
+    assert "private-user" not in rendered
+    assert "환자기록.pdf" not in rendered
+    assert "<home>" in rendered
