@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.document import Document
 from app.models.search import DocumentChunk
 from app.services.search.settings import BODY_BM25_WEIGHT, SECTION_TITLE_BM25_WEIGHT
 
@@ -53,6 +54,14 @@ async def search_keyword(
     fts_query = _sanitize_fts_query(query, match_all=match_all)
     if not fts_query:
         return []
+    active_generation_id = (
+        await session.execute(
+            select(Document.active_chunk_generation_id).where(Document.id == document_id)
+        )
+    ).scalar_one_or_none()
+    fts_document_id = (
+        str(document_id) if active_generation_id is None else f"shadow:{active_generation_id}"
+    )
     rows = (
         await session.execute(
             text(
@@ -65,7 +74,7 @@ async def search_keyword(
                 "body_w": BODY_BM25_WEIGHT,
                 "title_w": SECTION_TITLE_BM25_WEIGHT,
                 "fts_query": fts_query,
-                "doc_id": str(document_id),
+                "doc_id": fts_document_id,
                 "limit": limit,
             },
         )

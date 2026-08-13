@@ -75,6 +75,9 @@ class Document(Base):
     content_revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     # 현재 청크 세트가 만들어진 시점의 content_revision (다르면 청크 stale). NULL=아직 없음.
     chunk_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 활성 청크 generation. NULL은 0014 이전 legacy 청크 세트를 뜻한다. 새 generation은
+    # 완성 전까지 조회에서 숨고, revision CAS와 이 포인터 갱신 1건으로만 전환된다.
+    active_chunk_generation_id: Mapped[uuid.UUID | None] = mapped_column(Uuid(), nullable=True)
     # 추출 캐시·재처리 판단용 (docs §18)
     extraction_engine: Mapped[str | None] = mapped_column(String(30), nullable=True)
     extraction_engine_version: Mapped[str | None] = mapped_column(String(30), nullable=True)

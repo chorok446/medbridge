@@ -171,6 +171,201 @@ def test_upgrade_is_idempotent():
     command.upgrade(alembic_config(), "head")
 
 
+def test_0014_preserves_legacy_chunks_and_replaces_indexes(tmp_path, monkeypatch):
+    """legacy NULL generation을 그대로 활성 상태로 두고 인덱스만 generation-aware로 바꾼다."""
+    database = tmp_path / "existing-0013-chunks.db"
+    original_url = get_settings().database_url_sync
+    original_database_env = os.environ.get("DATABASE_URL")
+
+    try:
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{database.as_posix()}")
+        get_settings.cache_clear()
+        cfg = alembic_config()
+        command.upgrade(cfg, "0013")
+
+        user_id = uuid.uuid4().hex
+        document_id = uuid.uuid4().hex
+        chunk_id = uuid.uuid4().hex
+        with closing(sqlite3.connect(str(database))) as conn:
+            conn.execute("PRAGMA foreign_keys=ON")
+            conn.execute("INSERT INTO app_profile (id) VALUES (?)", (user_id,))
+            conn.execute(
+                """
+                INSERT INTO documents (
+                    id, user_id, title, original_filename, sha256, file_size,
+                    content_revision, chunk_revision
+                ) VALUES (?, ?, 'legacy', 'legacy.pdf', ?, 1024, 7, 7)
+                """,
+                (document_id, user_id, "a" * 64),
+            )
+            conn.execute(
+                """
+                INSERT INTO document_chunks (
+                    id, document_id, chunk_index, normalized_text, token_count,
+                    page_start, page_end, source_refs_json, content_hash
+                ) VALUES (?, ?, 0, '보존할 청크', 3, 1, 1, '[]', ?)
+                """,
+                (chunk_id, document_id, "b" * 64),
+            )
+            conn.execute(
+                """
+                INSERT INTO document_chunks_fts (
+                    chunk_id, document_id, normalized_text, section_title
+                ) VALUES (?, ?, '보존할 청크', '')
+                """,
+                (chunk_id, str(uuid.UUID(document_id))),
+            )
+            conn.commit()
+
+        command.upgrade(cfg, "0014")
+
+        with closing(sqlite3.connect(str(database))) as conn:
+            assert conn.execute(
+                "SELECT active_chunk_generation_id FROM documents WHERE id = ?",
+                (document_id,),
+            ).fetchone() == (None,)
+            assert conn.execute(
+                "SELECT normalized_text, generation_id FROM document_chunks WHERE id = ?",
+                (chunk_id,),
+            ).fetchone() == ("보존할 청크", None)
+            assert conn.execute(
+                "SELECT normalized_text FROM document_chunks_fts WHERE chunk_id = ?",
+                (chunk_id,),
+            ).fetchone() == ("보존할 청크",)
+            indexes = {row[1] for row in conn.execute("PRAGMA index_list('document_chunks')")}
+            assert "ix_document_chunks_doc_generation_order" in indexes
+            assert "ix_document_chunks_doc_generation_hash" in indexes
+            assert "ix_document_chunks_doc_order" not in indexes
+            assert "ix_document_chunks_doc_hash" not in indexes
+            plan = "\n".join(
+                row[3]
+                for row in conn.execute(
+                    """
+                    EXPLAIN QUERY PLAN SELECT id FROM document_chunks
+                     WHERE document_id = ? AND generation_id IS NULL
+                     ORDER BY chunk_index
+                    """,
+                    (document_id,),
+                )
+            )
+            assert "ix_document_chunks_doc_generation_order" in plan
+            assert conn.execute("PRAGMA quick_check").fetchone() == ("ok",)
+            assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    finally:
+        if original_database_env is None:
+            monkeypatch.delenv("DATABASE_URL", raising=False)
+        else:
+            monkeypatch.setenv("DATABASE_URL", original_database_env)
+        get_settings.cache_clear()
+        assert get_settings().database_url_sync == original_url
+
+
+def test_0014_downgrade_promotes_only_active_generation(tmp_path, monkeypatch):
+    """0013 rollback 뒤에는 active 청크/FTS만 legacy key로 남아 검색 가능해야 한다."""
+    database = tmp_path / "active-0014-downgrade.db"
+    original_url = get_settings().database_url_sync
+    original_database_env = os.environ.get("DATABASE_URL")
+
+    try:
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{database.as_posix()}")
+        get_settings.cache_clear()
+        cfg = alembic_config()
+        command.upgrade(cfg, "0014")
+
+        user_id = uuid.uuid4().hex
+        document_id = uuid.uuid4().hex
+        active_generation = uuid.uuid4().hex
+        inactive_generation = uuid.uuid4().hex
+        active_chunk = uuid.uuid4().hex
+        inactive_chunk = uuid.uuid4().hex
+        legacy_chunk = uuid.uuid4().hex
+        active_key = f"shadow:{uuid.UUID(active_generation)}"
+        inactive_key = f"shadow:{uuid.UUID(inactive_generation)}"
+        with closing(sqlite3.connect(str(database))) as conn:
+            conn.execute("PRAGMA foreign_keys=ON")
+            conn.execute("INSERT INTO app_profile (id) VALUES (?)", (user_id,))
+            conn.execute(
+                """
+                INSERT INTO documents (
+                    id, user_id, title, original_filename, sha256, file_size,
+                    content_revision, chunk_revision, active_chunk_generation_id
+                ) VALUES (?, ?, 'generation', 'generation.pdf', ?, 1024, 3, 3, ?)
+                """,
+                (document_id, user_id, "a" * 64, active_generation),
+            )
+            generation_sql = """
+                INSERT INTO document_chunk_generations (
+                    id, document_id, source_revision, shadow_document_id, status
+                ) VALUES (?, ?, 3, ?, ?)
+            """
+            conn.execute(
+                generation_sql,
+                (active_generation, document_id, active_key, "active"),
+            )
+            conn.execute(
+                generation_sql,
+                (inactive_generation, document_id, inactive_key, "old"),
+            )
+            chunk_sql = """
+                INSERT INTO document_chunks (
+                    id, document_id, generation_id, chunk_index, normalized_text,
+                    token_count, page_start, page_end, source_refs_json, content_hash
+                ) VALUES (?, ?, ?, 0, ?, 3, 1, 1, '[]', ?)
+            """
+            conn.execute(
+                chunk_sql,
+                (active_chunk, document_id, active_generation, "활성 청크", "b" * 64),
+            )
+            conn.execute(
+                chunk_sql,
+                (inactive_chunk, document_id, inactive_generation, "이전 청크", "c" * 64),
+            )
+            conn.execute(
+                chunk_sql,
+                (legacy_chunk, document_id, None, "전환 전 legacy 청크", "d" * 64),
+            )
+            fts_sql = """
+                INSERT INTO document_chunks_fts (
+                    chunk_id, document_id, normalized_text, section_title
+                ) VALUES (?, ?, ?, '')
+            """
+            conn.execute(fts_sql, (active_chunk, active_key, "활성 청크"))
+            conn.execute(fts_sql, (inactive_chunk, inactive_key, "이전 청크"))
+            conn.execute(
+                fts_sql,
+                (legacy_chunk, str(uuid.UUID(document_id)), "전환 전 legacy 청크"),
+            )
+            conn.commit()
+
+        command.downgrade(cfg, "0013")
+
+        with closing(sqlite3.connect(str(database))) as conn:
+            assert conn.execute(
+                "SELECT id, normalized_text FROM document_chunks WHERE document_id = ?",
+                (document_id,),
+            ).fetchall() == [(active_chunk, "활성 청크")]
+            assert conn.execute(
+                "SELECT chunk_id, document_id, normalized_text FROM document_chunks_fts"
+            ).fetchall() == [
+                (active_chunk, str(uuid.UUID(document_id)), "활성 청크")
+            ]
+            assert "generation_id" not in {
+                row[1] for row in conn.execute("PRAGMA table_info('document_chunks')")
+            }
+            assert "active_chunk_generation_id" not in {
+                row[1] for row in conn.execute("PRAGMA table_info('documents')")
+            }
+            assert conn.execute("PRAGMA quick_check").fetchone() == ("ok",)
+            assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    finally:
+        if original_database_env is None:
+            monkeypatch.delenv("DATABASE_URL", raising=False)
+        else:
+            monkeypatch.setenv("DATABASE_URL", original_database_env)
+        get_settings.cache_clear()
+        assert get_settings().database_url_sync == original_url
+
+
 def test_sqlite_online_backup_includes_committed_wal_rows(tmp_path):
     from app.main import _backup_sqlite_database
 

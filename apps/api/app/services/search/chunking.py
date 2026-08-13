@@ -5,18 +5,27 @@
 (펼쳐진 채로 누적되지 않는다).
 """
 
+import asyncio
 import hashlib
 import re
 import uuid
+from collections.abc import Sequence
+from contextlib import suppress
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import delete, select, text
+from sqlalchemy import and_, bindparam, delete, or_, select, text, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.document import Document
-from app.models.enums import OcrRunStatus
+from app.db.session import get_session_factory
+from app.models.document import Document, DocumentJob
+from app.models.enums import JobStatus, OcrRunStatus, ProcessingStatus
 from app.models.extraction import DocumentBlock, DocumentPage, DocumentTable
-from app.models.search import DocumentChunk
+from app.models.search import (
+    DocumentChunk,
+    DocumentChunkGeneration,
+)
 from app.services.extraction.geometry import overlap_ratio
 from app.services.extraction.normalize import normalize_text
 from app.services.search.settings import (
@@ -27,6 +36,9 @@ from app.services.search.settings import (
 )
 
 _SENTENCE_BOUNDARY = re.compile(r"(?<=[.!?])\s+|(?<=[다요]\.)\s*\n|(?<=[다요]\.)\s+")
+_PAGE_BATCH_SIZE = 16
+_STAGING_BATCH_SIZE = 100
+_ORPHAN_GENERATION_AGE = timedelta(minutes=5)
 
 
 class LowConfidenceOnlyDocument(Exception):
@@ -41,6 +53,28 @@ class LowConfidenceOnlyDocument(Exception):
     def __init__(self, suppressed_blocks: int) -> None:
         super().__init__(f"저신뢰로 제외된 블록 {suppressed_blocks}개 외에 청크로 쓸 내용이 없다")
         self.suppressed_blocks = suppressed_blocks
+
+
+class ChunkRevisionChanged(Exception):
+    """계획 이후 원문 revision이 바뀌어 shadow generation 활성화를 거부했다."""
+
+    def __init__(self, planned_revision: int, current_revision: int | None) -> None:
+        super().__init__(f"청크 계획 revision이 변경됨: {planned_revision} -> {current_revision}")
+        self.planned_revision = planned_revision
+        self.current_revision = current_revision
+
+
+class ChunkRebuildInProgress(Exception):
+    """동일 문서의 다른 generation이 아직 작성 중이다."""
+
+
+def _is_generation_lease_conflict(exc: IntegrityError) -> bool:
+    """SQLite partial unique lease 위반만 동시 rebuild로 분류한다."""
+    message = str(exc.orig).lower()
+    return (
+        "unique constraint failed" in message
+        and "document_chunk_generations.document_id" in message
+    )
 
 
 @dataclass(frozen=True)
@@ -235,85 +269,143 @@ class ChunkPlan:
     suppressed_low_confidence: int
 
 
+class _ChunkDraftStream:
+    """페이지 batch 사이에서 섹션·미완성 청크·짧은 병합 후보만 유지한다.
+
+    한 문서 전체의 ``DocumentBlock``/``ChunkDraft`` 목록을 만들지 않으면서 기존
+    ``build_chunk_drafts``와 같은 순서·병합 규칙을 보존한다. 메모리에 남는 것은 현재
+    목표 크기 청크와 바로 이전 병합 후보뿐이다.
+    """
+
+    def __init__(self) -> None:
+        self.current: ChunkDraft | None = None
+        self.current_section: str | None = None
+        self.merge_candidate: ChunkDraft | None = None
+        self.suppressed_low_confidence = 0
+
+    def _accept(self, draft: ChunkDraft, completed: list[ChunkDraft]) -> None:
+        previous = self.merge_candidate
+        if (
+            previous is not None
+            and not draft.is_table
+            and not previous.is_table
+            and previous.section_title == draft.section_title
+            and previous.char_count < CHUNK_MIN_CHARS
+            and draft.char_count < CHUNK_MIN_CHARS
+        ):
+            previous.text_parts.extend(draft.text_parts)
+            previous.refs.extend(draft.refs)
+            return
+        if previous is not None:
+            completed.append(previous)
+        self.merge_candidate = draft
+
+    def _flush_current(self, completed: list[ChunkDraft]) -> None:
+        if self.current is not None and self.current.refs:
+            self._accept(self.current, completed)
+        self.current = None
+
+    def consume(
+        self,
+        pages: Sequence[DocumentPage],
+        blocks: Sequence[DocumentBlock],
+        tables: Sequence[DocumentTable] | None = None,
+    ) -> list[ChunkDraft]:
+        """한 page batch를 소비하고 완전히 닫힌 draft만 반환한다."""
+        selection = _select_blocks(list(pages), list(blocks))
+        self.suppressed_low_confidence += selection.suppressed_low_confidence
+        tables_by_page: dict[uuid.UUID, list[DocumentTable]] = {}
+        for table in tables or ():
+            tables_by_page.setdefault(table.page_id, []).append(table)
+
+        completed: list[ChunkDraft] = []
+        for page_number, block in selection.blocks:
+            block_text = (block.text or "").strip()
+            ref = SourceRef(
+                page_number=page_number,
+                block_id=block.id,
+                bbox=(block.x0, block.y0, block.x1, block.y1),
+                reading_order=block.reading_order,
+                source_method=_block_source_method(block),
+            )
+
+            if block.is_table:
+                self._flush_current(completed)
+                table_text = _table_markdown_for_block(block, tables_by_page) or block_text
+                self._accept(
+                    ChunkDraft(
+                        section_title=self.current_section,
+                        text_parts=[table_text],
+                        refs=[ref],
+                        is_table=True,
+                    ),
+                    completed,
+                )
+                continue
+
+            if _looks_like_section_title(block_text):
+                self._flush_current(completed)
+                self.current_section = block_text
+                self.current = ChunkDraft(
+                    section_title=self.current_section,
+                    text_parts=[block_text],
+                    refs=[ref],
+                )
+                continue
+
+            if self.current is None:
+                self.current = ChunkDraft(
+                    section_title=self.current_section,
+                    text_parts=[],
+                    refs=[],
+                )
+
+            if len(block_text) > CHUNK_MAX_CHARS:
+                self._flush_current(completed)
+                for part in _split_long_text(block_text, CHUNK_MAX_CHARS):
+                    self._accept(
+                        ChunkDraft(
+                            section_title=self.current_section,
+                            text_parts=[part],
+                            refs=[ref],
+                        ),
+                        completed,
+                    )
+                continue
+
+            if self.current.char_count + len(block_text) > CHUNK_TARGET_CHARS and self.current.refs:
+                self._flush_current(completed)
+                self.current = ChunkDraft(
+                    section_title=self.current_section,
+                    text_parts=[],
+                    refs=[],
+                )
+
+            self.current.text_parts.append(block_text)
+            self.current.refs.append(ref)
+
+        return completed
+
+    def finish(self) -> list[ChunkDraft]:
+        completed: list[ChunkDraft] = []
+        self._flush_current(completed)
+        if self.merge_candidate is not None:
+            completed.append(self.merge_candidate)
+            self.merge_candidate = None
+        return completed
+
+
 def build_chunk_drafts(
     pages: list[DocumentPage],
     blocks: list[DocumentBlock],
     tables: list[DocumentTable] | None = None,
 ) -> ChunkPlan:
     """document_id 범위의 페이지·블록으로부터 청크 초안 목록을 만든다."""
-    selection = _select_blocks(pages, blocks)
-    ordered = selection.blocks
-    tables_by_page: dict[uuid.UUID, list[DocumentTable]] = {}
-    for t in tables or []:
-        tables_by_page.setdefault(t.page_id, []).append(t)
-
-    drafts: list[ChunkDraft] = []
-    current: ChunkDraft | None = None
-    current_section: str | None = None
-
-    def flush() -> None:
-        nonlocal current
-        if current is not None and current.refs:
-            drafts.append(current)
-        current = None
-
-    for page_number, block in ordered:
-        block_text = (block.text or "").strip()
-        ref = SourceRef(
-            page_number=page_number,
-            block_id=block.id,
-            bbox=(block.x0, block.y0, block.x1, block.y1),
-            reading_order=block.reading_order,
-            source_method=_block_source_method(block),
-        )
-
-        if block.is_table:
-            # 표는 절대 본문과 평탄화하지 않는다 — 있던 청크를 닫고 표 전용 청크를 낸다.
-            # 가능하면 행·열 구조가 살아있는 DocumentTable.markdown_text를 쓴다
-            # (block.text는 PDF 추출 순서로 흩어진 셀 텍스트라 구조를 잃는다).
-            flush()
-            table_text = _table_markdown_for_block(block, tables_by_page) or block_text
-            drafts.append(
-                ChunkDraft(
-                    section_title=current_section,
-                    text_parts=[table_text],
-                    refs=[ref],
-                    is_table=True,
-                )
-            )
-            continue
-
-        if _looks_like_section_title(block_text):
-            # 새 섹션 제목 — 지금까지 쌓인 청크를 닫고 제목을 다음 섹션 이름으로 삼는다.
-            flush()
-            current_section = block_text
-            current = ChunkDraft(section_title=current_section, text_parts=[block_text], refs=[ref])
-            continue
-
-        if current is None:
-            current = ChunkDraft(section_title=current_section, text_parts=[], refs=[])
-
-        if len(block_text) > CHUNK_MAX_CHARS:
-            # 단일 블록이 지나치게 길면 그 블록만 문장 경계로 나눠 각각 청크로 낸다.
-            flush()
-            for part in _split_long_text(block_text, CHUNK_MAX_CHARS):
-                drafts.append(
-                    ChunkDraft(section_title=current_section, text_parts=[part], refs=[ref])
-                )
-            current = None
-            continue
-
-        if current.char_count + len(block_text) > CHUNK_TARGET_CHARS and current.refs:
-            flush()
-            current = ChunkDraft(section_title=current_section, text_parts=[], refs=[])
-
-        current.text_parts.append(block_text)
-        current.refs.append(ref)
-
-    flush()
+    stream = _ChunkDraftStream()
+    drafts = [*stream.consume(pages, blocks, tables), *stream.finish()]
     return ChunkPlan(
-        drafts=_merge_short_adjacent(drafts),
-        suppressed_low_confidence=selection.suppressed_low_confidence,
+        drafts=drafts,
+        suppressed_low_confidence=stream.suppressed_low_confidence,
     )
 
 
@@ -340,108 +432,481 @@ def _content_hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-async def rebuild_chunks(session: AsyncSession, document_id: uuid.UUID) -> ChunkRebuildResult:
-    """문서 청크를 원자적으로 재계산·교체한다. 반환: 청크 수 + 저신뢰로 뺀 블록 수."""
-    pages = list(
+@dataclass
+class _PreparedChunk:
+    id: uuid.UUID
+    chunk_index: int
+    section_title: str | None
+    normalized_text: str
+    token_count: int
+    page_start: int
+    page_end: int
+    source_refs_json: list[dict]
+    content_hash: str
+
+
+def _prepare_chunk(index: int, draft: ChunkDraft) -> _PreparedChunk | None:
+    if not draft.refs:
+        return None
+    chunk_text = normalize_text("\n\n".join(draft.text_parts))
+    if not chunk_text:
+        return None
+    return _PreparedChunk(
+        id=uuid.uuid4(),
+        chunk_index=index,
+        section_title=draft.section_title,
+        normalized_text=chunk_text,
+        token_count=max(1, round(len(chunk_text) / 4)),
+        page_start=draft.page_start,
+        page_end=draft.page_end,
+        source_refs_json=[ref.to_json() for ref in draft.refs],
+        content_hash=_content_hash(chunk_text),
+    )
+
+
+async def _load_page_batch(
+    session: AsyncSession,
+    document_id: uuid.UUID,
+    cursor: tuple[int, uuid.UUID] | None,
+) -> list[DocumentPage]:
+    conditions = [DocumentPage.document_id == document_id]
+    if cursor is not None:
+        page_number, page_id = cursor
+        conditions.append(
+            or_(
+                DocumentPage.page_number > page_number,
+                and_(
+                    DocumentPage.page_number == page_number,
+                    DocumentPage.id > page_id,
+                ),
+            )
+        )
+    return list(
         (
             await session.execute(
-                select(DocumentPage).where(DocumentPage.document_id == document_id)
+                select(DocumentPage)
+                .where(*conditions)
+                .order_by(DocumentPage.page_number, DocumentPage.id)
+                .limit(_PAGE_BATCH_SIZE)
             )
         ).scalars()
     )
+
+
+async def _load_page_content(
+    session: AsyncSession, pages: Sequence[DocumentPage]
+) -> tuple[list[DocumentBlock], list[DocumentTable]]:
+    page_ids = [page.id for page in pages]
+    if not page_ids:
+        return [], []
     blocks = list(
         (
             await session.execute(
-                select(DocumentBlock).where(DocumentBlock.document_id == document_id)
+                select(DocumentBlock)
+                .where(DocumentBlock.page_id.in_(page_ids))
+                .order_by(DocumentBlock.page_id, DocumentBlock.reading_order)
             )
         ).scalars()
     )
     tables = list(
         (
-            await session.execute(
-                select(DocumentTable).where(DocumentTable.page_id.in_([p.id for p in pages]))
-            )
+            await session.execute(select(DocumentTable).where(DocumentTable.page_id.in_(page_ids)))
         ).scalars()
     )
+    return blocks, tables
 
-    plan = build_chunk_drafts(pages, blocks, tables)
-    drafts = plan.drafts
 
-    rows: list[DocumentChunk] = []
-    rows_by_hash: dict[str, DocumentChunk] = {}
-    for index, draft in enumerate(drafts):
-        if not draft.refs:
-            continue  # 출처 없는 청크는 저장하지 않는다
-        chunk_text = normalize_text("\n\n".join(draft.text_parts))
-        if not chunk_text:
-            continue
-        chunk_hash = _content_hash(chunk_text)
-        existing = rows_by_hash.get(chunk_hash)
+def _merge_prepared(first: _PreparedChunk, duplicate: _PreparedChunk) -> None:
+    first.source_refs_json = [*first.source_refs_json, *duplicate.source_refs_json]
+    first.page_start = min(first.page_start, duplicate.page_start)
+    first.page_end = max(first.page_end, duplicate.page_end)
+
+
+async def _write_staging_batch(
+    session: AsyncSession,
+    generation: DocumentChunkGeneration,
+    chunks: Sequence[_PreparedChunk],
+) -> int:
+    """최대 ``_STAGING_BATCH_SIZE``개를 쓰고 즉시 commit해 writer lock을 놓는다."""
+    by_hash: dict[str, _PreparedChunk] = {}
+    for chunk in chunks:
+        duplicate = by_hash.get(chunk.content_hash)
+        if duplicate is None:
+            by_hash[chunk.content_hash] = chunk
+        else:
+            _merge_prepared(duplicate, chunk)
+
+    hashes = list(by_hash)
+    existing_rows = {
+        row.content_hash: row
+        for row in (
+            await session.execute(
+                select(DocumentChunk)
+                .where(
+                    DocumentChunk.document_id == generation.document_id,
+                    DocumentChunk.generation_id == generation.id,
+                    DocumentChunk.content_hash.in_(hashes),
+                )
+                .execution_options(include_inactive_chunks=True)
+            )
+        ).scalars()
+    }
+    new_rows: list[DocumentChunk] = []
+    for chunk_hash, chunk in by_hash.items():
+        existing = existing_rows.get(chunk_hash)
         if existing is not None:
-            # 동일 content_hash는 새 청크를 만들지 않되, 다른 위치에 나온 출처는
-            # 잃지 않도록 기존 청크에 병합한다(반복되는 문구가 여러 페이지에 있는 경우).
             existing.source_refs_json = [
                 *existing.source_refs_json,
-                *[r.to_json() for r in draft.refs],
+                *chunk.source_refs_json,
             ]
-            existing.page_start = min(existing.page_start, draft.page_start)
-            existing.page_end = max(existing.page_end, draft.page_end)
+            existing.page_start = min(existing.page_start, chunk.page_start)
+            existing.page_end = max(existing.page_end, chunk.page_end)
             continue
-        row = DocumentChunk(
-            id=uuid.uuid4(),
-            document_id=document_id,
-            chunk_index=index,
-            section_title=draft.section_title,
-            normalized_text=chunk_text,
-            token_count=max(1, round(len(chunk_text) / 4)),
-            page_start=draft.page_start,
-            page_end=draft.page_end,
-            source_refs_json=[r.to_json() for r in draft.refs],
-            content_hash=chunk_hash,
+        new_rows.append(
+            DocumentChunk(
+                id=chunk.id,
+                document_id=generation.document_id,
+                generation_id=generation.id,
+                chunk_index=chunk.chunk_index,
+                section_title=chunk.section_title,
+                normalized_text=chunk.normalized_text,
+                token_count=chunk.token_count,
+                page_start=chunk.page_start,
+                page_end=chunk.page_end,
+                source_refs_json=chunk.source_refs_json,
+                content_hash=chunk.content_hash,
+            )
         )
-        rows.append(row)
-        rows_by_hash[chunk_hash] = row
 
-    # 저신뢰 필터가 내용을 전부 걷어낸 경우다. 여기서 멈추지 않으면 두 가지가 한꺼번에
-    # 망가진다 — 아래 교체가 **이미 쓸 수 있던 청크까지 지우고**, chunk_revision에 준비
-    # 완료 도장이 찍혀 문서가 '준비됐지만 아무것도 없는' 상태로 굳는다. 그 상태에서
-    # 화면은 "문서 검색 준비하기"만 반복해 권하고, 눌러도 같은 코드가 같은 0개를 만든다.
-    if not rows and plan.suppressed_low_confidence:
-        raise LowConfidenceOnlyDocument(plan.suppressed_low_confidence)
-
-    # 원자적 교체: 기존 청크 + FTS 미러를 지우고 새로 넣는다 (재실행 누적 방지).
-    # 지우는 일은 새 행이 확정된 뒤에 한다.
-    await session.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document_id))
-    await session.execute(
-        text("DELETE FROM document_chunks_fts WHERE document_id = :doc_id"),
-        {"doc_id": str(document_id)},
-    )
-
-    session.add_all(rows)
+    session.add_all(new_rows)
     await session.flush()
-
-    for row in rows:
+    # 살아 있는 대형 rebuild는 page/write batch마다 lease를 갱신한다. 프로세스가 죽으면
+    # 이 시각이 멈춰 다음 rebuild가 안전하게 orphan으로 판단할 수 있다.
+    await session.execute(
+        update(DocumentChunkGeneration)
+        .where(DocumentChunkGeneration.id == generation.id)
+        .values(updated_at=datetime.now(UTC))
+    )
+    if new_rows:
         await session.execute(
             text(
                 "INSERT INTO document_chunks_fts"
                 "(chunk_id, document_id, normalized_text, section_title) "
                 "VALUES (:chunk_id, :document_id, :normalized_text, :section_title)"
             ),
-            {
-                "chunk_id": str(row.id),
-                "document_id": str(document_id),
-                "normalized_text": row.normalized_text,
-                "section_title": row.section_title or "",
-            },
+            [
+                {
+                    "chunk_id": str(row.id),
+                    "document_id": generation.shadow_document_id,
+                    "normalized_text": row.normalized_text,
+                    "section_title": row.section_title or "",
+                }
+                for row in new_rows
+            ],
         )
+    await session.commit()
+    return len(new_rows)
 
-    # 청크 세트가 만들어진 시점의 content_revision을 기록한다 — 이후 문서가 바뀌면
-    # chunk_revision != content_revision이 되어 청크가 stale로 판정된다.
-    doc = await session.get(Document, document_id)
-    if doc is not None:
-        doc.chunk_revision = doc.content_revision
 
-    return ChunkRebuildResult(
-        chunk_count=len(rows),
-        suppressed_low_confidence=plan.suppressed_low_confidence,
+async def _delete_generation_rows(
+    session: AsyncSession,
+    document_id: uuid.UUID,
+    generation_id: uuid.UUID | None,
+) -> None:
+    """비활성 generation 청크를 bounded transaction으로 정리한다."""
+    generation_filter = (
+        DocumentChunk.generation_id.is_(None)
+        if generation_id is None
+        else DocumentChunk.generation_id == generation_id
     )
+    while True:
+        ids = list(
+            (
+                await session.execute(
+                    select(DocumentChunk.id)
+                    .where(
+                        DocumentChunk.document_id == document_id,
+                        generation_filter,
+                    )
+                    .limit(_STAGING_BATCH_SIZE)
+                    .execution_options(include_inactive_chunks=True)
+                )
+            ).scalars()
+        )
+        if not ids:
+            break
+        await session.execute(delete(DocumentChunk).where(DocumentChunk.id.in_(ids)))
+        await session.commit()
+
+
+async def _delete_shadow_fts_batches(session: AsyncSession, shadow_document_id: str) -> None:
+    while True:
+        rowids = list(
+            (
+                await session.execute(
+                    text(
+                        "SELECT rowid FROM document_chunks_fts "
+                        "WHERE document_id = :document_id LIMIT :limit"
+                    ),
+                    {
+                        "document_id": shadow_document_id,
+                        "limit": _STAGING_BATCH_SIZE,
+                    },
+                )
+            ).scalars()
+        )
+        if not rowids:
+            break
+        await session.execute(
+            text("DELETE FROM document_chunks_fts WHERE rowid IN :rowids").bindparams(
+                bindparam("rowids", expanding=True)
+            ),
+            {"rowids": rowids},
+        )
+        await session.commit()
+
+
+async def _discard_generation(generation_id: uuid.UUID) -> None:
+    """별도 session에서 자기 shadow만 batch 정리한다."""
+    async with get_session_factory()() as cleanup_session:
+        generation = await cleanup_session.get(DocumentChunkGeneration, generation_id)
+        if generation is None:
+            return
+        active_generation_id = (
+            await cleanup_session.execute(
+                select(Document.active_chunk_generation_id).where(
+                    Document.id == generation.document_id
+                )
+            )
+        ).scalar_one_or_none()
+        # 전환 commit 직후 task가 취소돼 caller가 성공 여부를 못 받은 경우에도 이미
+        # 활성화된 generation은 절대 보상 삭제하지 않는다.
+        if active_generation_id == generation_id:
+            return
+        await _delete_generation_rows(cleanup_session, generation.document_id, generation.id)
+        await _delete_shadow_fts_batches(cleanup_session, generation.shadow_document_id)
+        await cleanup_session.delete(generation)
+        await cleanup_session.commit()
+
+
+async def _cleanup_inactive_generations(
+    document_id: uuid.UUID,
+    active_generation_id: uuid.UUID | None,
+) -> None:
+    """process kill로 남은 orphan과 직전 활성 generation을 다음 실행에 회수한다."""
+    async with get_session_factory()() as cleanup_session:
+        orphan_cutoff = datetime.now(UTC) - _ORPHAN_GENERATION_AGE
+        generations = list(
+            (
+                await cleanup_session.execute(
+                    select(DocumentChunkGeneration)
+                    .outerjoin(
+                        DocumentJob,
+                        DocumentJob.id == DocumentChunkGeneration.owner_job_id,
+                    )
+                    .where(
+                        DocumentChunkGeneration.document_id == document_id,
+                        DocumentChunkGeneration.id != active_generation_id,
+                        or_(
+                            DocumentChunkGeneration.status != "building",
+                            and_(
+                                DocumentChunkGeneration.owner_job_id.is_not(None),
+                                or_(
+                                    DocumentJob.id.is_(None),
+                                    DocumentJob.status.notin_(
+                                        [JobStatus.QUEUED, JobStatus.RUNNING]
+                                    ),
+                                ),
+                            ),
+                            and_(
+                                DocumentChunkGeneration.owner_job_id.is_(None),
+                                DocumentChunkGeneration.updated_at < orphan_cutoff,
+                            ),
+                        ),
+                    )
+                )
+            ).scalars()
+        )
+        for generation in generations:
+            await _delete_generation_rows(cleanup_session, document_id, generation.id)
+            await _delete_shadow_fts_batches(cleanup_session, generation.shadow_document_id)
+            await cleanup_session.delete(generation)
+            await cleanup_session.commit()
+
+        if active_generation_id is not None:
+            # 첫 generation 전환 뒤 남은 0014 이전 legacy(NULL) 청크도 bounded 정리한다.
+            await _delete_generation_rows(cleanup_session, document_id, None)
+            await _delete_shadow_fts_batches(cleanup_session, str(document_id))
+
+
+async def _activate_generation(
+    session: AsyncSession,
+    generation_id: uuid.UUID,
+    document_id: uuid.UUID,
+    planned_revision: int,
+    expected_generation_id: uuid.UUID | None,
+) -> None:
+    """revision CAS 뒤 shadow를 활성 테이블로 전환한다.
+
+    첫 write가 ``content_revision`` 조건부 UPDATE라 SQLite writer lock을 얻은 뒤 계획
+    revision을 확정한다. 이후 어느 문장이라도 실패·취소되면 트랜잭션 전체가 rollback돼
+    기존 청크와 FTS가 그대로 남는다.
+    """
+    await session.rollback()  # 마지막 page SELECT가 연 read transaction을 닫는다.
+    async with session.begin():
+        generation = await session.get(DocumentChunkGeneration, generation_id)
+        if generation is None or generation.source_revision != planned_revision:
+            raise ChunkRevisionChanged(planned_revision, None)
+
+        generation_guard = (
+            Document.active_chunk_generation_id.is_(None)
+            if expected_generation_id is None
+            else Document.active_chunk_generation_id == expected_generation_id
+        )
+        guarded_document_id = (
+            await session.execute(
+                update(Document)
+                .where(
+                    Document.id == document_id,
+                    Document.deleted_at.is_(None),
+                    Document.processing_status.notin_(
+                        [ProcessingStatus.DELETING, ProcessingStatus.DELETED]
+                    ),
+                    Document.content_revision == planned_revision,
+                    generation_guard,
+                )
+                .values(
+                    chunk_revision=planned_revision,
+                    active_chunk_generation_id=generation_id,
+                )
+                .returning(Document.id)
+            )
+        ).scalar_one_or_none()
+        if guarded_document_id is None:
+            current_revision = (
+                await session.execute(
+                    select(Document.content_revision).where(Document.id == document_id)
+                )
+            ).scalar_one_or_none()
+            raise ChunkRevisionChanged(planned_revision, current_revision)
+        generation.status = "active"
+
+
+async def rebuild_chunks(
+    session: AsyncSession,
+    document_id: uuid.UUID,
+    *,
+    owner_job_id: uuid.UUID | None = None,
+) -> ChunkRebuildResult:
+    """bounded shadow generation을 만들고 revision-guarded 전환으로 활성화한다."""
+    generation_id: uuid.UUID | None = None
+    try:
+        document_state = (
+            await session.execute(
+                select(
+                    Document.content_revision,
+                    Document.active_chunk_generation_id,
+                ).where(
+                    Document.id == document_id,
+                    Document.deleted_at.is_(None),
+                    Document.processing_status.notin_(
+                        [ProcessingStatus.DELETING, ProcessingStatus.DELETED]
+                    ),
+                )
+            )
+        ).one_or_none()
+        if document_state is None:
+            raise ValueError(f"문서를 찾을 수 없습니다: {document_id}")
+        planned_revision, starting_generation_id = document_state
+
+        # 호출자가 문서·페이지를 flush만 한 뒤 바로 재생성을 호출하는 경로도 있다.
+        # bounded staging은 어차피 내부 commit을 사용하므로, 계획 revision과 그 원문 행을
+        # 먼저 확정한다. 여기서 rollback하면 parent document까지 사라져 generation FK가
+        # 실패하고, 더 나쁘게는 caller의 추출 결과를 조용히 잃는다.
+        await session.commit()
+        # 이전 강제 종료에서 남은 비활성 shadow를 먼저 회수한다. 현재 활성 세트는 보존한다.
+        await _cleanup_inactive_generations(document_id, starting_generation_id)
+
+        generation_id = uuid.uuid4()
+        generation = DocumentChunkGeneration(
+            id=generation_id,
+            document_id=document_id,
+            source_revision=planned_revision,
+            shadow_document_id=f"shadow:{generation_id}",
+            owner_job_id=owner_job_id,
+        )
+        session.add(generation)
+        # 계획 revision을 먼저 영속화한다. 이후 모든 staging commit이 이 generation에
+        # 귀속되고, 활성 청크에는 아직 아무 변화도 없다.
+        try:
+            await session.commit()
+        except IntegrityError as exc:
+            await session.rollback()
+            if _is_generation_lease_conflict(exc):
+                raise ChunkRebuildInProgress(
+                    f"이미 청크를 재생성 중입니다: {document_id}"
+                ) from exc
+            raise
+
+        stream = _ChunkDraftStream()
+        buffer: list[_PreparedChunk] = []
+        draft_index = 0
+        chunk_count = 0
+        cursor: tuple[int, uuid.UUID] | None = None
+
+        while pages := await _load_page_batch(session, document_id, cursor):
+            blocks, tables = await _load_page_content(session, pages)
+            for draft in stream.consume(pages, blocks, tables):
+                prepared = _prepare_chunk(draft_index, draft)
+                draft_index += 1
+                if prepared is not None:
+                    buffer.append(prepared)
+                if len(buffer) >= _STAGING_BATCH_SIZE:
+                    chunk_count += await _write_staging_batch(session, generation, buffer)
+                    buffer.clear()
+            last_page = pages[-1]
+            cursor = (last_page.page_number, last_page.id)
+            # expire_on_commit=False여도 batch 객체를 문서 전체 동안 붙잡지 않는다.
+            del blocks, tables, pages
+            session.expunge_all()
+            await session.rollback()  # page batch의 read transaction도 문서 전체 동안 잡지 않는다.
+
+        for draft in stream.finish():
+            prepared = _prepare_chunk(draft_index, draft)
+            draft_index += 1
+            if prepared is not None:
+                buffer.append(prepared)
+            if len(buffer) >= _STAGING_BATCH_SIZE:
+                chunk_count += await _write_staging_batch(session, generation, buffer)
+                buffer.clear()
+        if buffer:
+            chunk_count += await _write_staging_batch(session, generation, buffer)
+            buffer.clear()
+
+        if not chunk_count and stream.suppressed_low_confidence:
+            raise LowConfidenceOnlyDocument(stream.suppressed_low_confidence)
+
+        await _activate_generation(
+            session,
+            generation_id,
+            document_id,
+            planned_revision,
+            starting_generation_id,
+        )
+        # 전환 commit 뒤에만 이전 세트를 batch 정리한다. 정리 실패는 다음 rebuild에서
+        # 다시 회수할 수 있고 새 활성 generation의 정확성에는 영향을 주지 않는다.
+        with suppress(Exception):
+            await _cleanup_inactive_generations(document_id, generation_id)
+        return ChunkRebuildResult(
+            chunk_count=chunk_count,
+            suppressed_low_confidence=stream.suppressed_low_confidence,
+        )
+    except BaseException:
+        # CancelledError도 포함한다. 전환 트랜잭션을 먼저 rollback하고, task 취소와
+        # 독립적으로 자기 shadow generation만 지운다. 활성 generation은 건드리지 않는다.
+        with suppress(BaseException):
+            await asyncio.shield(session.rollback())
+        if generation_id is not None:
+            with suppress(BaseException):
+                await asyncio.shield(_discard_generation(generation_id))
+        raise

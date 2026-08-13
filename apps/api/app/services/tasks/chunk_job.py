@@ -36,7 +36,7 @@ async def run_chunk_rebuild_job(document_id: uuid.UUID, correlation_id: str) -> 
 
     try:
         async with factory() as session:
-            result = await rebuild_chunks(session, document_id)
+            result = await rebuild_chunks(session, document_id, owner_job_id=job_id)
             await session.commit()
     except LowConfidenceOnlyDocument as exc:
         # 성공으로 마감하면 문서가 '준비됐지만 비어 있는' 상태로 굳고, 화면은 눌러도

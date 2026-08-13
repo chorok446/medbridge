@@ -404,12 +404,34 @@ async def delete_document(db: AsyncSession, user: User, document_id: uuid.UUID) 
     from sqlalchemy import text as sa_text
 
     from app.models.extraction import DocumentPage
-    from app.models.search import DocumentChunk
+    from app.models.search import DocumentChunk, DocumentChunkGeneration
     from app.models.summary import SummaryArtifact, SummaryRun
 
     await db.execute(sa_delete(DocumentPage).where(DocumentPage.document_id == doc.id))
     # document_chunks는 documents.id를 직접 FK로 참조하므로(soft delete 대상 밖) 별도 명시 삭제 필요
-    await db.execute(sa_delete(DocumentChunk).where(DocumentChunk.document_id == doc.id))
+    # 전역 active-generation 필터를 우회해 작성 중/이전 shadow까지 모두 지운다.
+    await db.execute(
+        sa_delete(DocumentChunk)
+        .where(DocumentChunk.document_id == doc.id)
+        .execution_options(include_inactive_chunks=True)
+    )
+    generations = (
+        await db.execute(
+            select(DocumentChunkGeneration).where(
+                DocumentChunkGeneration.document_id == doc.id
+            )
+        )
+    ).scalars()
+    for generation in generations:
+        await db.execute(
+            sa_text("DELETE FROM document_chunks_fts WHERE document_id = :doc_id"),
+            {"doc_id": generation.shadow_document_id},
+        )
+    await db.execute(
+        sa_delete(DocumentChunkGeneration).where(
+            DocumentChunkGeneration.document_id == doc.id
+        )
+    )
     await db.execute(
         sa_text("DELETE FROM document_chunks_fts WHERE document_id = :doc_id"),
         {"doc_id": str(doc.id)},
@@ -423,6 +445,7 @@ async def delete_document(db: AsyncSession, user: User, document_id: uuid.UUID) 
     await delete_threads_for_document(db, doc.id)
     transition(doc, ProcessingStatus.DELETED)
     doc.deleted_at = datetime.now(UTC)
+    doc.active_chunk_generation_id = None
     doc.storage_key = None
     doc.extraction_completed_at = None
     await db.commit()

@@ -4,12 +4,13 @@ import uuid
 from pathlib import Path
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select, text
 
 from app.core.paths import get_path_provider
 from app.db.session import get_session_factory
 from app.models.document import Document
 from app.models.enums import ProcessingStatus
+from app.models.search import DocumentChunk, DocumentChunkGeneration
 from app.models.user import User
 from app.services.documents import storage
 from tests.conftest import make_encrypted_pdf, make_pdf
@@ -289,6 +290,105 @@ class TestOwnership:
 
 
 class TestDeleteAndRename:
+    async def test_delete_removes_active_and_shadow_chunk_generations(self, client):
+        from app.services.search.chunking import rebuild_chunks
+
+        detail = await upload_and_wait(client, make_pdf(pages=2))
+        doc_id = uuid.UUID(detail["id"])
+        async with get_session_factory()() as session:
+            await rebuild_chunks(session, doc_id)
+        async with get_session_factory()() as session:
+            document = await session.get(Document, doc_id)
+            assert document is not None
+            active_id = document.active_chunk_generation_id
+            assert active_id is not None
+            shadow_key = f"shadow:{active_id}"
+
+        assert (await client.delete(f"/api/documents/{doc_id}")).status_code == 200
+
+        async with get_session_factory()() as session:
+            chunks = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(DocumentChunk)
+                    .where(DocumentChunk.document_id == doc_id)
+                    .execution_options(include_inactive_chunks=True)
+                )
+            ).scalar_one()
+            generations = (
+                await session.execute(
+                    select(func.count())
+                    .select_from(DocumentChunkGeneration)
+                    .where(DocumentChunkGeneration.document_id == doc_id)
+                )
+            ).scalar_one()
+            shadow_fts = (
+                await session.execute(
+                    text(
+                        "SELECT count(*) FROM document_chunks_fts "
+                        "WHERE document_id = :document_id"
+                    ),
+                    {"document_id": shadow_key},
+                )
+            ).scalar_one()
+        assert chunks == 0
+        assert generations == 0
+        assert shadow_fts == 0
+
+    async def test_delete_racing_rebuild_leaves_no_shadow_content(
+        self, client, monkeypatch
+    ):
+        from app.services.search import chunking
+
+        detail = await upload_and_wait(client, make_pdf(pages=3))
+        doc_id = uuid.UUID(detail["id"])
+        generation_created = asyncio.Event()
+        release_rebuild = asyncio.Event()
+        original_load = chunking._load_page_batch
+
+        async def pause_after_generation_commit(session, document_id, cursor):
+            generation_created.set()
+            await release_rebuild.wait()
+            return await original_load(session, document_id, cursor)
+
+        monkeypatch.setattr(chunking, "_load_page_batch", pause_after_generation_commit)
+
+        async def run_rebuild():
+            async with get_session_factory()() as session:
+                return await chunking.rebuild_chunks(session, doc_id)
+
+        rebuild_task = asyncio.create_task(run_rebuild())
+        await generation_created.wait()
+        assert (await client.delete(f"/api/documents/{doc_id}")).status_code == 200
+        release_rebuild.set()
+        await asyncio.gather(rebuild_task, return_exceptions=True)
+
+        async with get_session_factory()() as session:
+            assert (
+                await session.execute(
+                    select(func.count())
+                    .select_from(DocumentChunk)
+                    .where(DocumentChunk.document_id == doc_id)
+                    .execution_options(include_inactive_chunks=True)
+                )
+            ).scalar_one() == 0
+            assert (
+                await session.execute(
+                    select(func.count())
+                    .select_from(DocumentChunkGeneration)
+                    .where(DocumentChunkGeneration.document_id == doc_id)
+                )
+            ).scalar_one() == 0
+            shadow_fts = (
+                await session.execute(
+                    text(
+                        "SELECT count(*) FROM document_chunks_fts "
+                        "WHERE document_id LIKE 'shadow:%'"
+                    )
+                )
+            ).scalar_one()
+        assert shadow_fts == 0
+
     async def test_delete_removes_file_and_soft_deletes(self, client):
         detail = await upload_and_wait(client, make_pdf())
         async with get_session_factory()() as session:
