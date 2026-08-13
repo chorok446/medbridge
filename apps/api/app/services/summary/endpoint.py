@@ -345,9 +345,21 @@ def _read_capped(
     timeout: float,
     max_response_bytes: int,
 ) -> bytearray:
-    """열기·크기/데드라인 상한 읽기·오류 범주화를 공유한다(post_json/get_json)."""
+    """열기·크기/절대 데드라인 읽기·오류 범주화를 공유한다(post_json/get_json).
+
+    urllib의 ``timeout``은 연결 뒤 본문 전체가 아니라 개별 blocking socket 작업에
+    적용된다. 헤더를 받는 데 쓴 시간을 제외하고 본문용 기한을 새로 만들면 느린 서버가
+    총 요청 상한을 넘길 수 있으므로, ``open`` 직전에 하나의 절대 기한을 만들고 모든
+    후속 읽기의 socket timeout을 남은 시간으로 줄인다.
+    """
+    deadline = time.monotonic() + timeout
+    raw = bytearray()
     try:
-        with opener.open(req, timeout=timeout) as resp:  # noqa: S310 (검증된 endpoint)
+        open_timeout = _remaining_before_deadline(deadline)
+        with opener.open(req, timeout=open_timeout) as resp:  # noqa: S310 (검증된 endpoint)
+            # open()은 연결과 응답 헤더 수신까지 포함한다. 개별 socket 작업이 제한 안에서
+            # 끝났더라도 그 합계가 절대 기한을 넘었으면 늦게 도착한 응답을 사용하지 않는다.
+            _remaining_before_deadline(deadline)
             length = resp.headers.get("Content-Length")
             if length is not None:
                 try:
@@ -355,12 +367,17 @@ def _read_capped(
                         raise SummaryNetworkError("response_too_large")
                 except ValueError:
                     pass  # 거짓 Content-Length는 무시하고 streaming 상한으로 막는다
-            deadline = time.monotonic() + timeout
-            raw = bytearray()
             while True:
-                if time.monotonic() > deadline:
-                    raise SummaryNetworkError("timeout")
-                piece = resp.read(65536)
+                remaining = _remaining_before_deadline(deadline)
+                _set_response_socket_timeout(resp, remaining)
+                # HTTPResponse.read(size)는 Content-Length를 채울 때까지 내부 recv를
+                # 반복한다. 서버가 timeout보다 짧은 간격으로 한 바이트씩 흘리면 각 recv의
+                # socket timeout이 계속 리셋돼 이 루프로 돌아오지 못한다. read1은 한 번의
+                # raw read 뒤 제어를 돌려줘 절대 기한을 매 조각마다 다시 확인할 수 있다.
+                read_size = min(65536, max_response_bytes + 1 - len(raw))
+                piece = _read_response_chunk(resp, read_size)
+                # 조각이 돌아왔더라도 완료 시각이 기한 뒤면 결과를 폐기한다.
+                _remaining_before_deadline(deadline)
                 if not piece:
                     break
                 raw.extend(piece)
@@ -369,7 +386,7 @@ def _read_capped(
     except SummaryNetworkError:
         raise
     except urllib.error.HTTPError as exc:
-        raise _classify_http_error(exc) from None
+        raise _classify_http_error(exc, deadline=deadline) from None
     except TimeoutError as exc:
         raise SummaryNetworkError("timeout") from exc
     except OSError as exc:
@@ -379,6 +396,44 @@ def _read_capped(
     if len(raw) > max_response_bytes:
         raise SummaryNetworkError("response_too_large")
     return raw
+
+
+def _remaining_before_deadline(deadline: float) -> float:
+    """절대 기한까지 남은 양수 초. 기한에 닿았거나 넘으면 안전하게 중단한다."""
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise SummaryNetworkError("timeout")
+    return remaining
+
+
+def _set_response_socket_timeout(response: object, timeout: float) -> None:
+    """urllib 응답의 실제 socket timeout을 best-effort로 남은 시간에 맞춘다.
+
+    urllib는 이 socket을 공개 API로 노출하지 않는다. 표준 HTTPResponse 경로에서는
+    ``fp.raw._sock``을 사용할 수 있고, 테스트 transport나 다른 handler처럼 이 경로가
+    없는 경우에는 open()에 넘긴 timeout과 사후 절대 기한 검사로 계속 방어한다.
+    """
+    try:
+        response.fp.raw._sock.settimeout(timeout)  # type: ignore[attr-defined]
+    except (AttributeError, OSError, TypeError, ValueError):
+        pass
+
+
+def _read_response_chunk(response: object, size: int) -> bytes:
+    """한 raw read 경계만 소비한다; 비표준 file-like 객체만 ``read``로 fallback한다.
+
+    실제 urllib ``HTTPResponse``와 ``HTTPError``는 ``read1``을 제공한다. 테스트용 opener나
+    커스텀 handler가 그 계약을 구현하지 않은 경우에도 기존 호환성을 유지하되, production
+    HTTP 경로에서는 slow-drip이 절대 기한 확인을 우회할 수 없게 한다.
+    """
+    read1 = getattr(response, "read1", None)
+    if callable(read1):
+        return read1(size)
+    fp_read1 = getattr(getattr(response, "fp", None), "read1", None)
+    if callable(fp_read1):
+        return fp_read1(size)
+    read = response.read  # type: ignore[attr-defined]
+    return read(size)
 
 
 def post_json(
@@ -531,7 +586,9 @@ def stream_lines(
                 pass
 
 
-def _classify_http_error(exc: urllib.error.HTTPError) -> SummaryNetworkError:
+def _classify_http_error(
+    exc: urllib.error.HTTPError, *, deadline: float | None = None
+) -> SummaryNetworkError:
     """HTTP 오류 → 범주. 400은 본문을 훑어 컨텍스트 초과인지 먼저 가른다.
 
     OpenAI 호환 서버(LM Studio·llama.cpp server·vLLM·OpenAI)가 컨텍스트 초과를 알리는
@@ -541,7 +598,29 @@ def _classify_http_error(exc: urllib.error.HTTPError) -> SummaryNetworkError:
     """
     if exc.code == 400:
         try:
-            body = exc.read(_ERROR_BODY_SNIFF_BYTES).decode("utf-8", "replace").lower()
+            raw = bytearray()
+            while len(raw) < _ERROR_BODY_SNIFF_BYTES:
+                if deadline is not None:
+                    remaining = _remaining_before_deadline(deadline)
+                    _set_response_socket_timeout(exc, remaining)
+                piece = _read_response_chunk(
+                    exc,
+                    min(65536, _ERROR_BODY_SNIFF_BYTES - len(raw)),
+                )
+                if deadline is not None:
+                    _remaining_before_deadline(deadline)
+                if not piece:
+                    break
+                raw.extend(piece)
+            body = raw.decode("utf-8", "replace").lower()
+        except SummaryNetworkError:
+            raise
+        except TimeoutError as timeout_exc:
+            raise SummaryNetworkError("timeout") from timeout_exc
+        except OSError as os_exc:
+            if isinstance(os_exc, socket.timeout):
+                raise SummaryNetworkError("timeout") from os_exc
+            body = ""
         except Exception:  # noqa: BLE001 — 본문을 못 읽으면 코드만으로 분류한다
             body = ""
         if any(hint in body for hint in HTTP_CONTEXT_OVERFLOW_HINTS):

@@ -8,6 +8,7 @@ import json
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from types import SimpleNamespace
 
 import pytest
 
@@ -216,6 +217,19 @@ class _Handler(BaseHTTPRequestHandler):
                     time.sleep(0.2)
             except (BrokenPipeError, OSError):
                 pass
+        elif path == "/drip400/chat/completions":
+            # 400 분류용 오류 본문도 한 raw read씩 읽어 같은 절대 기한을 지켜야 한다.
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", "1000")
+            self.end_headers()
+            try:
+                for _ in range(20):
+                    self.wfile.write(b"x")
+                    self.wfile.flush()
+                    time.sleep(0.2)
+            except (BrokenPipeError, OSError):
+                pass
         elif path == "/ctxlen/chat/completions":
             # OpenAI 호환 서버가 컨텍스트 초과를 알리는 유일한 명시적 신호
             body = (
@@ -310,9 +324,122 @@ class TestSafePost:
 
     def test_slow_drip_hits_total_deadline(self, local_server):
         # 서버가 응답을 조금씩 흘려도 전체 데드라인이 요청을 끝낸다(slow-loris 방어)
+        started = time.monotonic()
         with pytest.raises(SummaryNetworkError) as e:
             _post(local_server, "/drip", timeout=0.6)
+        elapsed = time.monotonic() - started
         assert e.value.category == "timeout"
+        # Windows CI 스케줄링 여유를 포함해도, 4초짜리 drip 전체를 기다리면 안 된다.
+        assert elapsed < 2.0
+
+    def test_slow_drip_http_error_body_hits_total_deadline(self, local_server):
+        started = time.monotonic()
+        with pytest.raises(SummaryNetworkError) as e:
+            _post(local_server, "/drip400", timeout=0.6)
+        elapsed = time.monotonic() - started
+        assert e.value.category == "timeout"
+        assert elapsed < 2.0
+
+    def test_delayed_headers_and_body_share_one_absolute_deadline(self, monkeypatch):
+        """헤더 시간 뒤 본문 기한을 다시 시작하지 않고 매 read를 남은 시간으로 줄인다."""
+        import app.services.summary.endpoint as ep
+
+        now = [100.0]
+        read_calls = [0]
+        socket_timeouts: list[float] = []
+        open_timeouts: list[float] = []
+
+        class FakeSocket:
+            def settimeout(self, value):
+                socket_timeouts.append(value)
+
+        class FakeRaw:
+            _sock = FakeSocket()
+
+        class FakeFp:
+            raw = FakeRaw()
+
+        class DelayedResponse:
+            headers: dict[str, str] = {}
+            fp = FakeFp()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read1(self, _size):
+                read_calls[0] += 1
+                if read_calls[0] == 1:
+                    now[0] += 0.2
+                    return b"{"
+                if read_calls[0] == 2:
+                    now[0] += 0.45
+                    return b"}"
+                return b""
+
+            def read(self, _size):
+                raise AssertionError("production urllib path must prefer bounded read1")
+
+        class DelayedHeaderOpener:
+            def open(self, _req, *, timeout):
+                open_timeouts.append(timeout)
+                now[0] += 0.4  # 연결 + 응답 헤더 수신
+                return DelayedResponse()
+
+        class FakeTime:
+            @staticmethod
+            def monotonic():
+                return now[0]
+
+        monkeypatch.setattr(ep, "time", FakeTime)
+
+        with pytest.raises(SummaryNetworkError) as error:
+            ep._read_capped(
+                DelayedHeaderOpener(),
+                object(),
+                timeout=1.0,
+                max_response_bytes=1024,
+            )
+
+        assert error.value.category == "timeout"
+        assert open_timeouts == pytest.approx([1.0])
+        assert socket_timeouts == pytest.approx([0.6, 0.4])
+
+    def test_http_error_body_read_uses_remaining_deadline(self, monkeypatch):
+        """400 분류용 본문 읽기도 성공 응답과 같은 절대 기한을 넘길 수 없다."""
+        import app.services.summary.endpoint as ep
+
+        now = [200.0]
+        socket_timeouts: list[float] = []
+
+        def read_error_body(_size):
+            now[0] += 0.6
+            return b'{"error":{"code":"context_length_exceeded"}}'
+
+        fake_error = SimpleNamespace(
+            code=400,
+            headers={},
+            fp=SimpleNamespace(
+                raw=SimpleNamespace(_sock=SimpleNamespace(settimeout=socket_timeouts.append))
+            ),
+            read1=read_error_body,
+            read=lambda _size: pytest.fail("HTTPError body must prefer bounded read1"),
+        )
+
+        class FakeTime:
+            @staticmethod
+            def monotonic():
+                return now[0]
+
+        monkeypatch.setattr(ep, "time", FakeTime)
+
+        with pytest.raises(SummaryNetworkError) as error:
+            ep._classify_http_error(fake_error, deadline=200.5)
+
+        assert error.value.category == "timeout"
+        assert socket_timeouts == pytest.approx([0.5])
 
     @pytest.mark.parametrize(
         "code,category",
