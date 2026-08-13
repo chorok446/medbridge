@@ -100,14 +100,15 @@ function SummaryModelForm({
   const [confirmDeleteKey, setConfirmDeleteKey] = useState(false);
 
   function draftSettings() {
+    const normalizedApiKey = apiKey.trim();
     return {
       enabled,
       providerType: "openai_compatible",
       endpoint,
       modelName,
       isLocal,
-      // 빈 칸은 이미 저장된 키를 유지한다. 삭제는 별도 확인 동작으로만 수행한다.
-      ...(apiKey ? { apiKey } : {}),
+      // 공백뿐인 값도 빈 칸으로 취급해 기존 키를 유지한다. 삭제는 별도 확인 동작으로만 수행한다.
+      ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
     };
   }
 

@@ -117,6 +117,51 @@ describe("SummaryModelSection", () => {
     expect(screen.getByText(/입력한 설정을 저장한 뒤 연결을 확인했습니다/)).toBeInTheDocument();
   });
 
+  it("공백뿐인 API 키를 저장 payload에서 빼 기존 키를 유지한다", async () => {
+    const existing = settings({
+      enabled: true,
+      providerType: "openai_compatible",
+      hasApiKey: true,
+    });
+    apiMock.getSummarySettings.mockResolvedValue(existing);
+    apiMock.updateSummarySettings.mockResolvedValue(existing);
+    renderSection();
+
+    const apiKey = await screen.findByLabelText(/API 키/);
+    await userEvent.type(apiKey, "   ");
+    await userEvent.click(screen.getByRole("button", { name: "저장" }));
+
+    await waitFor(() => expect(apiMock.updateSummarySettings).toHaveBeenCalledTimes(1));
+    expect(apiMock.updateSummarySettings).toHaveBeenCalledWith(
+      expect.not.objectContaining({ apiKey: expect.anything() }),
+    );
+    expect(screen.getByText("(설정됨)")).toBeInTheDocument();
+    expect(apiMock.deleteSummaryApiKey).not.toHaveBeenCalled();
+  });
+
+  it("공백뿐인 API 키를 연결 확인 payload에서도 빼 기존 키를 유지한다", async () => {
+    const existing = settings({
+      enabled: true,
+      providerType: "openai_compatible",
+      hasApiKey: true,
+    });
+    apiMock.getSummarySettings.mockResolvedValue(existing);
+    apiMock.updateSummarySettings.mockResolvedValue(existing);
+    apiMock.testSummaryConnection.mockResolvedValue({ ok: true, message: "연결에 성공했습니다." });
+    renderSection();
+
+    await userEvent.type(await screen.findByLabelText(/API 키/), "   ");
+    await userEvent.click(screen.getByRole("button", { name: "연결 확인" }));
+
+    await waitFor(() => expect(apiMock.updateSummarySettings).toHaveBeenCalledTimes(1));
+    expect(apiMock.updateSummarySettings).toHaveBeenCalledWith(
+      expect.not.objectContaining({ apiKey: expect.anything() }),
+    );
+    expect(apiMock.testSummaryConnection).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("(설정됨)")).toBeInTheDocument();
+    expect(apiMock.deleteSummaryApiKey).not.toHaveBeenCalled();
+  });
+
   it("draft 저장에 실패하면 이전 저장값으로 연결 확인을 진행하지 않는다", async () => {
     apiMock.getSummarySettings.mockResolvedValue(settings({ enabled: true }));
     apiMock.updateSummarySettings.mockRejectedValue(new Error("invalid draft"));

@@ -19,7 +19,7 @@ import {
   listThreads,
 } from "@/lib/api/qa";
 import type { DocumentSummary } from "@/types/api";
-import type { QaMessage } from "@/types/qa";
+import type { QaMessage, QaThread } from "@/types/qa";
 
 type Bbox = [number, number, number, number];
 type NavigateRef = { pageNumber: number; bbox: Bbox; bboxes?: Bbox[] };
@@ -80,7 +80,7 @@ export function DocumentQa({ doc, fileUrl }: Props) {
   const [input, setInput] = useState("");
   const [isSubmittingQuestion, setIsSubmittingQuestion] = useState(false);
   const [questionStartError, setQuestionStartError] = useState(false);
-  const [confirmDeleteThread, setConfirmDeleteThread] = useState(false);
+  const [deleteThreadTargetId, setDeleteThreadTargetId] = useState<string | null>(null);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [pendingQuestion, setPendingQuestion] = useState<string | null>(null);
   // 마지막 선택을 브라우저에 기억한다 — 서버에 저장하지 않는다. 이 패널은
@@ -122,11 +122,20 @@ export function DocumentQa({ doc, fileUrl }: Props) {
 
   const deleteMutation = useMutation({
     mutationFn: (threadId: string) => deleteThread(doc.id, threadId),
-    onSuccess: () => {
+    onSuccess: async (_deleted, deletedThreadId) => {
       stream.reset();
       setPendingQuestion(null);
-      setSelectedThreadId(null);
-      void queryClient.invalidateQueries({ queryKey: ["qa-threads", doc.id] });
+      setSelectedThreadId((selected) =>
+        selected === deletedThreadId ? null : selected,
+      );
+      queryClient.setQueryData<QaThread[]>(["qa-threads", doc.id], (current) =>
+        current?.filter((thread) => thread.id !== deletedThreadId),
+      );
+      queryClient.removeQueries({
+        queryKey: ["qa-thread", doc.id, deletedThreadId],
+        exact: true,
+      });
+      await queryClient.invalidateQueries({ queryKey: ["qa-threads", doc.id] });
     },
   });
 
@@ -275,7 +284,7 @@ export function DocumentQa({ doc, fileUrl }: Props) {
           {effectiveThreadId && (
             <button
               type="button"
-              onClick={() => setConfirmDeleteThread(true)}
+              onClick={() => setDeleteThreadTargetId(effectiveThreadId)}
               disabled={threadControlsLocked}
               className="rounded border border-red-200 px-2.5 py-1 text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -534,15 +543,15 @@ export function DocumentQa({ doc, fileUrl }: Props) {
       </aside>
 
       <ConfirmDialog
-        open={confirmDeleteThread}
+        open={deleteThreadTargetId !== null}
         title="이 대화를 삭제할까요?"
         description="주고받은 질문과 답변이 모두 지워지며 되돌릴 수 없습니다."
         confirmLabel="삭제"
         onConfirm={() => {
-          if (effectiveThreadId) deleteMutation.mutate(effectiveThreadId);
-          setConfirmDeleteThread(false);
+          if (deleteThreadTargetId) deleteMutation.mutate(deleteThreadTargetId);
+          setDeleteThreadTargetId(null);
         }}
-        onCancel={() => setConfirmDeleteThread(false)}
+        onCancel={() => setDeleteThreadTargetId(null)}
       />
     </div>
   );

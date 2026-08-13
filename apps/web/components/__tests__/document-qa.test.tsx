@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DocumentQa } from "@/components/document-qa";
@@ -105,11 +105,12 @@ function fakeRetryStream(events: QaStreamEvent[]) {
 
 function renderQa() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const view = render(
     <QueryClientProvider client={client}>
       <DocumentQa doc={doc} fileUrl="blob:x" />
     </QueryClientProvider>,
   );
+  return { ...view, client };
 }
 
 // 학습 수준은 localStorage에 남는다 — 초기화하지 않으면 앞 테스트의 선택이 뒤 테스트로
@@ -240,6 +241,63 @@ describe("DocumentQa", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "중단" }));
     await waitFor(() => expect(streamMock.cancelStream).toHaveBeenCalled());
+  });
+
+  it("삭제 확인창을 연 뒤 목록이 갱신돼도 처음 선택한 대화만 삭제한다", async () => {
+    const secondThread = { ...thread, id: "t2", title: "폐" };
+    let resolveRefresh!: (threads: (typeof thread)[]) => void;
+    let resolveAfterDelete!: (threads: (typeof thread)[]) => void;
+    apiMock.listThreads
+      .mockResolvedValueOnce([thread, secondThread])
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveRefresh = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveAfterDelete = resolve;
+          }),
+      );
+    apiMock.getThread.mockImplementation((_documentId: string, threadId: string) =>
+      Promise.resolve({
+        thread: threadId === thread.id ? thread : secondThread,
+        messages: [],
+      }),
+    );
+    apiMock.deleteThread.mockResolvedValue(undefined);
+    const { client } = renderQa();
+
+    const selector = await screen.findByRole("combobox", { name: "이전 대화 선택" });
+    expect(selector).toHaveValue(thread.id);
+    await userEvent.click(screen.getByRole("button", { name: "삭제" }));
+    const dialog = screen.getByRole("alertdialog");
+
+    // 확인창이 열린 동안 백그라운드 갱신이 목록 순서를 바꿔 effectiveThreadId가 t2가 된다.
+    const refresh = client.invalidateQueries({ queryKey: ["qa-threads", doc.id] });
+    await waitFor(() => expect(apiMock.listThreads).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      resolveRefresh([secondThread, thread]);
+      await refresh;
+    });
+    await waitFor(() => expect(selector).toHaveValue(secondThread.id));
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "삭제" }));
+    await waitFor(() =>
+      expect(apiMock.deleteThread).toHaveBeenCalledWith(doc.id, thread.id),
+    );
+    await waitFor(() =>
+      expect(within(selector).queryByRole("option", { name: "심장" })).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole("button", { name: "삭제" })).toBeDisabled();
+
+    // 성공 뒤 최신 목록 확인이 끝날 때까지 mutation 잠금이 유지돼 stale 목록 조작을 막는다.
+    await act(async () => {
+      resolveAfterDelete([secondThread]);
+    });
+    await waitFor(() => expect(screen.getByRole("button", { name: "삭제" })).not.toBeDisabled());
   });
 
   it("스트리밍으로 진행 중 검증된 주장을 점진적으로 보여준다", async () => {
