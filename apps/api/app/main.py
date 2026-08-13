@@ -1,3 +1,4 @@
+import shutil
 import sqlite3
 import uuid
 from contextlib import asynccontextmanager, closing
@@ -22,6 +23,46 @@ logger = get_logger(__name__)
 
 ALEMBIC_DIR = Path(__file__).resolve().parents[1] / "alembic"
 ALEMBIC_INI = Path(__file__).resolve().parents[1] / "alembic.ini"
+
+# 마이그레이션 전 백업(현재 DB 크기)과 이후 VACUUM 임시 파일(최대 현재 DB 크기)이
+# 같은 볼륨에 한동안 공존한다. 파일시스템 메타데이터·WAL 여유까지 고려한 고정 안전폭.
+MIGRATION_DISK_SAFETY_BYTES = 512 * 1024**2
+
+
+def _disk_free_bytes(path: Path) -> int:
+    return int(shutil.disk_usage(path).free)
+
+
+def _ensure_migration_disk_space(db_path: Path, backups_dir: Path) -> None:
+    """파괴적 마이그레이션을 시작하기 전에 백업+VACUUM 공간을 fail-closed로 확인한다.
+
+    백업과 DB가 다른 볼륨이면 각 볼륨의 필요량을 따로 본다. 경로는 오류에 넣지 않는다.
+    Windows 계정명이 포함된 앱 데이터 경로가 UI·오류 보고서로 새는 것을 막기 위해서다.
+    """
+    backups_dir.mkdir(parents=True, exist_ok=True)
+    database_bytes = db_path.stat().st_size
+    same_volume = db_path.parent.stat().st_dev == backups_dir.stat().st_dev
+
+    if same_volume:
+        required = database_bytes * 2 + MIGRATION_DISK_SAFETY_BYTES
+        free = _disk_free_bytes(db_path.parent)
+        if free < required:
+            raise RuntimeError(
+                "데이터베이스 업데이트에 필요한 디스크 공간이 부족합니다. "
+                f"최소 {required / 1024**3:.1f}GB가 필요하지만 "
+                f"{free / 1024**3:.1f}GB만 남아 있습니다."
+            )
+        return
+
+    backup_required = database_bytes + MIGRATION_DISK_SAFETY_BYTES
+    database_required = database_bytes + MIGRATION_DISK_SAFETY_BYTES
+    backup_free = _disk_free_bytes(backups_dir)
+    database_free = _disk_free_bytes(db_path.parent)
+    if backup_free < backup_required or database_free < database_required:
+        raise RuntimeError(
+            "데이터베이스 업데이트에 필요한 디스크 공간이 부족합니다. "
+            "앱 데이터와 백업 위치에 충분한 공간을 확보해 주세요."
+        )
 
 
 def _backup_sqlite_database(db_path: Path, backup_path: Path) -> None:
@@ -102,6 +143,9 @@ def run_migrations() -> None:
     if db_path is not None and db_path.is_file() and current != head:
         from app import __version__
 
+        # 백업을 반쯤 쓴 뒤 ENOSPC로 실패하거나, 백업은 됐지만 VACUUM 임시 파일을
+        # 만들지 못하는 상태를 피한다. 어떤 스키마 변경도 실행하기 전에 검사한다.
+        _ensure_migration_disk_space(db_path, provider.backups_dir)
         backup = next_backup_path(provider.backups_dir, "pre-migration-", __version__)
         _backup_sqlite_database(db_path, backup)
         logger.info("db_backup_created", backup=backup.name)

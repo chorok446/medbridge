@@ -1,6 +1,7 @@
 """downgrade가 테이블을 비우므로 실패해도 반드시 head로 복구한다 — DB는 세션 전체가 공유한다."""
 
 import logging
+import os
 import sqlite3
 import uuid
 from contextlib import closing
@@ -71,6 +72,100 @@ def test_word_table_is_gone_and_its_replacement_is_present():
     engine.dispose()
 
 
+def test_0013_preserves_existing_page_counts_and_database_integrity(
+    tmp_path, monkeypatch
+):
+    """0012 실데이터가 있는 DB를 0013으로 올려 디지털 단어 수와 FK를 검증한다.
+
+    빈 DB의 head upgrade만으로는 0013의 상관 서브쿼리 백필이나 대용량 사용자 DB에서
+    실제로 존재하는 OCR/digital 혼합 데이터를 전혀 실행하지 못한다. 운영 DB를 저장소에
+    넣을 수는 없으므로, 기존 문서·두 페이지·혼합 source_method를 갖는 최소 사본으로
+    파괴적 DROP 직전/직후 계약을 고정한다.
+    """
+    database = tmp_path / "existing-0012.db"
+    original_url = get_settings().database_url_sync
+    original_database_env = os.environ.get("DATABASE_URL")
+
+    try:
+        monkeypatch.setenv("DATABASE_URL", f"sqlite:///{database.as_posix()}")
+        get_settings.cache_clear()
+        cfg = alembic_config()
+        command.upgrade(cfg, "0012")
+
+        user_id = uuid.uuid4().hex
+        document_id = uuid.uuid4().hex
+        first_page_id = uuid.uuid4().hex
+        second_page_id = uuid.uuid4().hex
+        with closing(sqlite3.connect(str(database))) as conn:
+            conn.execute("PRAGMA foreign_keys=ON")
+            conn.execute("INSERT INTO app_profile (id) VALUES (?)", (user_id,))
+            conn.execute(
+                """
+                INSERT INTO documents (
+                    id, user_id, title, original_filename, sha256, file_size
+                ) VALUES (?, ?, '대형 문서', 'large.pdf', ?, 314572800)
+                """,
+                (document_id, user_id, "a" * 64),
+            )
+            for page_id, page_number, word_count in (
+                (first_page_id, 1, 4),
+                (second_page_id, 2, 2),
+            ):
+                conn.execute(
+                    """
+                    INSERT INTO document_pages (
+                        id, document_id, page_number, width, height, word_count
+                    ) VALUES (?, ?, ?, 612, 792, ?)
+                    """,
+                    (page_id, document_id, page_number, word_count),
+                )
+            word_sql = """
+                INSERT INTO document_words (
+                    id, page_id, word_index, x0, y0, x1, y1, text,
+                    normalized_text, confidence, metadata_json, source_method
+                ) VALUES (?, ?, ?, 0, 0, 10, 10, ?, ?, 1.0, '{}', ?)
+            """
+            rows = (
+                (uuid.uuid4().hex, first_page_id, 0, "digital-1", "digital-1", "digital"),
+                (uuid.uuid4().hex, first_page_id, 1, "digital-2", "digital-2", "digital"),
+                (uuid.uuid4().hex, first_page_id, 2, "digital-3", "digital-3", "digital"),
+                (uuid.uuid4().hex, first_page_id, 3, "ocr", "ocr", "ocr"),
+                (uuid.uuid4().hex, second_page_id, 0, "ocr-1", "ocr-1", "ocr"),
+                (uuid.uuid4().hex, second_page_id, 1, "ocr-2", "ocr-2", "ocr"),
+            )
+            conn.executemany(word_sql, rows)
+            conn.commit()
+
+        command.upgrade(cfg, "0013")
+
+        with closing(sqlite3.connect(str(database))) as conn:
+            tables = {row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )}
+            assert "document_words" not in tables
+            assert conn.execute(
+                """
+                SELECT page_number, digital_word_count, word_count
+                  FROM document_pages
+                 ORDER BY page_number
+                """
+            ).fetchall() == [(1, 3, 4), (2, 0, 2)]
+            assert conn.execute(
+                "SELECT title, file_size FROM documents WHERE id = ?", (document_id,)
+            ).fetchone() == ("대형 문서", 314572800)
+            assert conn.execute("PRAGMA quick_check").fetchone() == ("ok",)
+            assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    finally:
+        # 테스트 전역 Settings가 임시 DB URL을 계속 가리키면 뒤 테스트가 공유 DB 대신
+        # 삭제될 tmp_path를 열게 된다. 환경 복원 후 원래 URL이 돌아왔는지도 확인한다.
+        if original_database_env is None:
+            monkeypatch.delenv("DATABASE_URL", raising=False)
+        else:
+            monkeypatch.setenv("DATABASE_URL", original_database_env)
+        get_settings.cache_clear()
+        assert get_settings().database_url_sync == original_url
+
+
 def test_upgrade_is_idempotent():
     """이미 head인 상태에서 재실행해도 오류·데이터 손상이 없다."""
     command.upgrade(alembic_config(), "head")
@@ -101,6 +196,25 @@ def test_sqlite_online_backup_includes_committed_wal_rows(tmp_path):
 
     with pytest.raises(FileExistsError):
         _backup_sqlite_database(source_path, backup_path)
+
+
+def test_migration_disk_preflight_reserves_backup_and_vacuum_space(
+    tmp_path, monkeypatch
+):
+    from app import main
+
+    database = tmp_path / "source.db"
+    backups = tmp_path / "backups"
+    database.write_bytes(b"x" * 1024)
+    backups.mkdir()
+    required = database.stat().st_size * 2 + main.MIGRATION_DISK_SAFETY_BYTES
+
+    monkeypatch.setattr(main, "_disk_free_bytes", lambda _path: required - 1)
+    with pytest.raises(RuntimeError, match="디스크 공간이 부족"):
+        main._ensure_migration_disk_space(database, backups)
+
+    monkeypatch.setattr(main, "_disk_free_bytes", lambda _path: required)
+    main._ensure_migration_disk_space(database, backups)
 
 
 def test_startup_migration_runner():
