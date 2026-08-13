@@ -165,6 +165,7 @@ class TestReuseKeys:
         base = dict(
             provider_name="openai_compatible",
             model_name="qwen3:8b",
+            provider_fingerprint="provider-fingerprint-a",
             prompt_version="3b-1",
             schema_version=1,
             learner_level="nursing_student",
@@ -196,6 +197,13 @@ class TestReuseKeys:
         base = map_node_input_hash(self._ctx(), pairs)
         assert base != map_node_input_hash(self._ctx(model_name="qwen3:14b"), pairs)
         assert base != map_node_input_hash(self._ctx(prompt_version="3b-2"), pairs)
+
+    def test_provider_fingerprint_change_breaks_reuse(self):
+        """같은 모델명이어도 endpoint/native/digest가 달라지면 재사용하지 않는다."""
+        pairs = [("c1", "본문")]
+        assert map_node_input_hash(self._ctx(), pairs) != map_node_input_hash(
+            self._ctx(provider_fingerprint="provider-fingerprint-b"), pairs
+        )
 
     def test_learner_level_and_language_change_break_reuse(self):
         pairs = [("c1", "본문")]

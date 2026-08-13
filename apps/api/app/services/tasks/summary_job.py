@@ -19,7 +19,9 @@ from app.services.summary import service as summary_service
 from app.services.summary.endpoint import SummaryNetworkError
 from app.services.summary.executor import (
     SummaryCancelled,
+    SummaryConsentRevoked,
     SummaryNoContent,
+    SummaryProviderChanged,
     SummaryRevisionChanged,
     execute_hierarchical_summary,
 )
@@ -124,7 +126,7 @@ async def run_summary_job(
     # 2) 청크 스냅샷 + 공급자 해석 → 파이프라인(네트워크 I/O 가능하므로 스레드에서)
     try:
         async with factory() as session:
-            provider = await get_summary_provider(session)
+            provider = await get_summary_provider(session, resolve_identity=True)
             if not provider.available:
                 await _fail_run(session, run_id, job_id, "PROVIDER_UNAVAILABLE")
                 return
@@ -132,8 +134,10 @@ async def run_summary_job(
             if summary_service.provider_is_external(provider):
                 doc = await session.get(Document, document_id)
                 user = (await session.execute(select(User).limit(1))).scalars().first()
-                if doc is None or user is None or not (
-                    doc.external_evidence_enabled and user.external_ai_allowed
+                if (
+                    doc is None
+                    or user is None
+                    or not (doc.external_evidence_enabled and user.external_ai_allowed)
                 ):
                     await _fail_run(session, run_id, job_id, "EXTERNAL_CONSENT_MISSING")
                     return
@@ -165,6 +169,30 @@ async def run_summary_job(
             if await _job_is_current(session, document_id, job_id):
                 await _fail_run(session, run_id, job_id, "REVISION_CHANGED")
         return
+    except SummaryConsentRevoked:
+        logger.info("summary_external_consent_revoked", document_id=str(document_id))
+        async with factory() as session:
+            if await _job_is_current(session, document_id, job_id):
+                await _fail_run(
+                    session,
+                    run_id,
+                    job_id,
+                    "EXTERNAL_CONSENT_MISSING",
+                    "consent_revoked",
+                )
+        return
+    except SummaryProviderChanged:
+        logger.info("summary_provider_changed", document_id=str(document_id))
+        async with factory() as session:
+            if await _job_is_current(session, document_id, job_id):
+                await _fail_run(
+                    session,
+                    run_id,
+                    job_id,
+                    "PROVIDER_CHANGED",
+                    "provider_settings_changed",
+                )
+        return
     except SummaryNoContent:
         async with factory() as session:
             if await _job_is_current(session, document_id, job_id):
@@ -183,9 +211,7 @@ async def run_summary_job(
         )
         async with factory() as session:
             if await _job_is_current(session, document_id, job_id):
-                await _fail_run(
-                    session, run_id, job_id, failure_code, _failure_reason(exc)
-                )
+                await _fail_run(session, run_id, job_id, failure_code, _failure_reason(exc))
         return
 
     # 3) revision-guarded 원자적 저장

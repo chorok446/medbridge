@@ -237,6 +237,8 @@ class _Handler(BaseHTTPRequestHandler):
         elif path.startswith("/status"):
             code = int(path.split("/")[2])
             self.send_response(code)
+            if code == 429:
+                self.send_header("Retry-After", "120")
             self.end_headers()
         else:
             self.send_response(404)
@@ -329,6 +331,13 @@ class TestSafePost:
                 max_response_bytes=4 * 1024 * 1024,
             )
         assert e.value.category == category
+
+    def test_rate_limit_preserves_retry_after_without_response_body(self, local_server):
+        with pytest.raises(SummaryNetworkError) as e:
+            _post(local_server, "/status/429")
+
+        assert e.value.category == "rate_limited"
+        assert e.value.retry_after_seconds == 120.0
 
     def test_api_key_not_in_error(self, local_server):
         with pytest.raises(SummaryNetworkError) as e:

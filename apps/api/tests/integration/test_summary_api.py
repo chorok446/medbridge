@@ -299,7 +299,7 @@ class TestPartialSummaryIsSurfaced:
                     raise SummaryNetworkError("context_overflow", "map_context_overflow")
                 return super().summarize_group(request)
 
-        async def _fake_provider(_session):
+        async def _fake_provider(_session, **_kwargs):
             return RejectsMultiChunk()
 
         monkeypatch.setattr(job_mod, "get_summary_provider", _fake_provider)
@@ -364,7 +364,7 @@ class TestFailureReasonIsRecoverableFromTheErrorReport:
             def summarize_group(self, request):
                 raise SummaryNetworkError("bad_response", reason)
 
-        async def _fake_provider(_session):
+        async def _fake_provider(_session, **_kwargs):
             return BrokenEnvelope()
 
         monkeypatch.setattr(job_mod, "get_summary_provider", _fake_provider)
@@ -437,7 +437,7 @@ class TestFailureReasonIsRecoverableFromTheErrorReport:
             def summarize_group(self, request):
                 raise RuntimeError(secret)
 
-        async def _fake_provider(_session):
+        async def _fake_provider(_session, **_kwargs):
             return LeakyProvider()
 
         monkeypatch.setattr(job_mod, "get_summary_provider", _fake_provider)

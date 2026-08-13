@@ -79,7 +79,7 @@ async def get_settings_view(db: AsyncSession) -> SummarySettingsView:
         row = await load_settings_row(db)
     except DuplicateSummarySettingsError as exc:
         raise duplicate_settings_error() from exc
-    has_api_key = await asyncio.to_thread(secrets.has_api_key)
+    has_api_key = await secrets.run_in_keyring_thread(secrets.has_api_key)
     if row is None:
         return SummarySettingsView(
             enabled=False,
@@ -143,20 +143,20 @@ async def update_settings(
     # 부분 성공 방지: 이전 키를 먼저 기억하고, keyring을 건드리기 직전 mutated 플래그를
     # 세워 부분 변경(변경 후 실패 보고 포함)도 반드시 보상 대상이 되게 한다.
     previous_key: str | None = (
-        await asyncio.to_thread(secrets.get_api_key) if api_key is not None else None
+        await secrets.run_in_keyring_thread(secrets.get_api_key) if api_key is not None else None
     )
     key_mutated = False
     if api_key is not None:
         try:
             key_mutated = True  # 호출 자체가 자격 증명을 바꿀 수 있으므로 먼저 표시
             if api_key.strip():
-                await asyncio.to_thread(secrets.set_api_key, api_key.strip())
+                await secrets.run_in_keyring_thread(secrets.set_api_key, api_key.strip())
             else:
-                await asyncio.to_thread(secrets.delete_api_key)
+                await secrets.run_in_keyring_thread(secrets.delete_api_key)
         except Exception as exc:
             await db.rollback()
             # 부분 변경 되돌리기(실패 시 명확한 오류)
-            await asyncio.to_thread(_restore_key, previous_key)
+            await secrets.run_in_keyring_thread(_restore_key, previous_key)
             raise AppError(
                 ErrorCode.INTERNAL_ERROR,
                 "이 기기에서 API 키를 안전하게 저장할 수 없습니다.",
@@ -167,7 +167,7 @@ async def update_settings(
     except Exception as exc:
         await db.rollback()
         if key_mutated:  # keyring을 이전 값으로 되돌려 DB·keyring 불일치를 막는다
-            await asyncio.to_thread(_restore_key, previous_key)
+            await secrets.run_in_keyring_thread(_restore_key, previous_key)
         raise AppError(
             ErrorCode.INTERNAL_ERROR,
             "설정을 저장하지 못했습니다. 다시 시도해 주세요.",
@@ -197,7 +197,7 @@ def _restore_key(previous_key: str | None) -> None:
 
 
 async def delete_api_key(db: AsyncSession) -> None:
-    await asyncio.to_thread(secrets.delete_api_key)
+    await secrets.run_in_keyring_thread(secrets.delete_api_key)
 
 
 async def test_connection(db: AsyncSession) -> tuple[bool, str]:
@@ -208,13 +208,21 @@ async def test_connection(db: AsyncSession) -> tuple[bool, str]:
         raise duplicate_settings_error() from exc
     if row is None or not row.enabled:
         return False, "요약 모델이 아직 켜져 있지 않습니다."
+    # 외부 설정에서 남은 키가 있어도 로컬 probe에는 Authorization을 보내지 않는다.
+    # factory와 같은 계약을 써야 설정 시험과 실제 요약의 보안 동작이 어긋나지 않는다.
+    api_key, provider_identity_digest = (
+        (None, None)
+        if row.is_local
+        else await secrets.run_in_keyring_thread(secrets.get_api_key_with_identity)
+    )
     config = ResolvedProviderConfig(
         enabled=row.enabled,
         provider_type=row.provider_type,
         endpoint=row.endpoint,
         model_name=row.model_name,
         is_local=row.is_local,
-        api_key=await asyncio.to_thread(secrets.get_api_key),
+        api_key=api_key,
+        provider_identity_digest=provider_identity_digest,
     )
     provider = build_summary_provider(config, timeout=CONNECTION_TEST_TIMEOUT_SEC)
     if not provider.available:

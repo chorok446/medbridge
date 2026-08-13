@@ -16,11 +16,13 @@ docs/security/summary-provider-network-security.md 참조.
 import codecs
 import ipaddress
 import json as _json
+import math
 import socket
 import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Iterator
+from email.utils import parsedate_to_datetime
 from urllib.parse import urlsplit
 
 # 안전 로컬 호스트명 (정확히 일치해야 함 — localhost.evil.example 등은 제외)
@@ -109,6 +111,7 @@ class SummaryNetworkError(Exception):
         reason: str | None = None,
         *,
         oversized_text: str | None = None,
+        retry_after_seconds: float | None = None,
     ) -> None:
         super().__init__(category if reason is None else f"{category}:{reason}")
         self.category = category
@@ -117,6 +120,8 @@ class SummaryNetworkError(Exception):
         # 값이라 예외에 들고 다닌다 — 문서 전체 요약을 잃는 것보다 한 그룹이 잘리는
         # 편이 낫다. **로그·사용자 메시지에는 절대 넣지 않는다**(reason과 달리 원문이다).
         self.oversized_text = oversized_text
+        # 429 재시도 정책만 소비하는 표준 헤더 값. 응답 본문·비밀은 포함하지 않는다.
+        self.retry_after_seconds = retry_after_seconds
 
     @property
     def user_message(self) -> str:
@@ -479,7 +484,9 @@ def stream_lines(
         except SummaryNetworkError:
             raise
         except urllib.error.HTTPError as exc:
-            raise _classify_http_status(exc.code) from None
+            raise _classify_http_status(
+                exc.code, retry_after_seconds=_parse_retry_after(exc.headers.get("Retry-After"))
+            ) from None
         except TimeoutError as exc:
             raise SummaryNetworkError("timeout") from exc
         except OSError as exc:
@@ -539,10 +546,34 @@ def _classify_http_error(exc: urllib.error.HTTPError) -> SummaryNetworkError:
             body = ""
         if any(hint in body for hint in HTTP_CONTEXT_OVERFLOW_HINTS):
             return SummaryNetworkError("context_overflow", "http_400_context_length")
-    return _classify_http_status(exc.code)
+    return _classify_http_status(
+        exc.code, retry_after_seconds=_parse_retry_after(exc.headers.get("Retry-After"))
+    )
 
 
-def _classify_http_status(code: int) -> SummaryNetworkError:
+def _parse_retry_after(value: str | None) -> float | None:
+    """Retry-After(delta-seconds 또는 HTTP-date)를 안전한 초 단위 값으로 바꾼다."""
+    if value is None:
+        return None
+    stripped = value.strip()
+    try:
+        seconds = float(stripped)
+    except ValueError:
+        try:
+            target = parsedate_to_datetime(stripped)
+            if target.tzinfo is None:
+                return None
+            seconds = target.timestamp() - time.time()
+        except (TypeError, ValueError, OverflowError):
+            return None
+    if seconds < 0 or not math.isfinite(seconds):
+        return None
+    return seconds
+
+
+def _classify_http_status(
+    code: int, *, retry_after_seconds: float | None = None
+) -> SummaryNetworkError:
     if code in (401,):
         return SummaryNetworkError("auth_failed", f"http_{code}")
     if code in (403,):
@@ -550,7 +581,9 @@ def _classify_http_status(code: int) -> SummaryNetworkError:
     if code in (404,):
         return SummaryNetworkError("model_not_found", f"http_{code}")
     if code == 429:
-        return SummaryNetworkError("rate_limited", f"http_{code}")
+        return SummaryNetworkError(
+            "rate_limited", f"http_{code}", retry_after_seconds=retry_after_seconds
+        )
     if 500 <= code <= 599:
         return SummaryNetworkError("server_error", f"http_{code}")
     # 400(잘못된 파라미터 등)도 여기로 온다 — 응답 내용 위반과 구분되도록 reason을 남긴다.

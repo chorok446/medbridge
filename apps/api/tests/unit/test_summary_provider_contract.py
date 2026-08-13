@@ -4,14 +4,21 @@ import json
 
 import pytest
 
+from app.services.summary import endpoint as endpoint_mod
+from app.services.summary import provider as provider_mod
 from app.services.summary.endpoint import SummaryNetworkError
-from app.services.summary.executor import _is_input_too_large
+from app.services.summary.executor import SummaryConsentRevoked, _is_input_too_large
 from app.services.summary.provider import (
     ChunkInput,
     DocumentRequest,
     GroupRequest,
     GroupSummary,
     OpenAICompatibleSummaryProvider,
+    ProviderRequestBudget,
+    new_provider_request_budget,
+    provider_checkpoint_fingerprint,
+    provider_request_budget_scope,
+    providers_share_runtime_configuration,
 )
 from app.services.summary.settings import (
     GROUP_SUMMARY_MAX_CHARS,
@@ -1032,3 +1039,392 @@ def test_reduce_rejects_unknown_group_token():
 )
 def test_async_failure_categories_are_safe(category, expected):
     assert _classify_pipeline_failure(SummaryNetworkError(category)) == expected
+
+
+class TestProviderCheckpointFingerprint:
+    def _configured(
+        self,
+        *,
+        endpoint: str = "https://api.example.com/v1",
+        api_key: str = "secret-a",
+        is_local: bool = False,
+        model_digest: str | None = None,
+        model_name: str = "same-model-name",
+        provider_identity_digest: str | None = None,
+        provider_identity_generation: str | None = None,
+    ) -> OpenAICompatibleSummaryProvider:
+        return OpenAICompatibleSummaryProvider(
+            endpoint=endpoint,
+            model_name=model_name,
+            api_key=api_key,
+            is_local=is_local,
+            http_client=lambda *_: {},
+            model_digest=model_digest,
+            provider_identity_digest=provider_identity_digest,
+            provider_identity_generation=provider_identity_generation,
+        )
+
+    def test_endpoint_is_hashed_and_changes_checkpoint_identity(self):
+        first = self._configured(endpoint="https://api-a.example.com/v1")
+        second = self._configured(endpoint="https://api-b.example.com/v1")
+
+        first_fingerprint = provider_checkpoint_fingerprint(first)
+
+        assert len(first_fingerprint) == 64
+        assert first_fingerprint != provider_checkpoint_fingerprint(second)
+
+    def test_equivalent_endpoint_spellings_have_the_same_identity(self):
+        upper = self._configured(endpoint="https://API.Example.com/v1/")
+        normalized = self._configured(endpoint="https://api.example.com/v1")
+
+        assert provider_checkpoint_fingerprint(upper) == provider_checkpoint_fingerprint(normalized)
+
+    def test_api_key_is_not_part_of_persisted_fingerprint_but_changes_runtime_identity(self):
+        first = self._configured(api_key="secret-a")
+        rotated = self._configured(api_key="secret-b")
+
+        assert provider_checkpoint_fingerprint(first) == provider_checkpoint_fingerprint(rotated)
+        assert providers_share_runtime_configuration(first, rotated) is False
+
+    def test_non_secret_credential_identity_breaks_checkpoint_reuse(self):
+        first = self._configured(provider_identity_digest="identity-a")
+        rotated = self._configured(provider_identity_digest="identity-b")
+
+        assert provider_checkpoint_fingerprint(first) != provider_checkpoint_fingerprint(rotated)
+
+    def test_deployment_or_local_model_tag_breaks_checkpoint_reuse(self):
+        first = self._configured(model_name="deployment-a")
+        changed = self._configured(model_name="deployment-b")
+
+        assert provider_checkpoint_fingerprint(first) != provider_checkpoint_fingerprint(changed)
+
+    def test_optional_model_digest_breaks_reuse(self):
+        first = self._configured(model_digest="sha256:digest-a")
+        replaced = self._configured(model_digest="sha256:digest-b")
+
+        assert provider_checkpoint_fingerprint(first) != provider_checkpoint_fingerprint(replaced)
+
+    def test_missing_digest_fail_safe_generation_breaks_reuse(self):
+        first = self._configured(is_local=True, provider_identity_generation="generation-a")
+        next_run = self._configured(is_local=True, provider_identity_generation="generation-b")
+
+        assert provider_checkpoint_fingerprint(first) != provider_checkpoint_fingerprint(next_run)
+
+    def test_generation_config_breaks_reuse(self, monkeypatch):
+        from app.services.summary import provider as provider_mod
+
+        configured = self._configured()
+        before = provider_checkpoint_fingerprint(configured)
+        monkeypatch.setattr(
+            provider_mod, "SUMMARY_MAP_MAX_TOKENS", provider_mod.SUMMARY_MAP_MAX_TOKENS + 1
+        )
+
+        assert provider_checkpoint_fingerprint(configured) != before
+
+
+def test_internal_budget_retry_rechecks_guard_before_second_http_request():
+    """공개 summarize 호출 안의 재요청도 동의 가드를 건너뛰지 않는다."""
+    responses = [
+        _chat_response("{", finish_reason="length"),
+        _chat_response('{"summary":"두 번째 응답"}'),
+    ]
+    transport_calls = 0
+
+    def transport(*_args):
+        nonlocal transport_calls
+        response = responses[transport_calls]
+        transport_calls += 1
+        return response
+
+    provider = OpenAICompatibleSummaryProvider(
+        endpoint="https://api.example.com/v1",
+        model_name="test-model",
+        api_key="secret",
+        is_local=False,
+        http_client=transport,
+    )
+    guard_calls = 0
+
+    def guard():
+        nonlocal guard_calls
+        guard_calls += 1
+        if guard_calls == 2:
+            raise SummaryConsentRevoked
+
+    provider.set_before_request_guard(guard)
+
+    with pytest.raises(SummaryConsentRevoked):
+        provider.summarize_group(_group_request())
+
+    assert guard_calls == 2
+    assert transport_calls == 1, "동의 철회 뒤 두 번째 요청을 보내면 안 된다"
+
+
+class TestActualRequestRetryBudget:
+    def test_production_node_budget_has_fixed_request_and_deadline_ceiling(self):
+        budget = new_provider_request_budget(clock=lambda: 0.0)
+
+        assert budget.request_limit == 6
+        assert budget.total_deadline_seconds == 360.0
+        for _ in range(6):
+            assert budget.claim_request(300.0) == 300.0
+        with pytest.raises(SummaryNetworkError) as caught:
+            budget.claim_request(300.0)
+        assert caught.value.reason == "node_request_budget_exhausted"
+
+    def test_failed_pre_request_guard_does_not_consume_http_budget(self):
+        provider = OpenAICompatibleSummaryProvider(
+            endpoint="https://api.example.com/v1",
+            model_name="test-model",
+            api_key="secret",
+            is_local=False,
+            http_client=lambda *_: pytest.fail("guard failure must stop before transport"),
+        )
+
+        def revoked() -> None:
+            raise SummaryConsentRevoked
+
+        provider.set_before_request_guard(revoked)
+        budget = ProviderRequestBudget(request_limit=2, total_deadline_seconds=60)
+
+        with provider_request_budget_scope(budget), pytest.raises(SummaryConsentRevoked):
+            provider.summarize_group(_group_request())
+
+        assert budget.requests_started == 0
+
+    def test_guard_time_is_part_of_node_deadline(self):
+        now = [0.0]
+        provider = OpenAICompatibleSummaryProvider(
+            endpoint="https://api.example.com/v1",
+            model_name="test-model",
+            api_key="secret",
+            is_local=False,
+            http_client=lambda *_: pytest.fail("expired guard must stop before transport"),
+        )
+        provider.set_before_request_guard(lambda: now.__setitem__(0, 6.0))
+        budget = ProviderRequestBudget(
+            request_limit=2,
+            total_deadline_seconds=5.0,
+            clock=lambda: now[0],
+        )
+
+        with provider_request_budget_scope(budget), pytest.raises(SummaryNetworkError) as caught:
+            provider.summarize_group(_group_request())
+
+        assert caught.value.reason == "node_deadline_exceeded"
+        assert budget.requests_started == 0
+
+    @pytest.mark.parametrize(
+        "category", ["timeout", "connect_failed", "rate_limited", "server_error"]
+    )
+    def test_only_transient_actual_requests_are_retried(self, category, monkeypatch):
+        calls = 0
+        sleeps: list[float] = []
+        monkeypatch.setattr(provider_mod, "_sleep_before_request_retry", sleeps.append)
+        monkeypatch.setattr(provider_mod, "_retry_jitter", lambda: 0.0)
+
+        def transport(*_args):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise SummaryNetworkError(category, "test_transient")
+            return _chat_response('{"summary":"복구됨"}')
+
+        provider = OpenAICompatibleSummaryProvider(
+            endpoint="https://api.example.com/v1",
+            model_name="test-model",
+            api_key="secret",
+            is_local=False,
+            http_client=transport,
+        )
+
+        assert provider.summarize_group(_group_request()).summary_text == "복구됨"
+        assert calls == 2
+        assert sleeps == [0.5]
+
+    @pytest.mark.parametrize("category", ["auth_failed", "bad_response"])
+    def test_auth_and_schema_errors_are_not_retried(self, category, monkeypatch):
+        calls = 0
+
+        def must_not_sleep(_delay: float) -> None:
+            pytest.fail("영구 오류에는 backoff가 없어야 한다")
+
+        monkeypatch.setattr(provider_mod, "_sleep_before_request_retry", must_not_sleep)
+
+        def transport(*_args):
+            nonlocal calls
+            calls += 1
+            raise SummaryNetworkError(category, "permanent")
+
+        provider = OpenAICompatibleSummaryProvider(
+            endpoint="https://api.example.com/v1",
+            model_name="test-model",
+            api_key="secret",
+            is_local=False,
+            http_client=transport,
+        )
+
+        with pytest.raises(SummaryNetworkError):
+            provider.summarize_group(_group_request())
+        assert calls == 1
+
+    def test_method_retry_does_not_multiply_internal_budget_requests(self, monkeypatch):
+        """finish-length 뒤 5xx여도 공개 메서드를 3회 되감아 12회 호출하지 않는다."""
+        calls = 0
+        sleeps: list[float] = []
+        monkeypatch.setattr(provider_mod, "_sleep_before_request_retry", sleeps.append)
+        monkeypatch.setattr(provider_mod, "_retry_jitter", lambda: 0.0)
+
+        def transport(*_args):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return _chat_response("{", finish_reason="length")
+            raise SummaryNetworkError("server_error", "http_503")
+
+        provider = OpenAICompatibleSummaryProvider(
+            endpoint="https://api.example.com/v1",
+            model_name="test-model",
+            api_key="secret",
+            is_local=False,
+            http_client=transport,
+        )
+
+        with pytest.raises(SummaryNetworkError) as caught:
+            provider.summarize_group(_group_request())
+
+        assert caught.value.category == "server_error"
+        assert calls == 4  # 출력 예산 1회 + 동일 두 번째 payload 최대 3회
+        assert sleeps == [0.5, 1.0]
+
+    def test_shared_node_request_budget_caps_internal_and_network_retries(self, monkeypatch):
+        calls = 0
+        monkeypatch.setattr(provider_mod, "_sleep_before_request_retry", lambda _delay: None)
+        monkeypatch.setattr(provider_mod, "_retry_jitter", lambda: 0.0)
+
+        def transport(*_args):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return _chat_response("{", finish_reason="length")
+            raise SummaryNetworkError("server_error", "http_503")
+
+        provider = OpenAICompatibleSummaryProvider(
+            endpoint="https://api.example.com/v1",
+            model_name="test-model",
+            api_key="secret",
+            is_local=False,
+            http_client=transport,
+        )
+        budget = ProviderRequestBudget(request_limit=2, total_deadline_seconds=60)
+
+        with provider_request_budget_scope(budget), pytest.raises(SummaryNetworkError):
+            provider.summarize_group(_group_request())
+
+        assert calls == 2
+        assert budget.requests_started == 2
+
+    def test_remaining_node_deadline_caps_each_actual_http_timeout(self, monkeypatch):
+        now = [0.0]
+        timeouts: list[float] = []
+        monkeypatch.setattr(provider_mod, "_sleep_before_request_retry", lambda _delay: None)
+        monkeypatch.setattr(provider_mod, "_retry_jitter", lambda: 0.0)
+
+        def post_json(*_args, timeout: float, **_kwargs):
+            timeouts.append(timeout)
+            now[0] += 3.0
+            raise SummaryNetworkError("server_error", "http_503")
+
+        monkeypatch.setattr(endpoint_mod, "post_json", post_json)
+        provider = OpenAICompatibleSummaryProvider(
+            endpoint="https://api.example.com/v1",
+            model_name="test-model",
+            api_key="secret",
+            is_local=False,
+        )
+        budget = ProviderRequestBudget(
+            request_limit=6,
+            total_deadline_seconds=5.0,
+            clock=lambda: now[0],
+        )
+
+        with provider_request_budget_scope(budget), pytest.raises(SummaryNetworkError):
+            provider.summarize_group(_group_request())
+
+        assert timeouts == [5.0, 2.0]
+        assert budget.requests_started == 2
+
+    def test_retry_after_is_honored_but_capped(self, monkeypatch):
+        calls = 0
+        sleeps: list[float] = []
+        monkeypatch.setattr(provider_mod, "_sleep_before_request_retry", sleeps.append)
+
+        def transport(*_args):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise SummaryNetworkError(
+                    "rate_limited", "http_429", retry_after_seconds=120.0
+                )
+            return _chat_response('{"summary":"복구됨"}')
+
+        provider = OpenAICompatibleSummaryProvider(
+            endpoint="https://api.example.com/v1",
+            model_name="test-model",
+            api_key="secret",
+            is_local=False,
+            http_client=transport,
+        )
+
+        assert provider.summarize_group(_group_request()).summary_text == "복구됨"
+        assert sleeps == [10.0]
+
+    def test_non_finite_retry_after_falls_back_to_bounded_backoff(self, monkeypatch):
+        calls = 0
+        sleeps: list[float] = []
+        monkeypatch.setattr(provider_mod, "_sleep_before_request_retry", sleeps.append)
+        monkeypatch.setattr(provider_mod, "_retry_jitter", lambda: 0.0)
+
+        def transport(*_args):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise SummaryNetworkError(
+                    "rate_limited", "http_429", retry_after_seconds=float("nan")
+                )
+            return _chat_response('{"summary":"복구됨"}')
+
+        provider = OpenAICompatibleSummaryProvider(
+            endpoint="https://api.example.com/v1",
+            model_name="test-model",
+            api_key="secret",
+            is_local=False,
+            http_client=transport,
+        )
+
+        assert provider.summarize_group(_group_request()).summary_text == "복구됨"
+        assert sleeps == [0.5]
+
+    def test_jittered_backoff_is_capped(self, monkeypatch):
+        calls = 0
+        sleeps: list[float] = []
+        monkeypatch.setattr(provider_mod, "_sleep_before_request_retry", sleeps.append)
+        monkeypatch.setattr(provider_mod, "_retry_jitter", lambda: 999.0)
+
+        def transport(*_args):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise SummaryNetworkError("connect_failed", "test")
+            return _chat_response('{"summary":"복구됨"}')
+
+        provider = OpenAICompatibleSummaryProvider(
+            endpoint="https://api.example.com/v1",
+            model_name="test-model",
+            api_key="secret",
+            is_local=False,
+            http_client=transport,
+        )
+
+        provider.summarize_group(_group_request())
+        assert sleeps == [5.0]

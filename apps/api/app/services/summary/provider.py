@@ -5,9 +5,19 @@
 코드에 하드코딩하지 않는다.
 """
 
+import hashlib
+import hmac
 import json
+import math
+import random
+import time
+from collections.abc import Callable
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Protocol
+
+from app.core.logging import get_logger
 
 # finish_reason/done_reason 분류값은 endpoint.parse_chat_content와 공유한다.
 from app.services.summary.endpoint import KNOWN_FINISH_REASONS as _KNOWN_FINISH_REASONS
@@ -17,6 +27,8 @@ from app.services.summary.settings import (
     SUMMARY_MAP_RETRY_MAX_TOKENS,
     SUMMARY_REDUCE_MAX_TOKENS,
 )
+
+logger = get_logger(__name__)
 
 # 프롬프트가 잘렸을 때 모델이 낼 수 있어야 하는 대안 형태. 이걸 스키마에서 배제하면
 # 잘린 프롬프트가 "정상 요약"으로 통과해 버린다(실측: strict 스키마 + num_ctx 부족 →
@@ -242,6 +254,224 @@ class SummaryProvider(Protocol):
     def summarize_document(self, request: DocumentRequest) -> dict: ...
 
 
+@dataclass
+class ProviderRequestBudget:
+    """한 executor 노드가 공유하는 실제 HTTP 요청 수와 wall-clock deadline."""
+
+    request_limit: int
+    total_deadline_seconds: float
+    clock: Callable[[], float] = time.monotonic
+    requests_started: int = 0
+    _started_at: float = field(init=False)
+
+    def __post_init__(self) -> None:
+        self._started_at = self.clock()
+
+    def remaining_seconds(self) -> float:
+        return max(0.0, self.total_deadline_seconds - (self.clock() - self._started_at))
+
+    def claim_request(self, per_request_timeout: float) -> float:
+        from app.services.summary.endpoint import SummaryNetworkError
+
+        if self.requests_started >= self.request_limit:
+            raise SummaryNetworkError("timeout", "node_request_budget_exhausted")
+        remaining = self.remaining_seconds()
+        if remaining <= 0:
+            raise SummaryNetworkError("timeout", "node_deadline_exceeded")
+        self.requests_started += 1
+        return min(per_request_timeout, remaining)
+
+
+def new_provider_request_budget(
+    *,
+    total_deadline_seconds: float | None = None,
+    clock: Callable[[], float] = time.monotonic,
+) -> ProviderRequestBudget:
+    from app.services.summary.settings import (
+        SUMMARY_NODE_DEADLINE_SEC,
+        SUMMARY_NODE_REQUEST_BUDGET,
+    )
+
+    return ProviderRequestBudget(
+        request_limit=SUMMARY_NODE_REQUEST_BUDGET,
+        total_deadline_seconds=(
+            SUMMARY_NODE_DEADLINE_SEC
+            if total_deadline_seconds is None
+            else total_deadline_seconds
+        ),
+        clock=clock,
+    )
+
+
+_ACTIVE_REQUEST_BUDGET: ContextVar[ProviderRequestBudget | None] = ContextVar(
+    "summary_provider_request_budget", default=None
+)
+
+
+@contextmanager
+def provider_request_budget_scope(budget: ProviderRequestBudget):
+    """asyncio.to_thread가 복사하는 context에 노드 budget을 설치한다."""
+    token = _ACTIVE_REQUEST_BUDGET.set(budget)
+    try:
+        yield
+    finally:
+        _ACTIVE_REQUEST_BUDGET.reset(token)
+
+
+def current_provider_request_budget() -> ProviderRequestBudget | None:
+    """현재 worker context의 노드 budget(실제 전송 guard의 deadline 계산용)."""
+    return _ACTIVE_REQUEST_BUDGET.get()
+
+
+def _sleep_before_request_retry(delay: float) -> None:
+    """테스트에서 실제 대기 없이 관찰할 수 있는 동기 backoff 경계."""
+    time.sleep(delay)
+
+
+def _retry_jitter() -> float:
+    from app.services.summary.settings import SUMMARY_RETRY_JITTER_SEC
+
+    return random.uniform(0.0, SUMMARY_RETRY_JITTER_SEC)
+
+
+def _retry_delay(exc, retry_index: int) -> float:
+    from app.services.summary.settings import (
+        SUMMARY_RETRY_AFTER_CAP_SEC,
+        SUMMARY_RETRY_BASE_DELAY_SEC,
+        SUMMARY_RETRY_DELAY_CAP_SEC,
+    )
+
+    retry_after = getattr(exc, "retry_after_seconds", None)
+    if exc.category == "rate_limited" and isinstance(retry_after, int | float):
+        retry_after_value = float(retry_after)
+        if math.isfinite(retry_after_value):
+            return min(max(0.0, retry_after_value), SUMMARY_RETRY_AFTER_CAP_SEC)
+    exponential = SUMMARY_RETRY_BASE_DELAY_SEC * (2**retry_index)
+    return min(exponential + _retry_jitter(), SUMMARY_RETRY_DELAY_CAP_SEC)
+
+
+def provider_checkpoint_fingerprint(
+    provider: SummaryProvider, *, include_fail_safe_generation: bool = True
+) -> str:
+    """체크포인트 재사용에 쓰는 비밀 없는 공급자 지문.
+
+    같은 ``provider_name``/``model_name``이어도 endpoint, 로컬 여부, native 전송 모드,
+    모델 digest와 생성 설정이 다르면 결과를 섞어 쓰면 안 된다. endpoint 원문은 DB의
+    input hash나 로그에서 역으로 노출되지 않도록 SHA-256만 포함하고 API 키는 어떤
+    형태로도 포함하지 않는다.
+
+    로컬 모델 카탈로그의 ``model_digest``와 외부 키의 설치별 HMAC identity를 실제
+    provider 속성으로 전달한다. digest 조회가 실패한 로컬 실행은 일회성 generation을
+    포함해 과거 checkpoint를 fail-safe로 재사용하지 않는다.
+    """
+    from app.services.summary.settings import (
+        LOCAL_KEEP_ALIVE,
+        LOCAL_MAX_TOKENS,
+        LOCAL_NUM_CTX,
+        LOCAL_REASONING_EFFORT,
+    )
+
+    provider_name = str(getattr(provider, "provider_name", ""))
+    endpoint = str(getattr(provider, "_endpoint", "") or "").strip().rstrip("/")
+    is_local = bool(getattr(provider, "is_local", False))
+    if endpoint and provider_name == "openai_compatible":
+        from app.services.summary.endpoint import SummaryNetworkError, validate_endpoint
+
+        try:
+            endpoint = validate_endpoint(endpoint, is_local=is_local)
+        except SummaryNetworkError:
+            # 런타임 설정 저장 경로는 이미 검증한다. 직접 만든 테스트 provider가 잘못된
+            # 주소를 가졌더라도 지문 계산이 원래 오류보다 먼저 실패하지 않게 원문을 쓴다.
+            pass
+    uses_native = False
+    if provider_name == "openai_compatible":
+        try:
+            uses_native = bool(getattr(provider, "uses_ollama_native", False))
+        except Exception:  # 잘못된 테스트 설정도 지문 계산 자체를 깨뜨리지는 않는다.
+            uses_native = False
+
+    model_digest = getattr(provider, "model_digest", None)
+    if not isinstance(model_digest, str) or not model_digest.strip():
+        model_digest = None
+    provider_identity_digest = getattr(provider, "provider_identity_digest", None)
+    if not isinstance(provider_identity_digest, str) or not provider_identity_digest.strip():
+        provider_identity_digest = None
+    provider_identity_generation = getattr(provider, "provider_identity_generation", None)
+    if (
+        not isinstance(provider_identity_generation, str)
+        or not provider_identity_generation.strip()
+    ):
+        provider_identity_generation = None
+
+    generation: dict[str, object] = {
+        "map_max_tokens": SUMMARY_MAP_MAX_TOKENS,
+        "map_retry_max_tokens": SUMMARY_MAP_RETRY_MAX_TOKENS,
+        "reduce_max_tokens": SUMMARY_REDUCE_MAX_TOKENS,
+    }
+    if provider_name == "openai_compatible":
+        generation.update(
+            {
+                "temperature": 0 if is_local else 0.2,
+                "local_max_tokens": LOCAL_MAX_TOKENS if is_local else None,
+                "reasoning_effort": LOCAL_REASONING_EFFORT if is_local else None,
+                "num_ctx": LOCAL_NUM_CTX if uses_native else None,
+                "keep_alive": LOCAL_KEEP_ALIVE if uses_native else None,
+            }
+        )
+
+    canonical = json.dumps(
+        {
+            "provider": provider_name,
+            "model": str(getattr(provider, "model_name", "")),
+            "model_digest": model_digest,
+            # 외부 API 키의 설치별 HMAC. 키·무염 키 해시는 포함하지 않는다.
+            "provider_identity_digest": provider_identity_digest,
+            "provider_identity_generation": (
+                provider_identity_generation if include_fail_safe_generation else None
+            ),
+            "endpoint_sha256": (
+                hashlib.sha256(endpoint.encode("utf-8")).hexdigest() if endpoint else None
+            ),
+            "is_local": is_local,
+            "transport": (
+                "ollama_native"
+                if uses_native
+                else "openai_compatible"
+                if provider_name == "openai_compatible"
+                else "none"
+            ),
+            "generation": generation,
+        },
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def providers_share_runtime_configuration(
+    expected: SummaryProvider, current: SummaryProvider
+) -> bool:
+    """실행 중 설정 변경 여부를 비밀을 저장·출력하지 않고 비교한다.
+
+    체크포인트 지문에는 API 키를 넣지 않는다. 다만 진행 중인 외부 작업이 키 변경 뒤에도
+    예전 provider 객체의 키로 계속 전송하면 안 되므로, 메모리 안에서만 상수시간 비교한다.
+    """
+    if not getattr(current, "available", False):
+        return False
+    # digest 조회 불가 시 checkpoint에는 실행별 fail-safe generation을 넣지만, 그 값은
+    # factory를 재해석할 때마다 새로 생기므로 active-run 설정 비교에서는 제외한다.
+    if provider_checkpoint_fingerprint(
+        expected, include_fail_safe_generation=False
+    ) != provider_checkpoint_fingerprint(current, include_fail_safe_generation=False):
+        return False
+    if getattr(expected, "provider_name", "") != "openai_compatible":
+        return True
+    expected_key = str(getattr(expected, "_api_key", "") or "")
+    current_key = str(getattr(current, "_api_key", "") or "")
+    return hmac.compare_digest(expected_key, current_key)
+
+
 class DisabledSummaryProvider:
     """기본 상태 — 요약 모델이 연결되지 않음. 앱 전체는 정상 동작해야 한다."""
 
@@ -349,6 +579,9 @@ class OpenAICompatibleSummaryProvider:
         is_local: bool,
         http_client=None,
         timeout: float | None = None,
+        model_digest: str | None = None,
+        provider_identity_digest: str | None = None,
+        provider_identity_generation: str | None = None,
     ) -> None:
         self._endpoint = endpoint.rstrip("/")
         self.model_name = model_name
@@ -356,10 +589,97 @@ class OpenAICompatibleSummaryProvider:
         self.is_local = is_local
         self._http = http_client  # 테스트에서 mock 주입; None이면 안전 HTTP 경로를 쓴다
         self._timeout = timeout  # None이면 요약 기본 timeout
+        self.model_digest = model_digest
+        self.provider_identity_digest = provider_identity_digest
+        self.provider_identity_generation = provider_identity_generation
+        # 실행기가 설치하는 동기 callback. 실제 HTTP 전송 직전에 최신 취소/revision,
+        # 외부 동의와 provider 설정을 다시 확인한다. 일반 단위 테스트와 연결 확인에서는 None.
+        self._before_request = None
         # 로컬(Ollama 등)은 API 키가 필요 없다 — 외부만 키를 요구한다.
         self.available = bool(
             self._endpoint and self.model_name and (self.is_local or self._api_key)
         )
+
+    def set_before_request_guard(self, guard) -> None:
+        """실제 네트워크 요청 직전에 실행할 동기 가드(실행기 전용)."""
+        self._before_request = guard
+
+    def _guard_request(self) -> None:
+        if self._before_request is not None:
+            self._before_request()
+
+    def _request_json(
+        self,
+        url: str,
+        payload: dict,
+        *,
+        is_local: bool,
+        budget: ProviderRequestBudget,
+    ) -> dict:
+        """동일 HTTP payload만 transient 오류에 재전송한다.
+
+        출력 예산 확대·스키마 재질의까지 공개 provider 메서드 전체를 다시 실행하면 실제
+        요청이 4×3으로 증폭한다. 모든 논리 재질의가 공유하는 request budget/deadline에서
+        이 단일 전송만 최대 3회 재시도한다.
+        """
+        from app.services.summary.endpoint import SummaryNetworkError, post_json
+        from app.services.summary.settings import (
+            SUMMARY_HTTP_MAX_ATTEMPTS,
+            SUMMARY_MAX_RESPONSE_BYTES,
+            SUMMARY_REQUEST_TIMEOUT_SEC,
+        )
+
+        transient = {"timeout", "connect_failed", "rate_limited", "server_error"}
+        per_request_timeout = self._timeout or SUMMARY_REQUEST_TIMEOUT_SEC
+        for retry_index in range(SUMMARY_HTTP_MAX_ATTEMPTS):
+            # 취소/revision/동의/provider 설정은 actual request마다, retry 직전에도 확인한다.
+            # 가드가 실패한 호출은 실제 HTTP 요청이 아니므로 request budget을 쓰지 않는다.
+            # 반대로 가드가 오래 걸렸다면 그 시간은 node deadline에 포함돼야 하므로,
+            # 가드가 끝난 뒤 남은 시간으로 timeout을 계산한다.
+            self._guard_request()
+            timeout = budget.claim_request(per_request_timeout)
+            try:
+                if self._http is not None:
+                    data = self._http(url, payload, self._api_key)
+                else:
+                    data = post_json(
+                        url,
+                        payload,
+                        self._api_key,
+                        is_local=is_local,
+                        timeout=timeout,
+                        max_response_bytes=SUMMARY_MAX_RESPONSE_BYTES,
+                    )
+            except SummaryNetworkError as exc:
+                can_retry = (
+                    exc.category in transient
+                    and retry_index + 1 < SUMMARY_HTTP_MAX_ATTEMPTS
+                    and budget.requests_started < budget.request_limit
+                )
+                if not can_retry:
+                    raise
+                delay = _retry_delay(exc, retry_index)
+                if delay >= budget.remaining_seconds():
+                    raise
+                logger.info(
+                    "summary_provider_request_retry",
+                    attempt=retry_index + 1,
+                    failure_category=exc.category,
+                    failure_reason=exc.reason or "none",
+                    retry_delay_ms=int(delay * 1000),
+                )
+                _sleep_before_request_retry(delay)
+                continue
+
+            try:
+                parsed = json.loads(data) if isinstance(data, str) else data
+            except (json.JSONDecodeError, TypeError) as exc:
+                raise SummaryNetworkError("bad_response", "envelope_not_json") from exc
+            if not isinstance(parsed, dict):
+                raise SummaryNetworkError("bad_response", "envelope_not_json")
+            return parsed
+
+        raise AssertionError("HTTP retry loop exhausted without returning or raising")
 
     def _chat(
         self,
@@ -368,13 +688,12 @@ class OpenAICompatibleSummaryProvider:
         *,
         max_tokens: int | None = None,
         local_max_tokens: int | None = None,
+        budget: ProviderRequestBudget,
     ) -> str:
-        from app.services.summary.endpoint import SummaryNetworkError, post_json
+        from app.services.summary.endpoint import parse_chat_content
         from app.services.summary.settings import (
             LOCAL_MAX_TOKENS,
             LOCAL_REASONING_EFFORT,
-            SUMMARY_MAX_RESPONSE_BYTES,
-            SUMMARY_REQUEST_TIMEOUT_SEC,
         )
 
         payload = {
@@ -399,25 +718,7 @@ class OpenAICompatibleSummaryProvider:
                 # 적용된 이번 수정이 같은 로컬 사용자에게 닿지 않는 공백이었다.
                 payload["max_tokens"] = local_max_tokens or LOCAL_MAX_TOKENS
         url = f"{self._endpoint}/chat/completions"
-        # 테스트에서 http_client(콜러블)를 주입하면 그것을 쓴다 — 실제 네트워크 없이 검증.
-        try:
-            if self._http is not None:
-                raw = self._http(url, payload, self._api_key)
-                data = json.loads(raw) if isinstance(raw, str) else raw
-            else:
-                # 런타임은 검증·redirect 차단·크기 제한이 적용된 안전 HTTP 경로만 쓴다.
-                data = post_json(
-                    url,
-                    payload,
-                    self._api_key,
-                    is_local=self.is_local,
-                    timeout=self._timeout or SUMMARY_REQUEST_TIMEOUT_SEC,
-                    max_response_bytes=SUMMARY_MAX_RESPONSE_BYTES,
-                )
-        except (json.JSONDecodeError, TypeError) as exc:
-            raise SummaryNetworkError("bad_response", "envelope_not_json") from exc
-        from app.services.summary.endpoint import parse_chat_content
-
+        data = self._request_json(url, payload, is_local=self.is_local, budget=budget)
         return parse_chat_content(data)
 
     def _native_url(self) -> str:
@@ -426,7 +727,13 @@ class OpenAICompatibleSummaryProvider:
         return ollama_native_chat_url(self._endpoint)
 
     def _chat_native(
-        self, system: str, user: str, *, max_tokens: int, schema: dict | None
+        self,
+        system: str,
+        user: str,
+        *,
+        max_tokens: int,
+        schema: dict | None,
+        budget: ProviderRequestBudget,
     ) -> str:
         """로컬(Ollama) 전용 경로 — 컨텍스트를 직접 지정하고 응답 구조를 강제한다.
 
@@ -434,12 +741,10 @@ class OpenAICompatibleSummaryProvider:
         여기서는 num_ctx를 명시하고, JSON schema로 계약 위반 자체를 줄인다.
         """
         from app.services.model_output import strip_thinking
-        from app.services.summary.endpoint import SummaryNetworkError, post_json
+        from app.services.summary.endpoint import SummaryNetworkError
         from app.services.summary.settings import (
             LOCAL_KEEP_ALIVE,
             LOCAL_NUM_CTX,
-            SUMMARY_MAX_RESPONSE_BYTES,
-            SUMMARY_REQUEST_TIMEOUT_SEC,
         )
 
         payload: dict = {
@@ -459,21 +764,7 @@ class OpenAICompatibleSummaryProvider:
         }
         payload["format"] = schema if schema is not None else "json"
 
-        try:
-            if self._http is not None:
-                raw = self._http(self._native_url(), payload, self._api_key)
-                data = json.loads(raw) if isinstance(raw, str) else raw
-            else:
-                data = post_json(
-                    self._native_url(),
-                    payload,
-                    self._api_key,
-                    is_local=True,
-                    timeout=self._timeout or SUMMARY_REQUEST_TIMEOUT_SEC,
-                    max_response_bytes=SUMMARY_MAX_RESPONSE_BYTES,
-                )
-        except (json.JSONDecodeError, TypeError) as exc:
-            raise SummaryNetworkError("bad_response", "envelope_not_json") from exc
+        data = self._request_json(self._native_url(), payload, is_local=True, budget=budget)
 
         try:
             content = data["message"]["content"]
@@ -520,6 +811,7 @@ class OpenAICompatibleSummaryProvider:
         max_tokens: int,
         schema: dict | None,
         external_max_tokens: int | None,
+        budget: ProviderRequestBudget,
     ) -> str:
         """Ollama는 native, 그 외에는 OpenAI 호환 경로.
 
@@ -528,9 +820,15 @@ class OpenAICompatibleSummaryProvider:
         모델 상한을 넘으면 400을 받아 모든 문서가 실패하기 때문이다.
         """
         if self.uses_ollama_native:
-            return self._chat_native(system, user, max_tokens=max_tokens, schema=schema)
+            return self._chat_native(
+                system, user, max_tokens=max_tokens, schema=schema, budget=budget
+            )
         return self._chat(
-            system, user, max_tokens=external_max_tokens, local_max_tokens=max_tokens
+            system,
+            user,
+            max_tokens=external_max_tokens,
+            local_max_tokens=max_tokens,
+            budget=budget,
         )
 
     @staticmethod
@@ -546,6 +844,9 @@ class OpenAICompatibleSummaryProvider:
         return parsed
 
     def summarize_group(self, request: GroupRequest) -> GroupSummary:
+        budget = _ACTIVE_REQUEST_BUDGET.get() or new_provider_request_budget(
+            total_deadline_seconds=self._timeout
+        )
         chunk_block = "\n\n".join(
             f"[입력 {index}] {c.text}" for index, c in enumerate(request.chunks, start=1)
         )
@@ -556,7 +857,7 @@ class OpenAICompatibleSummaryProvider:
         )
         user = (
             f"학습자 수준: {request.learner_level}. 다음 입력 전체를 한국어 3문장 이내, "
-            f"400자 이하로 요약하라. 정확히 {{\"summary\":\"...\"}} 한 필드만 출력하고 "
+            f'400자 이하로 요약하라. 정확히 {{"summary":"..."}} 한 필드만 출력하고 '
             f"출처 ID·페이지·좌표는 출력하지 마라.\n\n{chunk_block}"
         )
         from app.services.summary.endpoint import SummaryNetworkError
@@ -577,6 +878,7 @@ class OpenAICompatibleSummaryProvider:
                 max_tokens=max_tokens,
                 schema=_map_schema(allow_error=allow_error),
                 external_max_tokens=max_tokens,
+                budget=budget,
             )
 
         def call_with_budget(*, allow_error: bool = True) -> str:
@@ -617,9 +919,7 @@ class OpenAICompatibleSummaryProvider:
             # 요약을 쓰기 시작하고, 첫 호출보다 오히려 상한에 걸리기 쉽다. 예산 확대
             # 밖에 두면 그 자리에서 날것의 finish_length가 올라가고, _is_input_too_large()가
             # 그것을 제외하므로 executor의 적응 분할도 발동하지 않아 복구 경로가 사라진다.
-            parsed = self._parse_json_object(
-                call_with_budget(allow_error=False), stage="map"
-            )
+            parsed = self._parse_json_object(call_with_budget(allow_error=False), stage="map")
             summary = parsed.get("summary")
         if not isinstance(summary, str):
             raise SummaryNetworkError("bad_response", "map_summary_missing")
@@ -642,9 +942,11 @@ class OpenAICompatibleSummaryProvider:
         )
 
     def summarize_document(self, request: DocumentRequest) -> dict:
+        budget = _ACTIVE_REQUEST_BUDGET.get() or new_provider_request_budget(
+            total_deadline_seconds=self._timeout
+        )
         group_block = "\n\n".join(
-            f"[group {g.group_id}] {g.summary_text}"
-            for g in request.group_summaries
+            f"[group {g.group_id}] {g.summary_text}" for g in request.group_summaries
         )
         system = (
             "너는 의료 학습자료를 구조화 요약하는 보조 도구다. 주어진 그룹 요약과 그 "
@@ -660,12 +962,8 @@ class OpenAICompatibleSummaryProvider:
         # 사용자가 명시적으로 끈 구역 요약·선수지식이 그대로 저장된다.
         shape = ['"overview":{"text":"...","sourceGroupIds":["g0"]}']
         if request.include_sections:
-            shape.append(
-                '"sections":[{"title":"...","summary":"...","sourceGroupIds":["g0"]}]'
-            )
-        shape.append(
-            '"keyConcepts":[{"term":"...","explanation":"...","sourceGroupIds":["g0"]}]'
-        )
+            shape.append('"sections":[{"title":"...","summary":"...","sourceGroupIds":["g0"]}]')
+        shape.append('"keyConcepts":[{"term":"...","explanation":"...","sourceGroupIds":["g0"]}]')
         if request.include_prerequisites:
             shape.append(
                 '"prerequisites":[{"concept":"...","whyNeeded":"...",'
@@ -697,6 +995,7 @@ class OpenAICompatibleSummaryProvider:
                 ),
                 # 외부 공급자에는 reduce max_tokens를 보내지 않는다(변경 전 계약 유지).
                 external_max_tokens=None,
+                budget=budget,
             )
         except SummaryNetworkError as exc:
             if exc.reason != "finish_length":
@@ -755,9 +1054,7 @@ class OpenAICompatibleSummaryProvider:
                 tokens = value["sourceGroupIds"]
                 if not isinstance(tokens, list) or not tokens:
                     raise SummaryNetworkError("bad_response", "reduce_group_ids_shape")
-                if not all(
-                    isinstance(token, str) and token in group_sources for token in tokens
-                ):
+                if not all(isinstance(token, str) and token in group_sources for token in tokens):
                     raise SummaryNetworkError("bad_response", "reduce_group_ids_unknown")
                 resolved: list[str] = []
                 for token in dict.fromkeys(tokens):
@@ -789,5 +1086,8 @@ def build_summary_provider(config, *, timeout: float | None = None) -> SummaryPr
             api_key=getattr(config, "api_key", "") or "",
             is_local=bool(getattr(config, "is_local", False)),
             timeout=timeout,
+            model_digest=getattr(config, "model_digest", None),
+            provider_identity_digest=getattr(config, "provider_identity_digest", None),
+            provider_identity_generation=getattr(config, "provider_identity_generation", None),
         )
     return DisabledSummaryProvider()

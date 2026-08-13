@@ -1,5 +1,6 @@
 """저장형 계층 요약 실행기 — 체크포인트·재사용·재개·취소·revision·진행률 검증."""
 
+import asyncio
 import threading
 import time
 import uuid
@@ -15,7 +16,8 @@ from app.models.enums import (
     SummaryArtifactType,
     SummaryRunStatus,
 )
-from app.models.summary import SummaryNode, SummaryRun
+from app.models.summary import SummaryNode, SummaryRun, SummarySettings
+from app.models.user import User
 from app.services.search.chunking import rebuild_chunks
 from app.services.summary import executor as executor_mod
 from app.services.summary import grouping as grouping_mod
@@ -23,11 +25,17 @@ from app.services.summary import service as summary_service
 from app.services.summary.endpoint import SummaryNetworkError
 from app.services.summary.executor import (
     SummaryCancelled,
+    SummaryConsentRevoked,
     SummaryNoContent,
+    SummaryProviderChanged,
     SummaryRevisionChanged,
     execute_hierarchical_summary,
 )
-from app.services.summary.provider import DeterministicSummaryProvider, GroupSummary
+from app.services.summary.provider import (
+    DeterministicSummaryProvider,
+    GroupSummary,
+    OpenAICompatibleSummaryProvider,
+)
 from app.services.summary.settings import (
     GROUP_SUMMARY_MAX_CHARS,
     PROMPT_VERSION,
@@ -204,6 +212,34 @@ class TestCheckpointing:
             ).scalar_one()
             assert reused == await _node_count(run2_id)
 
+    async def test_provider_identity_change_does_not_reuse_old_nodes(self, client):
+        """같은 모델명이어도 credential/deployment identity가 다르면 새로 실행한다."""
+
+        class IdentifiedProvider(CountingProvider):
+            def __init__(self, identity: str) -> None:
+                super().__init__()
+                self.provider_identity_digest = identity
+
+        doc_id = await _upload_chunked(client, fx.single_column_korean(pages=3))
+        first = IdentifiedProvider("identity-a")
+        run_id, job_id, rev, chash = await _make_run(doc_id, first)
+        await _run_executor(doc_id, run_id, job_id, rev, chash, first)
+
+        second = IdentifiedProvider("identity-b")
+        run2_id, job2_id, rev2, chash2 = await _make_run(doc_id, second)
+        await _run_executor(doc_id, run2_id, job2_id, rev2, chash2, second)
+
+        assert second.group_calls > 0
+        async with get_session_factory()() as s:
+            reused = (
+                await s.execute(
+                    select(func.count()).select_from(SummaryNode).where(
+                        SummaryNode.summary_run_id == run2_id, SummaryNode.reused.is_(True)
+                    )
+                )
+            ).scalar_one()
+        assert reused == 0
+
     async def test_partial_failure_resumes_from_checkpoint(self, client, monkeypatch):
         """중간에 실패해도 다음 실행은 성공한 노드만큼 모델 호출을 건너뛴다."""
         # 그룹을 잘게 나눠 여러 노드가 생기게 한다(픽스처 본문이 짧아 기본값이면 1그룹).
@@ -287,6 +323,445 @@ class TestGuards:
                 job_is_current=_job_is_current,
                 current_chunk_hash=summary_service.current_chunk_hash,
             )
+
+    async def test_provider_setting_change_is_detected_before_next_call(self, client):
+        from app.services.summary import secrets
+
+        doc_id = await _upload_chunked(client, fx.single_column_korean(pages=2))
+        expected = OpenAICompatibleSummaryProvider(
+            endpoint="https://api.example.com/v1",
+            model_name="gpt-x",
+            api_key="test-key",
+            is_local=False,
+            http_client=lambda *_: {},
+        )
+        run_id, job_id, rev, chash = await _make_run(doc_id, expected)
+        secrets.set_api_key("test-key")
+        _, expected.provider_identity_digest = await secrets.run_in_keyring_thread(
+            secrets.get_api_key_with_identity
+        )
+        async with get_session_factory()() as s:
+            doc = await s.get(Document, doc_id)
+            user = await s.get(User, doc.user_id)
+            doc.external_evidence_enabled = True
+            user.external_ai_allowed = True
+            settings = SummarySettings(
+                enabled=True,
+                provider_type="openai_compatible",
+                endpoint="https://api.example.com/v1",
+                model_name="gpt-x",
+                is_local=False,
+            )
+            s.add(settings)
+            await s.commit()
+
+            guard_args = dict(
+                document_id=doc_id,
+                job_id=job_id,
+                start_revision=rev,
+                start_hash=chash,
+                check_full_hash=False,
+                job_is_current=_job_is_current,
+                current_chunk_hash=summary_service.current_chunk_hash,
+            )
+            await executor_mod._assert_network_call_allowed(
+                s, expected_provider=expected, **guard_args
+            )
+
+            settings.model_name = "another-model"
+            await s.commit()
+            with pytest.raises(SummaryProviderChanged):
+                await executor_mod._assert_network_call_allowed(
+                    s, expected_provider=expected, **guard_args
+                )
+
+    async def test_consent_revocation_stops_before_second_network_request(
+        self, client, monkeypatch
+    ):
+        """첫 map 뒤 동의를 끄면 두 번째 청크는 외부로 전송하지 않는다."""
+        from app.services.summary import secrets
+
+        monkeypatch.setattr(grouping_mod, "GROUP_MAX_CHARS", 400)
+        monkeypatch.setattr(grouping_mod, "GROUP_MIN_CHARS", 400)
+        _set_concurrency(monkeypatch, 1)
+        doc_id = await _upload_chunked(client, fx.single_column_korean(pages=6))
+        first_request = threading.Event()
+        consent_revoked = threading.Event()
+        transport_calls = 0
+
+        def transport(*_args):
+            nonlocal transport_calls
+            transport_calls += 1
+            first_request.set()
+            assert consent_revoked.wait(timeout=5), "동의 철회 테스트가 시간 안에 진행되지 않았다"
+            return {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": '{"summary":"검증된 첫 요약"}'},
+                    }
+                ]
+            }
+
+        provider = OpenAICompatibleSummaryProvider(
+            endpoint="https://api.example.com/v1",
+            model_name="gpt-x",
+            api_key="test-key",
+            is_local=False,
+            http_client=transport,
+        )
+        run_id, job_id, rev, chash = await _make_run(doc_id, provider)
+        secrets.set_api_key("test-key")
+        _, provider.provider_identity_digest = await secrets.run_in_keyring_thread(
+            secrets.get_api_key_with_identity
+        )
+        async with get_session_factory()() as s:
+            doc = await s.get(Document, doc_id)
+            user = await s.get(User, doc.user_id)
+            doc.external_evidence_enabled = True
+            user.external_ai_allowed = True
+            s.add(
+                SummarySettings(
+                    enabled=True,
+                    provider_type="openai_compatible",
+                    endpoint="https://api.example.com/v1",
+                    model_name="gpt-x",
+                    is_local=False,
+                )
+            )
+            await s.commit()
+
+        async def revoke_after_first_request() -> None:
+            assert await asyncio.to_thread(first_request.wait, 5)
+            async with get_session_factory()() as s:
+                doc = await s.get(Document, doc_id)
+                doc.external_evidence_enabled = False
+                await s.commit()
+            consent_revoked.set()
+
+        revoker = asyncio.create_task(revoke_after_first_request())
+        try:
+            with pytest.raises(SummaryConsentRevoked):
+                await _run_executor(doc_id, run_id, job_id, rev, chash, provider)
+        finally:
+            consent_revoked.set()
+            await revoker
+
+        assert transport_calls == 1
+
+
+class TestExecutorIsolation:
+    async def test_api_key_rotation_changes_non_secret_factory_identity(self):
+        """실제 factory provider/checkpoint identity가 키 원문 없이 회전한다."""
+        from app.services.summary import secrets
+        from app.services.summary.factory import get_summary_provider
+        from app.services.summary.provider import provider_checkpoint_fingerprint
+
+        secrets.set_api_key("provider-key-a")
+        async with get_session_factory()() as s:
+            s.add(
+                SummarySettings(
+                    enabled=True,
+                    provider_type="openai_compatible",
+                    endpoint="https://api.example.com/v1",
+                    model_name="deployment-a",
+                    is_local=False,
+                )
+            )
+            await s.commit()
+            first = await get_summary_provider(s)
+            secrets.set_api_key("provider-key-b")
+            rotated = await get_summary_provider(s)
+
+        identity_a = first.provider_identity_digest
+        identity_b = rotated.provider_identity_digest
+        assert identity_a and identity_b and identity_a != identity_b
+        assert "provider-key" not in identity_a
+        assert len(identity_a) == 64
+        assert provider_checkpoint_fingerprint(first) != provider_checkpoint_fingerprint(rotated)
+
+    async def test_local_model_tag_replacement_changes_factory_identity(
+        self, client, monkeypatch
+    ):
+        from app.services.local_ai import client as local_ai_client
+        from app.services.summary.factory import get_summary_provider
+        from app.services.summary.provider import provider_checkpoint_fingerprint
+
+        await _upload_chunked(client, fx.single_column_korean(pages=2))
+        async with get_session_factory()() as s:
+            s.add(
+                SummarySettings(
+                    enabled=True,
+                    provider_type="openai_compatible",
+                    endpoint="http://127.0.0.1:11434/v1",
+                    model_name="qwen3:8b",
+                    is_local=True,
+                )
+            )
+            await s.commit()
+
+            monkeypatch.setattr(
+                local_ai_client, "installed_model_digest", lambda _model: "sha256:digest-a"
+            )
+            first = await get_summary_provider(s, resolve_identity=True)
+            monkeypatch.setattr(
+                local_ai_client, "installed_model_digest", lambda _model: "sha256:digest-b"
+            )
+            replaced = await get_summary_provider(s, resolve_identity=True)
+
+        assert first.model_digest == "sha256:digest-a"
+        assert replaced.model_digest == "sha256:digest-b"
+        assert provider_checkpoint_fingerprint(first) != provider_checkpoint_fingerprint(replaced)
+        assert not executor_mod.providers_share_runtime_configuration(first, replaced)
+
+    async def test_local_digest_probe_failure_disables_cross_run_reuse(
+        self, client, monkeypatch
+    ):
+        from app.services.local_ai import client as local_ai_client
+        from app.services.summary.factory import get_summary_provider
+        from app.services.summary.provider import provider_checkpoint_fingerprint
+
+        await _upload_chunked(client, fx.single_column_korean(pages=2))
+        async with get_session_factory()() as s:
+            s.add(
+                SummarySettings(
+                    enabled=True,
+                    provider_type="openai_compatible",
+                    endpoint="http://127.0.0.1:11434/v1",
+                    model_name="qwen3:8b",
+                    is_local=True,
+                )
+            )
+            await s.commit()
+            monkeypatch.setattr(local_ai_client, "installed_model_digest", lambda _model: None)
+            first = await get_summary_provider(s, resolve_identity=True)
+            second = await get_summary_provider(s, resolve_identity=True)
+
+        assert first.model_digest is None and second.model_digest is None
+        assert provider_checkpoint_fingerprint(first) != provider_checkpoint_fingerprint(second)
+
+    async def test_non_ollama_local_provider_does_not_use_unrelated_ollama_digest(
+        self, client, monkeypatch
+    ):
+        from app.services.local_ai import client as local_ai_client
+        from app.services.summary.factory import get_summary_provider
+
+        await _upload_chunked(client, fx.single_column_korean(pages=2))
+        async with get_session_factory()() as s:
+            s.add(
+                SummarySettings(
+                    enabled=True,
+                    provider_type="openai_compatible",
+                    endpoint="http://127.0.0.1:1234/v1",
+                    model_name="qwen3:8b",
+                    is_local=True,
+                )
+            )
+            await s.commit()
+
+            def unrelated_catalog_must_not_be_read(_model):
+                raise AssertionError("LM Studio identity must not come from Ollama /api/tags")
+
+            monkeypatch.setattr(
+                local_ai_client, "installed_model_digest", unrelated_catalog_must_not_be_read
+            )
+            provider = await get_summary_provider(s, resolve_identity=True)
+
+        assert provider.model_digest is None
+        assert provider.provider_identity_generation
+
+    async def test_local_digest_disappearing_during_run_fails_closed(
+        self, client, monkeypatch
+    ):
+        from app.services.local_ai import client as local_ai_client
+        from app.services.summary.factory import get_summary_provider
+
+        doc_id = await _upload_chunked(client, fx.single_column_korean(pages=2))
+        async with get_session_factory()() as s:
+            s.add(
+                SummarySettings(
+                    enabled=True,
+                    provider_type="openai_compatible",
+                    endpoint="http://127.0.0.1:11434/v1",
+                    model_name="qwen3:8b",
+                    is_local=True,
+                )
+            )
+            await s.commit()
+            monkeypatch.setattr(
+                local_ai_client, "installed_model_digest", lambda _model: "sha256:digest-a"
+            )
+            expected = await get_summary_provider(s, resolve_identity=True)
+
+        run_id, job_id, rev, chash = await _make_run(doc_id, expected)
+        monkeypatch.setattr(local_ai_client, "installed_model_digest", lambda _model: None)
+        async with get_session_factory()() as s:
+            with pytest.raises(SummaryProviderChanged):
+                await executor_mod._assert_network_call_allowed(
+                    s,
+                    expected_provider=expected,
+                    document_id=doc_id,
+                    job_id=job_id,
+                    start_revision=rev,
+                    start_hash=chash,
+                    check_full_hash=False,
+                    job_is_current=_job_is_current,
+                    current_chunk_hash=summary_service.current_chunk_hash,
+                )
+
+    async def test_local_digest_unavailable_throughout_run_is_allowed_but_not_reused(
+        self, client, monkeypatch
+    ):
+        from app.services.local_ai import client as local_ai_client
+        from app.services.summary.factory import get_summary_provider
+        from app.services.summary.provider import provider_checkpoint_fingerprint
+
+        doc_id = await _upload_chunked(client, fx.single_column_korean(pages=2))
+        probe_calls = 0
+
+        def unavailable(_model):
+            nonlocal probe_calls
+            probe_calls += 1
+            return None
+
+        monkeypatch.setattr(local_ai_client, "installed_model_digest", unavailable)
+        async with get_session_factory()() as s:
+            s.add(
+                SummarySettings(
+                    enabled=True,
+                    provider_type="openai_compatible",
+                    endpoint="http://127.0.0.1:11434/v1",
+                    model_name="qwen3:8b",
+                    is_local=True,
+                )
+            )
+            await s.commit()
+            expected = await get_summary_provider(s, resolve_identity=True)
+
+        run_id, job_id, rev, chash = await _make_run(doc_id, expected)
+        async with get_session_factory()() as s:
+            current = await get_summary_provider(s, resolve_identity=True)
+            await executor_mod._assert_network_call_allowed(
+                s,
+                expected_provider=expected,
+                document_id=doc_id,
+                job_id=job_id,
+                start_revision=rev,
+                start_hash=chash,
+                check_full_hash=False,
+                job_is_current=_job_is_current,
+                current_chunk_hash=summary_service.current_chunk_hash,
+            )
+
+        assert probe_calls == 3  # initial + explicit current + actual-request guard
+        assert provider_checkpoint_fingerprint(expected) != provider_checkpoint_fingerprint(current)
+        assert executor_mod.providers_share_runtime_configuration(expected, current)
+
+    async def test_request_guard_does_not_deadlock_when_default_executor_is_full(
+        self, client, monkeypatch
+    ):
+        """provider worker가 guard를 기다려도 keyring은 별도 executor에서 진행된다."""
+        from app.services.summary import secrets
+        from app.services.summary.factory import get_summary_provider
+
+        doc_id = await _upload_chunked(client, fx.single_column_korean(pages=2))
+        secrets.set_api_key("saturation-key")
+        async with get_session_factory()() as s:
+            doc = await s.get(Document, doc_id)
+            user = await s.get(User, doc.user_id)
+            doc.external_evidence_enabled = True
+            user.external_ai_allowed = True
+            s.add(
+                SummarySettings(
+                    enabled=True,
+                    provider_type="openai_compatible",
+                    endpoint="https://api.example.com/v1",
+                    model_name="gpt-x",
+                    is_local=False,
+                )
+            )
+            await s.commit()
+            expected = await get_summary_provider(s)
+
+        run_id, job_id, rev, chash = await _make_run(doc_id, expected)
+        guard_args = dict(
+            document_id=doc_id,
+            job_id=job_id,
+            start_revision=rev,
+            start_hash=chash,
+            check_full_hash=False,
+            job_is_current=_job_is_current,
+            current_chunk_hash=summary_service.current_chunk_hash,
+        )
+
+        async def network_guard() -> None:
+            async with get_session_factory()() as s:
+                await executor_mod._assert_network_call_allowed(
+                    s, expected_provider=expected, **guard_args
+                )
+
+        # 현재 loop의 default executor worker를 N-1개 막고, 마지막 worker 자체에서
+        # run_coroutine_threadsafe guard를 실행한다. guard가 default executor로 keyring을
+        # 다시 제출하면 실행할 worker가 없어 timeout 난다.
+        loop = asyncio.get_running_loop()
+        await asyncio.to_thread(lambda: None)  # default executor를 확실히 생성
+        default_executor = loop._default_executor  # type: ignore[attr-defined]
+        worker_count = default_executor._max_workers  # type: ignore[attr-defined]
+        release = threading.Event()
+        started = 0
+        started_lock = threading.Lock()
+
+        def block_worker() -> None:
+            nonlocal started
+            with started_lock:
+                started += 1
+            release.wait(timeout=5)
+
+        blockers = [
+            asyncio.create_task(asyncio.to_thread(block_worker))
+            for _ in range(max(0, worker_count - 1))
+        ]
+        deadline = loop.time() + 2
+        while started < worker_count - 1 and loop.time() < deadline:
+            await asyncio.sleep(0.01)
+        assert started == worker_count - 1
+
+        monkeypatch.setattr(executor_mod, "SUMMARY_REQUEST_GUARD_TIMEOUT_SEC", 1.0)
+
+        def invoke_guard_from_last_worker() -> None:
+            executor_mod._run_request_guard_from_worker(loop, network_guard)
+
+        worker_task = asyncio.create_task(asyncio.to_thread(invoke_guard_from_last_worker))
+        try:
+            await asyncio.wait_for(asyncio.shield(worker_task), timeout=2.0)
+        finally:
+            release.set()
+            await asyncio.gather(*blockers, return_exceptions=True)
+            if not worker_task.done():
+                await worker_task
+
+    async def test_worker_guard_wait_is_bounded_by_remaining_node_deadline(self):
+        from app.services.summary.provider import (
+            ProviderRequestBudget,
+            provider_request_budget_scope,
+        )
+
+        loop = asyncio.get_running_loop()
+        never = asyncio.Event()
+
+        async def stalled_guard() -> None:
+            await never.wait()
+
+        budget = ProviderRequestBudget(request_limit=1, total_deadline_seconds=0.1)
+
+        def invoke() -> None:
+            executor_mod._run_request_guard_from_worker(loop, stalled_guard)
+
+        with provider_request_budget_scope(budget):
+            with pytest.raises(SummaryNetworkError) as caught:
+                await asyncio.to_thread(invoke)
+
+        assert caught.value.reason == "node_deadline_exceeded"
 
 
 class TestMultiLevelReduce:
@@ -1087,33 +1562,68 @@ class TestNodeConcurrency:
         재사용할 노드가 없다 — 체크포인트를 둔 이유가 사라진다.
         """
         _many_groups(monkeypatch)
-        _set_concurrency(monkeypatch, 4)
+        _set_concurrency(monkeypatch, 2)
         doc_id = await _upload_chunked(client, fx.single_column_korean(pages=6))
 
+        persist_started = asyncio.Event()
+        persist_release = asyncio.Event()
+        original_bump = executor_mod._bump_completed
+
+        async def gated_bump(session, current_run_id):
+            await original_bump(session, current_run_id)
+            persist_started.set()
+            await persist_release.wait()
+
+        monkeypatch.setattr(executor_mod, "_bump_completed", gated_bump)
+
         class OneFailsRestSucceed(CountingProvider):
-            """position 순서와 무관하게 정확히 한 호출만 실패시킨다."""
+            """성공 노드가 DB 저장에 들어간 뒤 정확히 한 형제를 실패시킨다."""
 
             def __init__(self) -> None:
                 super().__init__()
-                self._fail_lock = threading.Lock()
-                self._failed = False
+                self._call_lock = threading.Lock()
+                self._calls = 0
+                self.failure_started = threading.Event()
+                self.fail_now = threading.Event()
+                self.failure_raised = threading.Event()
 
             def summarize_group(self, request):
-                with self._fail_lock:
-                    should_fail = not self._failed
-                    self._failed = True
-                if should_fail:
-                    time.sleep(0.05)  # 형제들이 모델 호출을 끝낼 시간을 준다
-                    raise RuntimeError("모의 공급자 실패")
-                return super().summarize_group(request)
+                with self._call_lock:
+                    call_index = self._calls
+                    self._calls += 1
+                if call_index == 0:
+                    return super().summarize_group(request)
+                self.failure_started.set()
+                assert self.fail_now.wait(timeout=5), "test did not release sibling failure"
+                self.failure_raised.set()
+                raise RuntimeError("모의 공급자 실패")
 
         provider = OneFailsRestSucceed()
         run_id, job_id, rev, chash = await _make_run(doc_id, provider)
+
+        execution = asyncio.create_task(
+            _run_executor(doc_id, run_id, job_id, rev, chash, provider)
+        )
+        try:
+            await asyncio.wait_for(persist_started.wait(), timeout=5)
+            assert await asyncio.to_thread(provider.failure_started.wait, 5)
+            provider.fail_now.set()
+            assert await asyncio.to_thread(provider.failure_raised.wait, 5)
+
+            # 형제 실패가 성공 wrapper를 취소해도, TaskGroup은 shield된 DB commit이
+            # 완료될 때까지 끝나면 안 된다. 예전 shield(coro)는 여기서 즉시 끝나
+            # Windows 스케줄링에 따라 아래 node_count가 0이 됐다.
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(asyncio.shield(execution), timeout=0.1)
+        finally:
+            provider.fail_now.set()
+            persist_release.set()
+
         with pytest.raises(RuntimeError):
-            await _run_executor(doc_id, run_id, job_id, rev, chash, provider)
+            await execution
 
         # group_calls는 성공한 호출만 센다(실패 경로는 super()를 부르지 않는다).
-        assert provider.group_calls > 0, "형제 노드가 없으면 이 검증은 아무것도 말하지 않는다"
+        assert provider.group_calls == 1
         # 성공한 형제는 하나도 빠짐없이 체크포인트로 남아 있어야 한다.
         assert await _node_count(run_id) == provider.group_calls
 

@@ -87,6 +87,24 @@ CONNECTION_TEST_TIMEOUT_SEC = 10.0  # 연결 확인은 더 짧게
 # 정상/오류 응답 모두 이 크기까지만 읽는다(압축 비활성화 후 적용). 요약 JSON은 작다.
 SUMMARY_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 
+# 한 계층 노드가 내부 출력-예산/스키마 재질의와 일시 오류 재시도를 모두 합쳐 쓸 수 있는
+# 실제 HTTP 상한. 공개 provider 메서드 전체를 다시 실행하는 retry와 달리, 동일 payload의
+# 전송만 재시도하고 모든 내부 경로가 이 한 budget/deadline을 공유한다.
+SUMMARY_NODE_REQUEST_BUDGET = 6
+SUMMARY_NODE_DEADLINE_SEC = 360.0
+SUMMARY_HTTP_MAX_ATTEMPTS = 3
+
+# 429는 서버 Retry-After를 존중하되 긴 값으로 worker를 붙잡지 않는다. 헤더가 없거나
+# connect/timeout/5xx이면 exponential delay + bounded jitter를 쓴다.
+SUMMARY_RETRY_BASE_DELAY_SEC = 0.5
+SUMMARY_RETRY_JITTER_SEC = 0.25
+SUMMARY_RETRY_DELAY_CAP_SEC = 5.0
+SUMMARY_RETRY_AFTER_CAP_SEC = 10.0
+
+# worker thread가 실제 전송 전 async DB/keyring guard를 기다리는 상한. HTTP timeout은 guard
+# 뒤에 시작되므로 이 경계가 없으면 DB stall·종료 중에도 worker가 무기한 남을 수 있다.
+SUMMARY_REQUEST_GUARD_TIMEOUT_SEC = 30.0
+
 # 로컬(Ollama) 모델 요청 튜닝 — 비사고 모드·결정론적 출력 + 출력 길이 상한.
 LOCAL_MAX_TOKENS = 2048
 LOCAL_REASONING_EFFORT = "none"

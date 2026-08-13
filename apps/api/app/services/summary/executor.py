@@ -15,6 +15,7 @@
 
 import asyncio
 import uuid
+from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass, replace
 
 from sqlalchemy import func, select, update
@@ -42,6 +43,12 @@ from app.services.summary.provider import (
     DocumentRequest,
     GroupRequest,
     GroupSummary,
+    ProviderRequestBudget,
+    current_provider_request_budget,
+    new_provider_request_budget,
+    provider_checkpoint_fingerprint,
+    provider_request_budget_scope,
+    providers_share_runtime_configuration,
 )
 from app.services.summary.schema import ArtifactDraft
 from app.services.summary.settings import (
@@ -49,6 +56,7 @@ from app.services.summary.settings import (
     PROMPT_VERSION,
     REDUCE_FAN_IN,
     SCHEMA_VERSION,
+    SUMMARY_REQUEST_GUARD_TIMEOUT_SEC,
     summary_node_concurrency,
 )
 
@@ -91,6 +99,14 @@ class SummaryRevisionChanged(Exception):
     """실행 중 문서가 바뀜 — 중간 결과를 저장하지 않는다."""
 
 
+class SummaryConsentRevoked(Exception):
+    """외부 전송 동의가 실행 중 철회됨 — 다음 요청을 보내지 않는다."""
+
+
+class SummaryProviderChanged(Exception):
+    """실행 중 공급자 설정이 바뀜 — 이전 설정 객체로 계속 보내지 않는다."""
+
+
 class SummaryNoContent(Exception):
     """요약할 본문이 없다."""
 
@@ -116,7 +132,7 @@ async def _assert_runnable(
     check_full_hash: bool,
     job_is_current,
     current_chunk_hash,
-) -> None:
+) -> Document:
     """모델 호출 직전 가드 — 취소·교체·revision 변경을 감지한다."""
     if not await job_is_current(session, document_id, job_id):
         raise SummaryCancelled
@@ -127,21 +143,111 @@ async def _assert_runnable(
         raise SummaryRevisionChanged
     if check_full_hash and await current_chunk_hash(session, document_id) != start_hash:
         raise SummaryRevisionChanged
+    return doc
+
+
+async def _assert_network_call_allowed(session, *, expected_provider, **guard_args) -> None:
+    """실제 모델 호출 직전 최신 동의와 provider 설정까지 확인한다.
+
+    로컬/외부 OpenAI 호환 공급자만 네트워크를 사용한다. 설정을 매번 다시 해석하므로
+    endpoint/model/local-native/API 키가 실행 중 바뀌면 이미 만들어 둔 provider 객체로
+    다음 청크를 보내지 않는다. API 키는 메모리 안에서만 비교하고 지문·로그에 넣지 않는다.
+    """
+    doc = await _assert_runnable(session, **guard_args)
+    if getattr(expected_provider, "provider_name", "") != "openai_compatible":
+        return
+
+    if not getattr(expected_provider, "is_local", False):
+        from app.models.user import User
+
+        user = await session.get(User, doc.user_id)
+        if user is None or not (doc.external_evidence_enabled and user.external_ai_allowed):
+            raise SummaryConsentRevoked
+
+    from app.services.summary.factory import get_summary_provider
+
+    current_provider = await get_summary_provider(session, resolve_identity=True)
+    if not providers_share_runtime_configuration(expected_provider, current_provider):
+        raise SummaryProviderChanged
+
+
+@dataclass
+class _ProviderAttemptCounter:
+    attempts: int = 0
+
+
+async def _call_provider(
+    call,
+    argument,
+    *,
+    guard,
+    request_budget: ProviderRequestBudget,
+    attempt_counter: _ProviderAttemptCounter | None = None,
+):
+    """provider 메서드를 한 번 실행한다; actual HTTP retry는 공유 budget 안에서 수행된다.
+
+    메서드 전체를 재시도하면 그 안의 출력 예산 확대·스키마 재질의도 처음부터 반복돼
+    최대 12회로 증폭한다. OpenAI provider는 동일 payload 전송만 자체 재시도하고, 여기선
+    deterministic/test provider에도 취소·revision 가드를 적용하는 역할만 맡는다.
+    """
+    if guard is not None:
+        remaining = request_budget.remaining_seconds()
+        if remaining <= 0:
+            raise SummaryNetworkError("timeout", "node_deadline_exceeded")
+        deadline = asyncio.timeout(remaining)
+        try:
+            async with deadline:
+                await guard()
+        except TimeoutError as exc:
+            if not deadline.expired():
+                raise
+            raise SummaryNetworkError("timeout", "node_deadline_exceeded") from exc
+    if attempt_counter is not None:
+        attempt_counter.attempts += 1
+    with provider_request_budget_scope(request_budget):
+        return await asyncio.to_thread(call, argument)
+
+
+def _run_request_guard_from_worker(loop, guard) -> None:
+    """worker에서 async 전송 가드를 fail-closed bounded wait로 실행한다."""
+    budget = current_provider_request_budget()
+    remaining = budget.remaining_seconds() if budget is not None else None
+    if remaining is not None and remaining <= 0:
+        raise SummaryNetworkError("timeout", "node_deadline_exceeded")
+    timeout = SUMMARY_REQUEST_GUARD_TIMEOUT_SEC
+    deadline_limited = remaining is not None and remaining < timeout
+    if remaining is not None:
+        timeout = min(timeout, remaining)
+    future = asyncio.run_coroutine_threadsafe(guard(), loop)
+    try:
+        future.result(timeout=timeout)
+    except FutureTimeoutError:
+        # guard coroutine 자체가 TimeoutError를 올린 경우와 result() 대기 timeout을
+        # 구분한다. 완료된 future의 예외는 원형 그대로 전파한다.
+        if future.done():
+            future.result()
+        future.cancel()
+        reason = "node_deadline_exceeded" if deadline_limited else "pre_request_guard_timeout"
+        raise SummaryNetworkError("timeout", reason) from None
 
 
 async def _find_reusable(session, document_id: uuid.UUID, input_hash: str) -> SummaryNode | None:
     """같은 문서에서 같은 입력으로 이미 성공한 노드를 찾는다."""
     return (
-        await session.execute(
-            select(SummaryNode)
-            .where(
-                SummaryNode.document_id == document_id,
-                SummaryNode.input_hash == input_hash,
-                SummaryNode.status == "succeeded",
+        (
+            await session.execute(
+                select(SummaryNode)
+                .where(
+                    SummaryNode.document_id == document_id,
+                    SummaryNode.input_hash == input_hash,
+                    SummaryNode.status == "succeeded",
+                )
+                .limit(1)
             )
-            .limit(1)
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
 
 
 def _output_hash(text: str) -> str:
@@ -169,7 +275,13 @@ def _representative_error(group: BaseExceptionGroup) -> BaseException:
         elif not isinstance(exc, asyncio.CancelledError):
             leaves.append(exc)
     for exc in leaves:
-        if isinstance(exc, SummaryCancelled | SummaryRevisionChanged):
+        if isinstance(
+            exc,
+            SummaryCancelled
+            | SummaryRevisionChanged
+            | SummaryConsentRevoked
+            | SummaryProviderChanged,
+        ):
             return exc
     # 남은 게 없으면 실행 자체가 밖에서 취소된 것이다 — 그대로 전파한다.
     return leaves[0] if leaves else asyncio.CancelledError()
@@ -241,6 +353,7 @@ async def execute_hierarchical_summary(
     context_key = build_context_key(
         provider_name=provider.provider_name,
         model_name=provider.model_name,
+        provider_fingerprint=provider_checkpoint_fingerprint(provider),
         prompt_version=PROMPT_VERSION,
         schema_version=SCHEMA_VERSION,
         learner_level=learner_level,
@@ -277,6 +390,24 @@ async def execute_hierarchical_summary(
         job_is_current=job_is_current,
         current_chunk_hash=current_chunk_hash,
     )
+
+    async def _network_guard() -> None:
+        async with factory() as session:
+            await _assert_network_call_allowed(
+                session, expected_provider=provider, check_full_hash=False, **guard_args
+            )
+
+    # OpenAICompatibleSummaryProvider는 공개 메서드 한 번 안에서도 출력 예산 확대 등으로
+    # HTTP 요청을 여러 번 보낼 수 있다. worker thread에서 실제 전송 직전 main loop의
+    # async DB 가드를 실행해, 그 내부 재요청 사이에 동의/설정이 바뀐 경우도 차단한다.
+    install_request_guard = getattr(provider, "set_before_request_guard", None)
+    if callable(install_request_guard):
+        loop = asyncio.get_running_loop()
+
+        def _guard_from_worker() -> None:
+            _run_request_guard_from_worker(loop, _network_guard)
+
+        install_request_guard(_guard_from_worker)
     counter = _Counter()
 
     # --- 레벨 0: 청크 그룹 map ---
@@ -347,9 +478,7 @@ async def execute_hierarchical_summary(
             ),
             source_ids=merged_source_ids,
             # 레벨 1+의 요청 청크는 자식 노드다 — 그 노드의 출처가 원본 chunk id다.
-            chunk_sources={
-                str(child.node_id): list(child.source_chunk_ids) for child in batch
-            },
+            chunk_sources={str(child.node_id): list(child.source_chunk_ids) for child in batch},
             section_title=batch[0].section_title,
             counter=counter,
             guard_args=guard_args,
@@ -404,9 +533,10 @@ async def execute_hierarchical_summary(
     # map 노드를 몇 시간에 걸쳐 다 만든 뒤 마지막 한 번에 실패해 artifact가 0개로 끝나고,
     # 재시도해도 map은 재사용돼 곧바로 같은 호출로 돌아가 영구 실패한다.
     structured: dict | None = None
+    structured_request_budget = new_provider_request_budget()
     for attempt in range(MAX_REDUCE_ADAPT + 1):
         try:
-            structured = await asyncio.to_thread(
+            structured = await _call_provider(
                 provider.summarize_document,
                 DocumentRequest(
                     group_summaries=as_group_summaries(level_nodes),
@@ -420,6 +550,8 @@ async def execute_hierarchical_summary(
                     include_sections=False,
                     include_prerequisites=include_prerequisites,
                 ),
+                guard=_network_guard,
+                request_budget=structured_request_budget,
             )
             break
         except Exception as exc:
@@ -567,14 +699,31 @@ async def _process_node(
 
     async def _guard() -> None:
         async with factory() as session:
-            await _assert_runnable(session, check_full_hash=False, **guard_args)
+            await _assert_network_call_allowed(
+                session,
+                expected_provider=provider,
+                check_full_hash=False,
+                **guard_args,
+            )
 
     # 모델 호출은 트랜잭션 밖에서 한다 — writer 락을 붙잡은 채 네트워크를 기다리지 않는다.
+    attempt_counter = _ProviderAttemptCounter()
+    request_budget = new_provider_request_budget()
     try:
         result = await _summarize_adaptively(
-            provider, request, document_id=document_id, guard=_guard
+            provider,
+            request,
+            document_id=document_id,
+            guard=_guard,
+            attempt_counter=attempt_counter,
+            request_budget=request_budget,
         )
-    except (SummaryCancelled, SummaryRevisionChanged):
+    except (
+        SummaryCancelled,
+        SummaryRevisionChanged,
+        SummaryConsentRevoked,
+        SummaryProviderChanged,
+    ):
         # 취소·문서 변경은 정상 제어 흐름이다. 여기서 경고로 남기면 취소 한 건마다
         # "미분류 노드 실패" 경고가 쌓여, 실제 모델 실패를 찾을 때 구분되지 않는다.
         raise
@@ -619,7 +768,7 @@ async def _process_node(
                 output_hash=_output_hash(text),
                 summary_text=text,
                 source_chunk_ids_json=list(covered_ids),
-                attempt_count=1,
+                attempt_count=max(attempt_counter.attempts, request_budget.requests_started),
                 reused=False,
             )
             session.add(node)
@@ -632,7 +781,14 @@ async def _process_node(
     # 노드 하나가 실패할 때 나머지가 취소되는데, 그 취소가 저장 직전에 닿으면 이미 지불한
     # 모델 호출이 통째로 버려진다. 그러면 재시도해도 재사용할 노드가 없어, 체크포인트를
     # 둔 이유(중단 후 재시도가 성공 노드를 재사용한다) 자체가 사라진다.
-    node_id = await asyncio.shield(_persist())
+    persist_task = asyncio.create_task(_persist())
+    try:
+        node_id = await asyncio.shield(persist_task)
+    except asyncio.CancelledError:
+        # 형제 실패로 wrapper가 취소돼도 이미 모델 호출을 끝낸 결과의 commit이 끝날 때까지
+        # 기다린다. task 자체는 shield돼 있으므로 취소하지 않고, 완료 후 원래 취소를 올린다.
+        await persist_task
+        raise
     counter.processed += 1
     return _NodeResult(
         node_id=node_id,
@@ -734,6 +890,8 @@ async def _summarize_adaptively(
     *,
     document_id: uuid.UUID,
     guard=None,
+    attempt_counter: _ProviderAttemptCounter | None = None,
+    request_budget: ProviderRequestBudget | None = None,
     depth: int = 0,
 ) -> _AdaptiveResult:
     """그룹 요약. 입력이 모델 컨텍스트를 넘으면 절반으로 나눠 다시 시도한다.
@@ -743,17 +901,19 @@ async def _summarize_adaptively(
     하나당 요약 하나라는 계약을 유지한다(출처는 호출자가 서버 소유로 계산하되,
     여기서 돌려주는 covered_ids 범위로 한정한다).
     """
-    if guard is not None:
-        # 재귀 한 번에 최대 22회 호출이 나갈 수 있다. 가드가 노드 진입 시 1회뿐이면
-        # 취소·문서 변경 후에도 수십 분간 모델을 계속 돌린다.
-        await guard()
     all_ids = [c.chunk_id for c in request.chunks]
     chunks = request.chunks
+    if request_budget is None:
+        request_budget = new_provider_request_budget()
     try:
-        summary = await asyncio.to_thread(provider.summarize_group, request)
-        return _AdaptiveResult(
-            text=summary.summary_text, degraded=False, covered_ids=all_ids
+        summary = await _call_provider(
+            provider.summarize_group,
+            request,
+            guard=guard,
+            request_budget=request_budget,
+            attempt_counter=attempt_counter,
         )
+        return _AdaptiveResult(text=summary.summary_text, degraded=False, covered_ids=all_ids)
     except Exception as exc:
         # 출력이 길어서 거절된 경우엔 얕게만 나눠 본다. 계속 넘기는 모델이면 더 나눠도
         # 같은 결과라, 남은 유일한 수단인 '잘라 쓰기'로 내려간다.
@@ -803,6 +963,8 @@ async def _summarize_adaptively(
                 replace(request, group_id=f"{request.group_id}s{index}", chunks=half),
                 document_id=document_id,
                 guard=guard,
+                attempt_counter=attempt_counter,
+                request_budget=request_budget,
                 depth=depth + 1,
             )
         except SummaryCancelled:
@@ -860,10 +1022,14 @@ async def _summarize_adaptively(
         ],
     )
     try:
-        summary = await asyncio.to_thread(provider.summarize_group, merged)
-        return _AdaptiveResult(
-            text=summary.summary_text, degraded=degraded, covered_ids=covered
+        summary = await _call_provider(
+            provider.summarize_group,
+            merged,
+            guard=guard,
+            request_budget=request_budget,
+            attempt_counter=attempt_counter,
         )
+        return _AdaptiveResult(text=summary.summary_text, degraded=degraded, covered_ids=covered)
     except Exception as exc:
         if not _is_input_too_large(exc):
             raise

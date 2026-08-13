@@ -127,14 +127,41 @@ class TestStatus:
 
 class TestModels:
     def test_filters_to_allowlist(self, ollama):
-        ollama["tags"] = {"models": [
-            {"name": "qwen3:8b", "size": 100, "details": {"parameter_size": "8B",
-             "quantization_level": "Q4_K_M"}, "modified_at": "2026-01-01"},
-            {"name": "llama3:70b", "size": 200},  # allowlist 밖 → 제외
-        ]}
+        ollama["tags"] = {
+            "models": [
+                {
+                    "name": "qwen3:8b",
+                    "digest": "sha256:manifest-a",
+                    "size": 100,
+                    "details": {"parameter_size": "8B", "quantization_level": "Q4_K_M"},
+                    "modified_at": "2026-01-01",
+                },
+                {"name": "llama3:70b", "size": 200},  # allowlist 밖 → 제외
+            ]
+        }
         models = client.list_models()
         assert [m.name for m in models] == ["qwen3:8b"]
         assert models[0].parameter_size == "8B"
+        assert models[0].digest == "sha256:manifest-a"
+        assert client.installed_model_digest("qwen3:8b") == "sha256:manifest-a"
+
+    def test_digest_lookup_uses_bounded_catalog_probe(self, monkeypatch):
+        observed = {}
+
+        def fake_get_json(url, **kwargs):
+            observed["url"] = url
+            observed.update(kwargs)
+            return {"models": [{"name": "qwen3:8b", "digest": "sha256:bounded"}]}
+
+        monkeypatch.setattr(client, "get_json", fake_get_json)
+
+        assert client.installed_model_digest("qwen3:8b") == "sha256:bounded"
+        assert observed == {
+            "url": f"{st.OLLAMA_BASE}/api/tags",
+            "is_local": True,
+            "timeout": st.STATUS_TIMEOUT_SEC,
+            "max_response_bytes": st.STATUS_MAX_BYTES,
+        }
 
     def test_empty(self, ollama):
         ollama["tags"] = {"models": []}

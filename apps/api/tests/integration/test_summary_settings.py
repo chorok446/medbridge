@@ -1,5 +1,7 @@
 """요약 모델 설정 + keyring — API 키는 응답·DB에 노출되지 않는다."""
 
+import asyncio
+import threading
 import uuid
 
 from sqlalchemy import select
@@ -80,6 +82,92 @@ class TestSummarySettings:
         res = await client.post("/api/settings/summary/test")
         assert res.status_code == 200
         assert res.json()["data"]["ok"] is True
+
+    async def test_local_connection_does_not_forward_stale_external_key(self, monkeypatch):
+        from app.services.summary import settings_service
+
+        captured = None
+
+        class ProbeProvider:
+            available = True
+
+            def summarize_group(self, _request):
+                return None
+
+        def build(config, *, timeout):
+            nonlocal captured
+            captured = config
+            return ProbeProvider()
+
+        monkeypatch.setattr(settings_service, "build_summary_provider", build)
+        secrets.set_api_key("stale-external-key")
+
+        def stale_key_must_not_be_read():
+            raise AssertionError("local connection probe must not read external credentials")
+
+        monkeypatch.setattr(secrets, "get_api_key_with_identity", stale_key_must_not_be_read)
+        async with get_session_factory()() as s:
+            s.add(
+                SummarySettings(
+                    enabled=True,
+                    provider_type="openai_compatible",
+                    endpoint="http://127.0.0.1:11434/v1",
+                    model_name="qwen3:8b",
+                    is_local=True,
+                )
+            )
+            await s.commit()
+
+            ok, _message = await settings_service.test_connection(s)
+
+        assert ok is True
+        assert captured is not None
+        assert captured.api_key is None
+        assert captured.provider_identity_digest is None
+
+    async def test_connection_provider_call_does_not_occupy_keyring_executor(
+        self, monkeypatch
+    ):
+        """느린 provider probe 중에도 credential 작업은 직렬 executor에서 진행된다."""
+        from app.services.summary import settings_service
+
+        started = threading.Event()
+        release = threading.Event()
+
+        class BlockingProvider:
+            available = True
+
+            def summarize_group(self, _request):
+                started.set()
+                if not release.wait(timeout=2):
+                    raise TimeoutError("test provider was not released")
+
+        monkeypatch.setattr(
+            settings_service,
+            "build_summary_provider",
+            lambda _config, *, timeout: BlockingProvider(),
+        )
+        async with get_session_factory()() as s:
+            s.add(SummarySettings(enabled=True, provider_type="deterministic"))
+            await s.commit()
+
+            probe = asyncio.create_task(settings_service.test_connection(s))
+            try:
+                assert await asyncio.to_thread(started.wait, 2)
+                # provider 호출이 keyring 전용 단일 worker를 점유했다면 이 작업은
+                # probe가 끝날 때까지 시작할 수 없어 짧은 timeout을 넘긴다.
+                marker = await asyncio.wait_for(
+                    secrets.run_in_keyring_thread(lambda: "credential-worker-free"),
+                    timeout=1.0,
+                )
+                assert marker == "credential-worker-free"
+            finally:
+                release.set()
+
+            assert await probe == (
+                True,
+                "연결에 성공했습니다. 실제 요약 품질은 문서에 따라 다를 수 있어요.",
+            )
 
 
 class TestEndpointValidationViaApi:

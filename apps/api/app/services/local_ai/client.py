@@ -37,6 +37,9 @@ class InstalledModel:
     parameter_size: str | None
     quantization_level: str | None
     modified_at: str | None
+    # Ollama manifest digest. 같은 tag가 다른 모델 내용으로 교체됐는지 판별한다.
+    # 맨 뒤 기본값으로 둬 기존 내부 테스트/호출자의 positional 계약을 유지한다.
+    digest: str | None = None
 
 
 def _parse_version(raw: str) -> tuple[int, int, int] | None:
@@ -105,9 +108,21 @@ def list_models() -> list[InstalledModel]:
                 parameter_size=_opt_str(details.get("parameter_size")),
                 quantization_level=_opt_str(details.get("quantization_level")),
                 modified_at=_opt_str(item.get("modified_at")),
+                digest=_opt_str(item.get("digest")),
             )
         )
     return out
+
+
+def installed_model_digest(model: str) -> str | None:
+    """allowlist 모델 tag의 현재 manifest digest. 조회/스키마 실패는 None."""
+    if model not in st.ALLOWED_MODELS:
+        return None
+    try:
+        models = list_models()
+    except SummaryNetworkError:
+        return None
+    return next((item.digest for item in models if item.name == model), None)
 
 
 def _opt_str(value: object) -> str | None:
