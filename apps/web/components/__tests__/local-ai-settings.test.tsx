@@ -15,7 +15,10 @@ const apiMock = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/api/local-ai", () => apiMock);
 
-const tauriMock = vi.hoisted(() => ({ openExternalUrl: vi.fn() }));
+const tauriMock = vi.hoisted(() => ({
+  OLLAMA_INSTALL_URL: "https://ollama.com/download/windows",
+  openExternalUrl: vi.fn(),
+}));
 vi.mock("@/lib/tauri", () => tauriMock);
 
 function model(over: Partial<LocalModel>): LocalModel {
@@ -48,18 +51,74 @@ describe("LocalAiSection", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.clearAllMocks();
+    Reflect.deleteProperty(navigator, "clipboard");
   });
 
   it("Ollama 미실행이면 설치 안내를 열고 다시 확인할 수 있다", async () => {
     apiMock.getLocalAiStatus.mockResolvedValue({ status: "not_running" });
+    tauriMock.openExternalUrl.mockResolvedValue(true);
     renderSection();
     expect(await screen.findByText(/로컬 AI 실행 프로그램/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Ollama 공식 다운로드 주소")).toHaveValue(
+      "https://ollama.com/download/windows",
+    );
     await userEvent.click(screen.getByRole("button", { name: "설치 안내 열기" }));
     expect(tauriMock.openExternalUrl).toHaveBeenCalledWith(
       expect.stringContaining("ollama.com"),
     );
+    expect(
+      await screen.findByText(/기본 브라우저에서 Ollama 공식 설치 페이지를 열었습니다/),
+    ).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "다시 확인" }));
     expect(apiMock.getLocalAiStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it("Tauri opener 권한 거부·OS 열기 실패를 숨기지 않고 수동 URL을 안내한다", async () => {
+    apiMock.getLocalAiStatus.mockResolvedValue({ status: "not_running" });
+    tauriMock.openExternalUrl.mockRejectedValue(new Error("not allowed"));
+    renderSection();
+
+    await userEvent.click(await screen.findByRole("button", { name: "설치 안내 열기" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("설치 페이지를 열지 못했습니다");
+    expect(screen.getByLabelText("Ollama 공식 다운로드 주소")).toHaveValue(
+      "https://ollama.com/download/windows",
+    );
+  });
+
+  it("브라우저 팝업 차단도 실패로 표시하고 주소 복사 경로를 유지한다", async () => {
+    apiMock.getLocalAiStatus.mockResolvedValue({ status: "not_running" });
+    tauriMock.openExternalUrl.mockResolvedValue(false);
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    renderSection();
+
+    await userEvent.click(await screen.findByRole("button", { name: "설치 안내 열기" }));
+    expect(await screen.findByText(/브라우저가 페이지 열기를 차단했습니다/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "주소 복사" }));
+    expect(writeText).toHaveBeenCalledWith("https://ollama.com/download/windows");
+    expect(await screen.findByText("Ollama 공식 다운로드 주소를 복사했습니다.")).toBeInTheDocument();
+  });
+
+  it("클립보드를 쓸 수 없으면 URL을 선택해 Ctrl+C 복사를 안내한다", async () => {
+    apiMock.getLocalAiStatus.mockResolvedValue({ status: "not_running" });
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: undefined,
+    });
+    renderSection();
+
+    const url = await screen.findByLabelText("Ollama 공식 다운로드 주소");
+    await userEvent.click(screen.getByRole("button", { name: "주소 복사" }));
+
+    expect(await screen.findByText(/선택된 주소를 Ctrl\+C로 복사해 주세요/)).toBeInTheDocument();
+    expect(url).toHaveFocus();
+    expect(url).toHaveProperty("selectionStart", 0);
+    expect(url).toHaveProperty("selectionEnd", "https://ollama.com/download/windows".length);
   });
 
   it("준비됨·모델 없음이면 추천(균형형 8B)과 예상 용량을 보여준다", async () => {

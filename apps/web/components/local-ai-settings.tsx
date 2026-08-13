@@ -11,9 +11,8 @@ import {
   testLocalModel,
   type LocalModel,
 } from "@/lib/api/local-ai";
-import { openExternalUrl } from "@/lib/tauri";
+import { OLLAMA_INSTALL_URL, openExternalUrl } from "@/lib/tauri";
 
-const OLLAMA_INSTALL_URL = "https://ollama.com/download/windows";
 const GIB = 1024 ** 3;
 
 function errorDetails(error: ApiError): Record<string, unknown> | null {
@@ -113,16 +112,66 @@ function InstallGuide({
   message: ReactNode;
   note?: string;
 }) {
+  const installUrlRef = useRef<HTMLInputElement>(null);
+  const [opening, setOpening] = useState(false);
+  const [feedback, setFeedback] = useState<{
+    tone: "success" | "error";
+    message: string;
+  } | null>(null);
+
+  async function openInstallGuide() {
+    if (opening) return;
+    setOpening(true);
+    setFeedback(null);
+    try {
+      const opened = await openExternalUrl(OLLAMA_INSTALL_URL);
+      setFeedback(
+        opened
+          ? {
+              tone: "success",
+              message: "기본 브라우저에서 Ollama 공식 설치 페이지를 열었습니다.",
+            }
+          : {
+              tone: "error",
+              message: "브라우저가 페이지 열기를 차단했습니다. 아래 공식 주소를 복사해 주세요.",
+            },
+      );
+    } catch {
+      setFeedback({
+        tone: "error",
+        message: "설치 페이지를 열지 못했습니다. 아래 공식 주소를 복사해 브라우저에서 열어 주세요.",
+      });
+    } finally {
+      setOpening(false);
+    }
+  }
+
+  async function copyInstallUrl() {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("clipboard unavailable");
+      await navigator.clipboard.writeText(OLLAMA_INSTALL_URL);
+      setFeedback({ tone: "success", message: "Ollama 공식 다운로드 주소를 복사했습니다." });
+    } catch {
+      installUrlRef.current?.focus();
+      installUrlRef.current?.select();
+      setFeedback({
+        tone: "error",
+        message: "자동으로 복사하지 못했습니다. 선택된 주소를 Ctrl+C로 복사해 주세요.",
+      });
+    }
+  }
+
   return (
     <div aria-live="polite" className="flex flex-col gap-3 text-sm">
       <p className="text-slate-700">{message}</p>
       <div className="flex flex-wrap gap-2">
         <button
           type="button"
-          onClick={() => void openExternalUrl(OLLAMA_INSTALL_URL)}
-          className="rounded-md bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700"
+          onClick={() => void openInstallGuide()}
+          disabled={opening}
+          className="rounded-md bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
         >
-          설치 안내 열기
+          {opening ? "설치 안내 여는 중…" : "설치 안내 열기"}
         </button>
         <button
           type="button"
@@ -132,6 +181,41 @@ function InstallGuide({
           다시 확인
         </button>
       </div>
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="ollama-install-url" className="text-xs font-medium text-slate-700">
+          Ollama 공식 다운로드 주소
+        </label>
+        <div className="flex gap-2">
+          <input
+            id="ollama-install-url"
+            ref={installUrlRef}
+            type="url"
+            readOnly
+            value={OLLAMA_INSTALL_URL}
+            onFocus={(event) => event.currentTarget.select()}
+            className="min-w-0 flex-1 rounded border border-slate-300 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-700"
+          />
+          <button
+            type="button"
+            onClick={() => void copyInstallUrl()}
+            className="rounded border border-slate-300 px-3 py-2 text-xs hover:bg-slate-50"
+          >
+            주소 복사
+          </button>
+        </div>
+      </div>
+      {feedback && (
+        <p
+          role={feedback.tone === "error" ? "alert" : "status"}
+          className={`rounded px-3 py-2 text-xs ${
+            feedback.tone === "error"
+              ? "bg-red-50 text-red-700"
+              : "bg-green-50 text-green-800"
+          }`}
+        >
+          {feedback.message}
+        </p>
+      )}
       {note && <p className="text-xs text-slate-500">{note}</p>}
     </div>
   );
