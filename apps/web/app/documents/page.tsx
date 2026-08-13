@@ -1,6 +1,6 @@
 "use client";
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { ConfirmDialog, PromptDialog } from "@/components/confirm-dialog";
 import { DocumentTable } from "@/components/document-table";
@@ -20,14 +20,48 @@ export default function DocumentsPage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [requestedNextPage, setRequestedNextPage] = useState(false);
+  const [pageNotice, setPageNotice] = useState<string | null>(null);
 
-  const { data, isLoading, isError, refetch } = useQuery({
+  const {
+    data,
+    isLoading,
+    isLoadingError,
+    refetch,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+    isFetchNextPageError,
+  } = useInfiniteQuery({
     queryKey: ["documents"],
-    queryFn: () => listDocuments(),
+    queryFn: ({ pageParam }) => listDocuments(pageParam ?? undefined),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
     // 처리 중 문서가 있으면 2초 간격 폴링
     refetchInterval: (q) =>
-      q.state.data?.items.some((d) => isActive(d.processingStatus)) ? 2000 : false,
+      q.state.data?.pages.some((page) =>
+        page.items.some((document) => isActive(document.processingStatus)),
+      )
+        ? 2000
+        : false,
   });
+
+  const documents = data?.pages.flatMap((page) => page.items) ?? [];
+
+  const loadNextPage = async () => {
+    if (isFetchingNextPage || (!hasNextPage && !isFetchNextPageError)) return;
+    setRequestedNextPage(true);
+    setPageNotice(null);
+    const result = await fetchNextPage();
+    if (!result.isError) {
+      const added = result.data?.pages.at(-1)?.items.length ?? 0;
+      setPageNotice(
+        added > 0
+          ? `학습자료 ${added}개를 더 불러왔습니다.${result.hasNextPage ? "" : " 마지막 학습자료입니다."}`
+          : "더 불러올 학습자료가 없습니다.",
+      );
+    }
+  };
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["documents"] });
 
@@ -97,7 +131,7 @@ export default function DocumentsPage() {
             학습자료를 불러오는 중…
           </div>
         )}
-        {isError && (
+        {isLoadingError && (
           <ErrorBox message="학습자료 목록을 불러오지 못했습니다." onRetry={() => refetch()} />
         )}
         {actionError && <ErrorBox message={actionError} />}
@@ -107,14 +141,43 @@ export default function DocumentsPage() {
           </p>
         )}
         {data && (
-          <DocumentTable
-            items={data.items}
-            busyId={busyId}
-            onRetry={(id) => retryMutation.mutate(id)}
-            onRename={(id, title) => setPendingRename({ id, title })}
-            onDelete={(id, title) => setPendingDelete({ id, title })}
-            onReport={(id) => reportMutation.mutate(id)}
-          />
+          <>
+            <DocumentTable
+              items={documents}
+              busyId={busyId}
+              onRetry={(id) => retryMutation.mutate(id)}
+              onRename={(id, title) => setPendingRename({ id, title })}
+              onDelete={(id, title) => setPendingDelete({ id, title })}
+              onReport={(id) => reportMutation.mutate(id)}
+            />
+            {isFetchNextPageError && (
+              <div className="mt-3">
+                <ErrorBox message="다음 학습자료를 불러오지 못했습니다." />
+              </div>
+            )}
+            {(hasNextPage || requestedNextPage) && (
+              <div className="mt-4 text-center">
+                <button
+                  type="button"
+                  onClick={() => void loadNextPage()}
+                  aria-disabled={isFetchingNextPage || (!hasNextPage && !isFetchNextPageError)}
+                  aria-busy={isFetchingNextPage}
+                  className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 aria-disabled:cursor-default aria-disabled:opacity-50"
+                >
+                  {isFetchingNextPage
+                    ? "불러오는 중…"
+                    : isFetchNextPageError
+                      ? "다음 학습자료 다시 불러오기"
+                      : hasNextPage
+                        ? "학습자료 더 보기"
+                        : "모든 학습자료를 불러왔습니다"}
+                </button>
+                <p role="status" aria-live="polite" className="sr-only">
+                  {pageNotice}
+                </p>
+              </div>
+            )}
+          </>
         )}
       </div>
 

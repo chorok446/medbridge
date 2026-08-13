@@ -62,6 +62,53 @@ describe("DocumentsPage", () => {
     expect(await screen.findByText("심전도 강의")).toBeInTheDocument();
   });
 
+  it("다음 cursor로 21번째 이후 학습자료를 불러온다", async () => {
+    const nextDocument = {
+      ...listing.items[0],
+      id: "d21",
+      title: "신경계 강의",
+      originalFilename: "neuro.pdf",
+    };
+    apiMock.listDocuments.mockImplementation((cursor?: string) => {
+      if (cursor === "next-page") {
+        return Promise.resolve({ items: [nextDocument], nextCursor: null });
+      }
+      return Promise.resolve({ ...listing, nextCursor: "next-page" });
+    });
+    renderPage();
+
+    await screen.findByText("심전도 강의");
+    const loadMore = screen.getByRole("button", { name: "학습자료 더 보기" });
+    await userEvent.click(loadMore);
+
+    expect(await screen.findByText("신경계 강의")).toBeInTheDocument();
+    expect(apiMock.listDocuments).toHaveBeenCalledWith("next-page");
+    expect(loadMore).toHaveFocus();
+    expect(loadMore).toHaveAttribute("aria-disabled", "true");
+    expect(loadMore).not.toBeDisabled();
+    expect(loadMore).toHaveAccessibleName("모든 학습자료를 불러왔습니다");
+    expect(screen.getByRole("status")).toHaveTextContent("학습자료 1개를 더 불러왔습니다");
+  });
+
+  it("다음 페이지 조회 실패는 기존 목록을 유지하고 별도로 안내한다", async () => {
+    apiMock.listDocuments.mockImplementation((cursor?: string) => {
+      if (cursor === "next-page") return Promise.reject(new Error("next page failed"));
+      return Promise.resolve({ ...listing, nextCursor: "next-page" });
+    });
+    renderPage();
+
+    await screen.findByText("심전도 강의");
+    await userEvent.click(screen.getByRole("button", { name: "학습자료 더 보기" }));
+
+    expect(await screen.findByText("다음 학습자료를 불러오지 못했습니다.")).toBeInTheDocument();
+    expect(screen.getByText("심전도 강의")).toBeInTheDocument();
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(screen.queryByText("학습자료 목록을 불러오지 못했습니다.")).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "다음 학습자료 다시 불러오기" }),
+    ).toHaveFocus();
+  });
+
   it("목록 조회 실패 시 사용자 문구와 다시 시도 버튼을 보여준다", async () => {
     apiMock.listDocuments.mockRejectedValue(new Error("ECONNREFUSED 127.0.0.1"));
     renderPage();

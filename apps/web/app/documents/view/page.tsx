@@ -218,7 +218,7 @@ function DocumentDetail() {
       {effectiveTab === "extraction" && fileUrlQuery.data ? (
         <ExtractionReview doc={doc} fileUrl={fileUrlQuery.data} />
       ) : effectiveTab === "summary" && fileUrlQuery.data ? (
-        <SummaryView doc={doc} fileUrl={fileUrlQuery.data} />
+        <SummaryView key={doc.id} doc={doc} fileUrl={fileUrlQuery.data} />
       ) : effectiveTab === "qa" && fileUrlQuery.data ? (
         <DocumentQa doc={doc} fileUrl={fileUrlQuery.data} />
       ) : (

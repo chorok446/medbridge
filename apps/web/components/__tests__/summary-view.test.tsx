@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SummaryView } from "@/components/summary-view";
 import type { DocumentSummary } from "@/types/api";
 
@@ -63,24 +63,43 @@ const overviewArtifact = {
   ],
 };
 
-function renderView() {
+function renderView(initialDoc = doc) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
+  const rendered = render(
     <QueryClientProvider client={client}>
-      <SummaryView doc={doc} fileUrl="blob:test" />
+      <SummaryView doc={initialDoc} fileUrl="blob:test" />
     </QueryClientProvider>,
   );
+  return { ...rendered, client };
 }
 
 describe("SummaryView", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    apiMock.getSummaries.mockResolvedValue({ stale: false, artifacts: [] });
+    apiMock.cancelSummary.mockResolvedValue({ runId: "r1", started: false });
+  });
   afterEach(() => vi.restoreAllMocks());
 
-  it("모델 미설정이면 설정 안내를 보여준다", async () => {
+  it("모델 미설정이어도 저장된 요약을 보여준다", async () => {
     apiMock.getSummaryStatus.mockResolvedValue(status({ providerAvailable: false, status: null }));
+    apiMock.getSummaries.mockResolvedValue({ stale: false, artifacts: [overviewArtifact] });
     renderView();
     expect(
-      await screen.findByText("요약 기능을 사용하려면 앱 설정에서 요약 모델을 연결해 주세요."),
+      await screen.findByText("새 요약을 만들려면 앱 설정에서 요약 모델을 연결해 주세요."),
     ).toBeInTheDocument();
+    expect(screen.getByText("이 문서는 심부전을 다룹니다.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "요약 만들기" })).not.toBeInTheDocument();
+  });
+
+  it("상태 조회 실패와 저장 결과 조회 실패를 각각 구분해 안내한다", async () => {
+    apiMock.getSummaryStatus.mockRejectedValue(new Error("status failed"));
+    apiMock.getSummaries.mockRejectedValue(new Error("list failed"));
+    renderView();
+
+    expect(await screen.findByText("요약 상태를 확인하지 못했습니다.")).toBeInTheDocument();
+    expect(screen.getByText("저장된 요약을 불러오지 못했습니다.")).toBeInTheDocument();
+    expect(screen.queryByText("아직 요약을 만들지 않았어요.")).not.toBeInTheDocument();
   });
 
   it("아직 생성 안 함 상태면 요약 만들기 버튼을 보여준다", async () => {
@@ -93,6 +112,45 @@ describe("SummaryView", () => {
     apiMock.getSummaryStatus.mockResolvedValue(status({ status: "running", progress: 50 }));
     renderView();
     expect(await screen.findByText(/요약을 만드는 중이에요/)).toBeInTheDocument();
+  });
+
+  it("생성 중인 요약을 취소할 수 있다", async () => {
+    apiMock.getSummaryStatus.mockResolvedValue(status({ status: "running", progress: 50 }));
+    renderView();
+
+    await userEvent.click(await screen.findByRole("button", { name: "요약 취소" }));
+    await waitFor(() => expect(apiMock.cancelSummary).toHaveBeenCalledWith("d1"));
+  });
+
+  it("진행 상태가 끝나면 저장된 요약을 다시 불러온다", async () => {
+    apiMock.getSummaryStatus.mockResolvedValue(status({ status: "running", progress: 50 }));
+    apiMock.getSummaries
+      .mockResolvedValueOnce({ stale: false, artifacts: [] })
+      .mockResolvedValue({ stale: false, artifacts: [overviewArtifact] });
+    const { client } = renderView();
+
+    await screen.findByText(/요약을 만드는 중이에요/);
+    await waitFor(() => expect(apiMock.getSummaries).toHaveBeenCalledTimes(1));
+    client.setQueryData(["summary-status", "d1"], status({ status: "succeeded" }));
+
+    expect(await screen.findByText("이 문서는 심부전을 다룹니다.")).toBeInTheDocument();
+    expect(apiMock.getSummaries).toHaveBeenCalledTimes(2);
+  });
+
+  it("진행 중 상태를 건너뛰고 바로 완료돼도 새 요약을 불러온다", async () => {
+    apiMock.createSummary.mockResolvedValue({ runId: "r1", started: true });
+    apiMock.getSummaryStatus
+      .mockResolvedValueOnce(status({ status: null }))
+      .mockResolvedValue(status({ status: "succeeded" }));
+    apiMock.getSummaries
+      .mockResolvedValueOnce({ stale: false, artifacts: [] })
+      .mockResolvedValue({ stale: false, artifacts: [overviewArtifact] });
+    renderView();
+
+    await userEvent.click(await screen.findByRole("button", { name: "요약 만들기" }));
+
+    expect(await screen.findByText("이 문서는 심부전을 다룹니다.")).toBeInTheDocument();
+    expect(screen.queryByText(/요약을 만드는 중이에요/)).not.toBeInTheDocument();
   });
 
   it("컨텍스트 초과는 무엇을 바꿔야 하는지 알려준다", async () => {
@@ -204,6 +262,14 @@ describe("SummaryView", () => {
     expect(screen.getByRole("button", { name: "다시 요약하기" })).toBeInTheDocument();
   });
 
+  it("저장 결과가 stale이면 과거 상태 응답이 false여도 경고한다", async () => {
+    apiMock.getSummaryStatus.mockResolvedValue(status({ stale: false }));
+    apiMock.getSummaries.mockResolvedValue({ stale: true, artifacts: [overviewArtifact] });
+    renderView();
+
+    expect(await screen.findByText(/문서가 바뀌어 이 요약은 오래된 내용/)).toBeInTheDocument();
+  });
+
   it("출처를 클릭하면 해당 페이지로 이동한다", async () => {
     apiMock.getSummaryStatus.mockResolvedValue(status());
     apiMock.getSummaries.mockResolvedValue({ stale: false, artifacts: [overviewArtifact] });
@@ -265,6 +331,9 @@ describe("SummaryView", () => {
 });
 
 describe("요약 출처 표기", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
   afterEach(() => vi.restoreAllMocks());
 
   it("스캔으로 읽은 근거를 사람 말로 알려준다", async () => {
