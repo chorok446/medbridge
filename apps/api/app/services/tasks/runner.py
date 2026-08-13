@@ -180,6 +180,7 @@ class LocalTaskRunner:
 
         to_enqueue: list[uuid.UUID] = []
         to_extract: list[uuid.UUID] = []
+        interrupted_uploads: list[uuid.UUID] = []
         async with get_session_factory()() as session:
             stmt = select(Document).where(
                 Document.processing_status.in_(
@@ -200,6 +201,7 @@ class LocalTaskRunner:
                     ProcessingStatus.CREATED,
                     ProcessingStatus.UPLOADING,
                 ):
+                    interrupted_uploads.append(doc.id)
                     doc.processing_status = ProcessingStatus.FAILED  # 내부 복구 경로
                     doc.storage_key = None
                     doc.failure_code = "VALIDATION_FAILED"
@@ -216,6 +218,30 @@ class LocalTaskRunner:
                         doc.processing_status = ProcessingStatus.QUEUED  # 내부 복구 경로
                     to_enqueue.append(doc.id)
             await session.commit()
+        # 삭제 실패로 orphan이 남아도 다음 기동 때 다시 시도한다. storage_key가 없는
+        # failed 행은 정상 파일을 가리킬 수 없으므로 UUID 경로 삭제가 안전한 marker다.
+        async with get_session_factory()() as session:
+            failed_without_storage = list(
+                (
+                    await session.execute(
+                        select(Document.id).where(
+                            Document.processing_status == ProcessingStatus.FAILED,
+                            Document.storage_key.is_(None),
+                        )
+                    )
+                ).scalars()
+            )
+        interrupted_uploads.extend(
+            doc_id for doc_id in failed_without_storage if doc_id not in interrupted_uploads
+        )
+        if interrupted_uploads:
+            from app.services.documents import storage
+
+            for doc_id in interrupted_uploads:
+                try:
+                    await asyncio.to_thread(storage.delete_original, storage.object_key(doc_id))
+                except Exception:
+                    logger.warning("interrupted_upload_cleanup_failed", document_id=str(doc_id))
         for doc_id in to_enqueue:
             self.enqueue_validate(doc_id, f"recovery-{uuid.uuid4().hex[:8]}")
         for doc_id in to_extract:

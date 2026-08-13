@@ -1,7 +1,9 @@
+import asyncio
 import subprocess
 import uuid
 from pathlib import Path
 
+import pytest
 from sqlalchemy import select
 
 from app.core.paths import get_path_provider
@@ -30,6 +32,85 @@ async def upload_and_wait(client, data: bytes) -> dict:
 
 
 class TestUploadFlow:
+    async def test_raw_gui_upload_streams_without_multipart_spool(self, client):
+        data = make_pdf(pages=2)
+
+        async def body():
+            for offset in range(0, len(data), 97):
+                yield data[offset : offset + 97]
+
+        res = await client.post(
+            "/api/documents/stream",
+            content=body(),
+            headers={
+                "Content-Type": "application/pdf",
+                "X-MedBridge-Filename": "%ED%95%99%EC%8A%B5%EC%9E%90%EB%A3%8C.pdf",
+                "X-MedBridge-File-Size": str(len(data)),
+            },
+        )
+
+        assert res.status_code == 201, res.text
+        created = res.json()["data"]
+        async with get_session_factory()() as session:
+            doc = await session.get(Document, uuid.UUID(created["id"]))
+            assert doc is not None
+            assert doc.original_filename == "학습자료.pdf"
+            assert doc.file_size == len(data)
+        assert list(storage.get_storage().staging_root.glob("upload-*.tmp")) == []
+
+    async def test_declared_oversize_rejected_before_body_is_consumed(self, client, monkeypatch):
+        from types import SimpleNamespace
+
+        from app.services.documents import service
+
+        monkeypatch.setattr(service, "get_settings", lambda: SimpleNamespace(max_upload_bytes=10))
+        reads = 0
+
+        async def body():
+            nonlocal reads
+            reads += 1
+            yield b"%PDF-large-body-that-must-not-be-read"
+
+        res = await client.post(
+            "/api/documents/stream",
+            content=body(),
+            headers={
+                "Content-Type": "application/pdf",
+                "X-MedBridge-Filename": "large.pdf",
+                "X-MedBridge-File-Size": "11",
+            },
+        )
+
+        assert res.status_code == 413
+        assert reads == 0
+
+    async def test_lying_size_stops_request_stream_at_server_limit(self, client, monkeypatch):
+        from types import SimpleNamespace
+
+        from app.services.documents import service
+
+        monkeypatch.setattr(service, "get_settings", lambda: SimpleNamespace(max_upload_bytes=10))
+        reads = 0
+
+        async def body():
+            nonlocal reads
+            for chunk in (b"%PDF-", b"12345", b"overflow", b"never-consumed"):
+                reads += 1
+                yield chunk
+
+        res = await client.post(
+            "/api/documents/stream",
+            content=body(),
+            headers={
+                "Content-Type": "application/pdf",
+                "X-MedBridge-Filename": "large.pdf",
+            },
+        )
+
+        assert res.status_code == 413
+        assert reads == 3
+        assert list(storage.get_storage().staging_root.glob("upload-*.tmp")) == []
+
     async def test_normal_upload_to_ready(self, client):
         data = make_pdf(pages=2)
         res = await client.post("/api/documents", **upload_kwargs(data))
@@ -69,6 +150,7 @@ class TestUploadFlow:
         second = (await client.post("/api/documents", **upload_kwargs(data))).json()["data"]
         assert second["duplicate"] is True
         assert second["id"] == first["id"]
+        assert list(storage.get_storage().staging_root.glob("upload-*.tmp")) == []
 
     async def test_file_stored_in_app_data_with_uuid_key(self, client):
         created = (
@@ -241,9 +323,7 @@ class TestCompensation:
         from app.services.documents import service
 
         def boom(key: str, data: bytes) -> None:
-            raise AppError(
-                ErrorCode.STORAGE_UPLOAD_FAILED, "fail", status_code=502, retryable=True
-            )
+            raise AppError(ErrorCode.STORAGE_UPLOAD_FAILED, "fail", status_code=502, retryable=True)
 
         monkeypatch.setattr(service.storage, "put_original", boom)
         res = await client.post("/api/documents", **upload_kwargs(make_pdf()))
@@ -254,6 +334,68 @@ class TestCompensation:
             assert doc is not None
             assert doc.processing_status == ProcessingStatus.FAILED
             assert doc.storage_key is None
+
+    async def test_unexpected_failure_after_promote_removes_orphan(self, client, monkeypatch):
+        from app.services.documents import service
+
+        real_put = service.storage.put_original
+
+        def promote_then_fail(key, payload) -> None:
+            real_put(key, payload)
+            raise RuntimeError("unexpected failure after replace")
+
+        monkeypatch.setattr(service.storage, "put_original", promote_then_fail)
+        res = await client.post("/api/documents", **upload_kwargs(make_pdf()))
+
+        assert res.status_code == 502
+        async with get_session_factory()() as session:
+            doc = (await session.execute(select(Document))).scalars().one()
+            assert doc.processing_status == ProcessingStatus.FAILED
+            assert doc.storage_key is None
+            assert not storage.original_exists(storage.object_key(doc.id))
+        assert list(storage.get_storage().staging_root.glob("upload-*.tmp")) == []
+
+    async def test_cancel_after_promote_removes_orphan(self, client, monkeypatch):
+        from app.services.documents import service
+
+        real_put = service.storage.put_original
+
+        def promote_then_cancel(key, payload) -> None:
+            real_put(key, payload)
+            raise asyncio.CancelledError
+
+        monkeypatch.setattr(service.storage, "put_original", promote_then_cancel)
+        # BaseHTTPMiddleware는 child task의 CancelledError를 "응답 없음"으로 감싼다.
+        with pytest.raises((asyncio.CancelledError, RuntimeError)):
+            await client.post("/api/documents", **upload_kwargs(make_pdf()))
+
+        async with get_session_factory()() as session:
+            doc = (await session.execute(select(Document))).scalars().one()
+            assert not storage.original_exists(storage.object_key(doc.id))
+        assert list(storage.get_storage().staging_root.glob("upload-*.tmp")) == []
+
+    async def test_cancel_during_final_db_commit_removes_orphan(self, client, monkeypatch):
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        await client.get("/api/profile")  # profile 생성 commit은 계수에서 제외한다
+        real_commit = AsyncSession.commit
+        calls = 0
+
+        async def cancel_second_commit(session) -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise asyncio.CancelledError
+            await real_commit(session)
+
+        monkeypatch.setattr(AsyncSession, "commit", cancel_second_commit)
+        with pytest.raises((asyncio.CancelledError, RuntimeError)):
+            await client.post("/api/documents", **upload_kwargs(make_pdf()))
+
+        async with get_session_factory()() as session:
+            doc = (await session.execute(select(Document))).scalars().one()
+            assert not storage.original_exists(storage.object_key(doc.id))
+        assert list(storage.get_storage().staging_root.glob("upload-*.tmp")) == []
 
     async def test_enqueue_failure_marks_failed_retryable(self, client, monkeypatch):
         from app.services.documents import service
@@ -304,9 +446,9 @@ class TestListingAndFile:
         page1 = (await client.get("/api/documents?limit=2")).json()["data"]
         assert len(page1["items"]) == 2
         assert page1["nextCursor"]
-        page2 = (
-            await client.get(f"/api/documents?limit=2&cursor={page1['nextCursor']}")
-        ).json()["data"]
+        page2 = (await client.get(f"/api/documents?limit=2&cursor={page1['nextCursor']}")).json()[
+            "data"
+        ]
         assert len(page2["items"]) == 1
         assert page2["nextCursor"] is None
 

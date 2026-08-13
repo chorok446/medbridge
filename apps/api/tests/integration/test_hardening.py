@@ -50,10 +50,10 @@ class TestCrashBoundary:
     async def test_crashed_validation_does_not_stick_in_validating(self, client, monkeypatch):
         from app.services.tasks import validate as validate_mod
 
-        def boom(_key: str) -> bytes:
+        def boom(_path) -> None:
             raise RuntimeError("unexpected crash")
 
-        monkeypatch.setattr(validate_mod.storage, "get_original", boom)
+        monkeypatch.setattr(validate_mod.validation, "inspect_pdf_path", boom)
         res = await client.post("/api/documents", **upload_kwargs(make_pdf()))
         doc_id = res.json()["data"]["id"]
         await drain_jobs()
@@ -102,6 +102,34 @@ class TestStartupRecovery:
         detail = (await client.get(f"/api/documents/{doc_id}")).json()["data"]
         assert detail["processingStatus"] == "failed"
         assert "다시 업로드" in detail["failureMessage"]
+        assert not storage.original_exists(storage.object_key(uuid.UUID(doc_id)))
+
+    async def test_interrupted_upload_cleanup_retries_on_next_start(self, client, monkeypatch):
+        res = await client.post("/api/documents", **upload_kwargs(make_pdf()))
+        doc_id = res.json()["data"]["id"]
+        await drain_jobs()
+        await self._set_status(doc_id, ProcessingStatus.UPLOADING)
+
+        real_delete = storage.delete_original
+        calls = 0
+
+        def fail_once(key: str) -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise OSError("temporary file lock")
+            real_delete(key)
+
+        monkeypatch.setattr(storage, "delete_original", fail_once)
+        from app.services.tasks.runner import get_task_runner
+
+        await get_task_runner().recover_interrupted()
+        key = storage.object_key(uuid.UUID(doc_id))
+        assert storage.original_exists(key)
+
+        await get_task_runner().recover_interrupted()
+        assert not storage.original_exists(key)
+        assert calls == 2
 
 
 class TestDuplicateAfterFailure:
@@ -220,17 +248,23 @@ class TestTokenGuard:
 
     async def test_upload_path_preflight_allows_content_type_and_token(self, token_client):
         res = await token_client.options(
-            "/api/documents",
+            "/api/documents/stream",
             headers={
                 "Origin": "http://tauri.localhost",
                 "Access-Control-Request-Method": "POST",
-                "Access-Control-Request-Headers": "content-type, x-medbridge-token",
+                "Access-Control-Request-Headers": (
+                    "content-type, x-medbridge-token, x-medbridge-filename, "
+                    "x-medbridge-file-size, x-medbridge-title"
+                ),
             },
         )
         assert res.status_code in (200, 204)
         allow_headers = res.headers["access-control-allow-headers"].lower()
         assert "content-type" in allow_headers
         assert "x-medbridge-token" in allow_headers
+        assert "x-medbridge-filename" in allow_headers
+        assert "x-medbridge-file-size" in allow_headers
+        assert "x-medbridge-title" in allow_headers
 
     async def test_disallowed_origin_gets_no_cors_header(self, token_client):
         res = await token_client.options(

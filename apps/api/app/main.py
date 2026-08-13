@@ -174,12 +174,16 @@ async def lifespan(app: FastAPI):
     import asyncio
     import os
 
+    from app.services.documents import storage
     from app.services.system import runtime
     from app.services.tasks.runner import get_task_runner
 
     # 중복 sidecar 실행 방지 + stale runtime 파일 정리
     runtime.acquire_single_instance(int(os.environ.get("MEDBRIDGE_BOUND_PORT", "0")))
     try:
+        removed_staging = await asyncio.to_thread(storage.cleanup_staged_uploads)
+        if removed_staging:
+            logger.info("stale_uploads_removed", count=removed_staging)
         await asyncio.to_thread(run_migrations)
         recovered = await get_task_runner().recover_interrupted()
         logger.info("sidecar_ready", recovered_jobs=recovered)
@@ -278,7 +282,13 @@ def create_app() -> FastAPI:
         ],
         allow_credentials=False,
         allow_methods=["*"],
-        allow_headers=["X-MedBridge-Token", "Content-Type"],
+        allow_headers=[
+            "X-MedBridge-Token",
+            "X-MedBridge-Filename",
+            "X-MedBridge-File-Size",
+            "X-MedBridge-Title",
+            "Content-Type",
+        ],
     )
 
     @app.exception_handler(AppError)
