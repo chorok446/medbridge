@@ -46,6 +46,38 @@ export async function streamQuestion(
   await consumeNdjson<QaStreamEvent>(res.body, opts.onEvent);
 }
 
+/** 기존 user/assistant 행을 재사용해 마지막 실패·변경·중단 답변을 다시 스트리밍한다. */
+export async function streamRetry(
+  documentId: string,
+  threadId: string,
+  opts: {
+    signal: AbortSignal;
+    onEvent: (event: QaStreamEvent) => void;
+    learnerLevel?: string;
+  },
+): Promise<void> {
+  const { base, token } = await getApiConfig();
+  const res = await fetch(
+    `${base}/api/documents/${documentId}/qa/threads/${threadId}/retry/stream`,
+    {
+      method: "POST",
+      signal: opts.signal,
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { "X-MedBridge-Token": token } : {}),
+      },
+      body: JSON.stringify(opts.learnerLevel ? { learnerLevel: opts.learnerLevel } : {}),
+    },
+  );
+
+  if (!res.ok || !res.body) {
+    const body: unknown = await res.json().catch(() => null);
+    throw apiErrorFromResponse(res, body);
+  }
+
+  await consumeNdjson<QaStreamEvent>(res.body, opts.onEvent);
+}
+
 export interface QaMessageStatusOut {
   id: string;
   status: string;

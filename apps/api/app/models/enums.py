@@ -136,6 +136,14 @@ QA_ACTIVE_STATUSES = (
     QaMessageStatus.FINALIZING,
 )
 
+# 사용자가 같은 질문으로 안전하게 다시 시도할 수 있는 terminal 상태. API의 canRetry,
+# 동기 재시도, 스트리밍 재시도가 이 한 계약을 공유해 화면/서버 상태가 어긋나지 않게 한다.
+QA_RETRYABLE_STATUSES = (
+    QaMessageStatus.FAILED,
+    QaMessageStatus.REVISION_CHANGED,
+    QaMessageStatus.INTERRUPTED,
+)
+
 
 class QaClaimVerification(enum.StrEnum):
     SUPPORTED = "supported"

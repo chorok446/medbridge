@@ -2,8 +2,8 @@
 
 import { useCallback, useRef, useState } from "react";
 import { ApiError } from "@/lib/api/client";
-import { cancelStream, streamQuestion } from "@/lib/api/qa-stream";
-import type { QaMessage, QaStreamPhase, QaStreamSource } from "@/types/qa";
+import { cancelStream, streamQuestion, streamRetry } from "@/lib/api/qa-stream";
+import type { QaMessage, QaStreamEvent, QaStreamPhase, QaStreamSource } from "@/types/qa";
 
 export interface StreamedClaim {
   claimIndex: number;
@@ -48,8 +48,14 @@ export function useQaStream(documentId: string) {
     setState(IDLE);
   }, []);
 
-  const ask = useCallback(
-    async (threadId: string, question: string, learnerLevel?: string) => {
+  const run = useCallback(
+    async (
+      threadId: string,
+      start: (opts: {
+        signal: AbortSignal;
+        onEvent: (event: QaStreamEvent) => void;
+      }) => Promise<void>,
+    ) => {
       abortRef.current?.abort();
       const gen = (genRef.current += 1);
       const controller = new AbortController();
@@ -61,9 +67,8 @@ export function useQaStream(documentId: string) {
       let sawTerminal = false;
 
       try {
-        await streamQuestion(documentId, threadId, question, {
+        await start({
           signal: controller.signal,
-          learnerLevel,
           onEvent: (event) => {
             if (!fresh()) return;
             if (
@@ -121,7 +126,25 @@ export function useQaStream(documentId: string) {
         setState((s) => ({ ...s, phase: "failed", errorStatus: status }));
       }
     },
-    [documentId],
+    [],
+  );
+
+  const ask = useCallback(
+    async (threadId: string, question: string, learnerLevel?: string) => {
+      await run(threadId, (opts) =>
+        streamQuestion(documentId, threadId, question, { ...opts, learnerLevel }),
+      );
+    },
+    [documentId, run],
+  );
+
+  const retry = useCallback(
+    async (threadId: string, learnerLevel?: string) => {
+      await run(threadId, (opts) =>
+        streamRetry(documentId, threadId, { ...opts, learnerLevel }),
+      );
+    },
+    [documentId, run],
   );
 
   const cancel = useCallback(async () => {
@@ -157,5 +180,5 @@ export function useQaStream(documentId: string) {
     state.phase !== "interrupted" &&
     state.phase !== "failed";
 
-  return { state, active, ask, cancel, reset };
+  return { state, active, ask, retry, cancel, reset };
 }

@@ -70,6 +70,18 @@ async def collect(client, doc_id, tid, question="심장은 무엇을 하나요?"
     return events
 
 
+async def collect_retry(client, doc_id, tid) -> list[dict]:
+    events: list[dict] = []
+    async with client.stream(
+        "POST", f"/api/documents/{doc_id}/qa/threads/{tid}/retry/stream", json={}
+    ) as resp:
+        assert resp.status_code == 200, await resp.aread()
+        async for line in resp.aiter_lines():
+            if line.strip():
+                events.append(json.loads(line))
+    return events
+
+
 class TestHappyPath:
     async def test_started_claim_completed_with_sources(self, client):
         await enable_deterministic()
@@ -331,6 +343,72 @@ class TestRecovery:
                 )
             ).scalar_one()
         assert active == 0
+
+    async def test_recovered_interrupted_answer_can_retry_via_stream(self, client):
+        await enable_deterministic()
+        doc_id, tid = await setup_doc(client)
+        async with get_session_factory()() as s:
+            doc = await s.get(Document, uuid.UUID(doc_id))
+            user_msg = QaMessage(
+                thread_id=uuid.UUID(tid),
+                role=QaMessageRole.USER,
+                content="심장은 무엇을 하나요?",
+                status=QaMessageStatus.COMPLETED,
+                sequence_number=1,
+                document_revision=doc.content_revision,
+                chunk_revision=doc.chunk_revision,
+            )
+            assistant_msg = QaMessage(
+                thread_id=uuid.UUID(tid),
+                role=QaMessageRole.ASSISTANT,
+                content="",
+                status=QaMessageStatus.STREAMING,
+                sequence_number=2,
+                document_revision=doc.content_revision,
+                chunk_revision=doc.chunk_revision,
+                stream_request_id="before-restart",
+                draft_content="부분 답변",
+            )
+            s.add_all([user_msg, assistant_msg])
+            await s.commit()
+            assistant_id = assistant_msg.id
+
+        from app.services.qa.stream_service import recover_interrupted_streams
+
+        assert await recover_interrupted_streams() >= 1
+        detail = await client.get(f"/api/documents/{doc_id}/qa/threads/{tid}")
+        interrupted = [
+            m for m in detail.json()["data"]["messages"] if m["role"] == "assistant"
+        ][-1]
+        assert interrupted["status"] == "interrupted"
+        assert interrupted["canRetry"] is True
+
+        events = await collect_retry(client, doc_id, tid)
+        started = next(e for e in events if e["type"] == "started")
+        completed = next(e for e in events if e["type"] == "completed")
+        assert started["messageId"] == str(assistant_id)
+        assert completed["message"]["status"] in ("completed", "insufficient_evidence")
+        assert completed["message"]["canRetry"] is False
+
+        async with get_session_factory()() as s:
+            users = (
+                await s.execute(
+                    select(func.count()).select_from(QaMessage).where(
+                        QaMessage.thread_id == uuid.UUID(tid),
+                        QaMessage.role == QaMessageRole.USER,
+                    )
+                )
+            ).scalar_one()
+            assistants = (
+                await s.execute(
+                    select(func.count()).select_from(QaMessage).where(
+                        QaMessage.thread_id == uuid.UUID(tid),
+                        QaMessage.role == QaMessageRole.ASSISTANT,
+                    )
+                )
+            ).scalar_one()
+        assert users == 1
+        assert assistants == 1
 
 
 def _fake_async(provider):

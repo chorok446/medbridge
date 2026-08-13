@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_current_user
 from app.db.session import get_db
+from app.models.enums import QA_RETRYABLE_STATUSES
 from app.models.qa import QaClaim, QaMessage, QaThread
 from app.models.user import User
 from app.schemas.common import CamelModel, Envelope, utc_isoformat
@@ -72,6 +73,7 @@ class MessageOut(CamelModel):
     sequence_number: int
     retrieval_mode: str | None
     claims: list[ClaimOut]
+    can_retry: bool
     # 모델이 제안한 다음 질문. 옛 메시지는 빈 배열로 나간다.
     followups: list[str] = []
 
@@ -109,6 +111,7 @@ def _message_out(m: QaMessage, claims: list[QaClaim]) -> MessageOut:
         sequence_number=m.sequence_number,
         retrieval_mode=m.retrieval_mode,
         claims=[_claim_out(c) for c in claims],
+        can_retry=m.role.value == "assistant" and m.status in QA_RETRYABLE_STATUSES,
         followups=list(m.followups_json or []),
     )
 
@@ -270,6 +273,39 @@ async def stream_message(
         document_id, thread_id, aid, user_content, request_id,
         start_content_rev, start_chunk_rev, request,
         learner_level=learner_level,
+    )
+    return StreamingResponse(
+        sp.bounded(events),
+        media_type=sp.CONTENT_TYPE,
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/{document_id}/qa/threads/{thread_id}/retry/stream")
+async def retry_message_stream(
+    document_id: uuid.UUID,
+    thread_id: uuid.UUID,
+    request: Request,
+    body: RetryIn | None = None,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> StreamingResponse:
+    """기존 질문/assistant 행을 재사용하는 안전한 스트리밍 재시도."""
+    doc = await get_owned_document(db, user, document_id)
+    thread = await qa_service.get_owned_thread(db, doc, thread_id)
+    user_msg, assistant_msg, request_id = await qa_stream.prepare_retry_stream(
+        db, doc, user, thread
+    )
+    events = qa_stream.run_stream(
+        document_id,
+        thread_id,
+        assistant_msg.id,
+        user_msg.content,
+        request_id,
+        doc.content_revision,
+        doc.chunk_revision,
+        request,
+        learner_level=(body.learner_level if body else "nursing_student"),
     )
     return StreamingResponse(
         sp.bounded(events),

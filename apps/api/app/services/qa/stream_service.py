@@ -14,7 +14,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import cast
 
-from sqlalchemy import CursorResult, select, update
+from sqlalchemy import CursorResult, delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,6 +23,7 @@ from app.core.logging import get_logger
 from app.models.document import Document
 from app.models.enums import (
     QA_ACTIVE_STATUSES,
+    QA_RETRYABLE_STATUSES,
     QaClaimVerification,
     QaMessageRole,
     QaMessageStatus,
@@ -47,6 +48,7 @@ from app.services.qa.service import (
     _recent_history,
     _validate_question,
     compute_chunk_hash,
+    get_retry_messages,
     require_available_provider,
 )
 from app.services.qa.settings import REVISION_RECHECK_EVERY_CLAIMS, STREAM_POLL_INTERVAL_SEC
@@ -127,6 +129,66 @@ async def prepare_stream(
             status_code=409,
         ) from exc
     await db.refresh(user_msg)
+    await db.refresh(assistant_msg)
+    return user_msg, assistant_msg, request_id
+
+
+async def prepare_retry_stream(
+    db: AsyncSession, doc: Document, user: User, thread: QaThread
+) -> tuple[QaMessage, QaMessage, str]:
+    """마지막 실패/변경/중단 답변을 기존 질문으로 다시 스트리밍할 준비를 한다."""
+    user_msg, assistant_msg = await get_retry_messages(db, thread)
+
+    provider = await get_qa_streaming_provider(db)
+    require_available_provider(provider, user, doc)
+
+    from sqlalchemy import func
+
+    chunk_count = (
+        await db.execute(
+            select(func.count()).select_from(qa_context.DocumentChunk).where(
+                qa_context.DocumentChunk.document_id == doc.id
+            )
+        )
+    ).scalar_one()
+    if chunk_count == 0 or doc.chunk_revision != doc.content_revision:
+        raise AppError(
+            ErrorCode.INVALID_STATE,
+            "먼저 문서 검색 준비(청크 생성)를 완료해 주세요.",
+            status_code=409,
+        )
+
+    request_id = uuid.uuid4().hex
+    now = datetime.now(UTC)
+    # 방어적으로 이전 claim을 지운다. 정상 실패/중단 경로에는 없지만, 오래된 버전이나
+    # 비정상 종료에서 남았더라도 새 답변의 claim_index 유니크 제약과 섞이지 않게 한다.
+    await db.execute(delete(QaClaim).where(QaClaim.message_id == assistant_msg.id))
+    assistant_msg.status = QaMessageStatus.STREAMING
+    assistant_msg.content = ""
+    assistant_msg.error_code = None
+    assistant_msg.document_revision = doc.content_revision
+    assistant_msg.chunk_revision = doc.chunk_revision
+    assistant_msg.provider_name = provider.provider_name
+    assistant_msg.model_name = provider.model_name
+    assistant_msg.retrieval_mode = None
+    assistant_msg.followups_json = None
+    assistant_msg.draft_content = None
+    assistant_msg.stream_request_id = request_id
+    assistant_msg.stream_started_at = now
+    assistant_msg.stream_updated_at = now
+    assistant_msg.cancel_requested_at = None
+    assistant_msg.interrupted_at = None
+    assistant_msg.last_stream_seq = 0
+    assistant_msg.completed_at = None
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise AppError(
+            ErrorCode.INVALID_STATE,
+            "이 대화에서 답변을 만드는 중입니다. 잠시 후 다시 시도해 주세요.",
+            status_code=409,
+        ) from exc
     await db.refresh(assistant_msg)
     return user_msg, assistant_msg, request_id
 
@@ -265,6 +327,7 @@ async def _message_dto(factory, assistant_id: uuid.UUID) -> dict:
         "role": "assistant",
         "content": msg.content if msg else "",
         "status": msg.status.value if msg else "failed",
+        "canRetry": bool(msg and msg.status in QA_RETRYABLE_STATUSES),
         "claims": [
             {
                 "text": c.claim_text,

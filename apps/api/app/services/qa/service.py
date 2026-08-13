@@ -9,14 +9,19 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError, ErrorCode
 from app.core.logging import get_logger
 from app.models.document import Document
-from app.models.enums import QaMessageRole, QaMessageStatus
+from app.models.enums import (
+    QA_RETRYABLE_STATUSES,
+    QaClaimVerification,
+    QaMessageRole,
+    QaMessageStatus,
+)
 from app.models.qa import QaClaim, QaMessage, QaThread
 from app.models.user import User
 from app.services.qa import context as qa_context
@@ -293,7 +298,57 @@ async def retry_last(
     *,
     learner_level: str = "nursing_student",
 ) -> AnswerOutcome:
-    """마지막 실패/변경 assistant 메시지를 재시도한다(직전 user 질문으로)."""
+    """마지막 재시도 가능 assistant 메시지를 재시도한다(직전 user 질문으로)."""
+    last_user, last_assistant = await get_retry_messages(db, thread)
+
+    provider = await get_qa_provider(db)
+    require_available_provider(provider, user, doc)
+
+    # 실패한 assistant 메시지를 pending으로 되돌린다(부분 유니크 인덱스가 동시 재시도를 막는다).
+    start_content_rev = doc.content_revision
+    start_chunk_rev = doc.chunk_revision
+    last_assistant.status = QaMessageStatus.PENDING
+    last_assistant.content = ""
+    last_assistant.error_code = None
+    last_assistant.document_revision = start_content_rev
+    last_assistant.chunk_revision = start_chunk_rev
+    last_assistant.provider_name = provider.provider_name
+    last_assistant.model_name = provider.model_name
+    last_assistant.retrieval_mode = None
+    last_assistant.followups_json = None
+    last_assistant.draft_content = None
+    last_assistant.stream_request_id = None
+    last_assistant.stream_started_at = None
+    last_assistant.stream_updated_at = None
+    last_assistant.cancel_requested_at = None
+    last_assistant.interrupted_at = None
+    last_assistant.last_stream_seq = 0
+    last_assistant.completed_at = None
+    await db.execute(delete(QaClaim).where(QaClaim.message_id == last_assistant.id))
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise AppError(
+            ErrorCode.INVALID_STATE,
+            "이 대화에서 답변을 만드는 중입니다. 잠시 후 다시 시도해 주세요.",
+            status_code=409,
+        ) from exc
+
+    history = await _recent_history(db, thread.id, before_seq=last_user.sequence_number)
+    return await _generate(
+        db, doc, user, thread, last_user, last_assistant, last_user.content, history,
+        start_content_rev, start_chunk_rev, provider, learner_level,
+    )
+
+
+async def get_retry_messages(
+    db: AsyncSession, thread: QaThread
+) -> tuple[QaMessage, QaMessage]:
+    """마지막 재시도 가능 assistant와 그 질문을 반환한다.
+
+    동기/스트리밍 재시도가 같은 상태 계약과 같은 '마지막 답변' 규칙을 사용한다.
+    """
     # 필요한 건 두 행뿐이다 — 수백 턴짜리 스레드 전체를 메모리로 끌어오지 않는다.
     last_assistant = (
         await db.execute(
@@ -306,10 +361,7 @@ async def retry_last(
             .limit(1)
         )
     ).scalars().first()
-    if last_assistant is None or last_assistant.status not in (
-        QaMessageStatus.FAILED,
-        QaMessageStatus.REVISION_CHANGED,
-    ):
+    if last_assistant is None or last_assistant.status not in QA_RETRYABLE_STATUSES:
         raise AppError(
             ErrorCode.INVALID_STATE, "다시 시도할 답변이 없습니다.", status_code=409
         )
@@ -328,35 +380,7 @@ async def retry_last(
     ).scalars().first()
     if last_user is None:
         raise AppError(ErrorCode.INVALID_STATE, "다시 시도할 질문이 없습니다.", status_code=409)
-
-    provider = await get_qa_provider(db)
-    require_available_provider(provider, user, doc)
-
-    # 실패한 assistant 메시지를 pending으로 되돌린다(부분 유니크 인덱스가 동시 재시도를 막는다).
-    start_content_rev = doc.content_revision
-    start_chunk_rev = doc.chunk_revision
-    last_assistant.status = QaMessageStatus.PENDING
-    last_assistant.content = ""
-    last_assistant.error_code = None
-    last_assistant.document_revision = start_content_rev
-    last_assistant.chunk_revision = start_chunk_rev
-    last_assistant.provider_name = provider.provider_name
-    last_assistant.model_name = provider.model_name
-    try:
-        await db.commit()
-    except IntegrityError as exc:
-        await db.rollback()
-        raise AppError(
-            ErrorCode.INVALID_STATE,
-            "이 대화에서 답변을 만드는 중입니다. 잠시 후 다시 시도해 주세요.",
-            status_code=409,
-        ) from exc
-
-    history = await _recent_history(db, thread.id, before_seq=last_user.sequence_number)
-    return await _generate(
-        db, doc, user, thread, last_user, last_assistant, last_user.content, history,
-        start_content_rev, start_chunk_rev, provider, learner_level,
-    )
+    return last_user, last_assistant
 
 
 async def _fresh_document(db: AsyncSession, document_id: uuid.UUID) -> Document | None:
@@ -490,16 +514,24 @@ async def _generate(
         "insufficient_evidence": QaMessageStatus.INSUFFICIENT_EVIDENCE,
         "conflicting_evidence": QaMessageStatus.CONFLICTING_EVIDENCE,
     }
+    # 모델의 자유 산문과 unsupported claim은 저장하지 않는다. 최종 본문은 스트림 경로와
+    # 동일하게 검증된 supported/conflicting claim만 서버가 인용 마커와 함께 조립한다.
+    safe_claims = [
+        c
+        for c in verified.claims
+        if c.verification_status
+        in (QaClaimVerification.SUPPORTED, QaClaimVerification.CONFLICTING)
+    ]
     claim_rows = [
         QaClaim(
             message_id=assistant_msg.id,
-            claim_index=c.claim_index,
+            claim_index=claim_index,
             claim_text=c.text,
             verification_status=c.verification_status,
             source_chunk_ids_json=c.source_chunk_ids,
             source_refs_json=c.source_refs,
         )
-        for c in verified.claims
+        for claim_index, c in enumerate(safe_claims)
     ]
     # 근거가 없거나 부족하면 모델의 자유 서술을 그대로 보여주지 않는다(날조 노출 방지).
     if verified.answer_status in ("not_found", "insufficient_evidence"):
@@ -509,7 +541,9 @@ async def _generate(
             else "문서에서 충분한 근거를 찾지 못했어요. 다른 표현으로 다시 물어봐 주세요."
         )
     else:
-        safe_answer = verified.answer or "이 자료에서는 확인할 수 없습니다."
+        safe_answer = "\n".join(
+            f"{claim.claim_text}[c{claim.claim_index}]" for claim in claim_rows
+        ) or "이 자료에서는 확인할 수 없습니다."
     outcome = await _finalize(
         db, assistant_msg,
         answer=safe_answer,
@@ -521,7 +555,7 @@ async def _generate(
         # 못했다" 바로 밑에 모델이 지어낸 다음 질문을 놓으면 날조 차단이 반만 걸린다.
         followups=(
             verified.followups
-            if verified.answer_status not in ("not_found", "insufficient_evidence")
+            if safe_claims
             else []
         ),
     )

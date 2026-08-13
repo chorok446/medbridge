@@ -13,12 +13,12 @@ const apiMock = vi.hoisted(() => ({
   getThread: vi.fn(),
   updateThread: vi.fn(),
   deleteThread: vi.fn(),
-  retryAnswer: vi.fn(),
 }));
 vi.mock("@/lib/api/qa", () => apiMock);
 
 const streamMock = vi.hoisted(() => ({
   streamQuestion: vi.fn(),
+  streamRetry: vi.fn(),
   cancelStream: vi.fn(),
 }));
 vi.mock("@/lib/api/qa-stream", () => streamMock);
@@ -44,6 +44,7 @@ const answerDetail: QaThreadDetail = {
       sequenceNumber: 1,
       retrievalMode: null,
       claims: [],
+      canRetry: false,
       followups: [],
     },
     {
@@ -68,6 +69,7 @@ const answerDetail: QaThreadDetail = {
           ],
         },
       ],
+      canRetry: false,
       followups: [],
     },
   ],
@@ -79,6 +81,19 @@ function fakeStream(events: QaStreamEvent[]) {
     _d: string,
     _t: string,
     _q: string,
+    opts: { signal: AbortSignal; onEvent: (e: QaStreamEvent) => void },
+  ) => {
+    for (const e of events) {
+      if (opts.signal.aborted) return;
+      opts.onEvent(e);
+    }
+  };
+}
+
+function fakeRetryStream(events: QaStreamEvent[]) {
+  return async (
+    _d: string,
+    _t: string,
     opts: { signal: AbortSignal; onEvent: (e: QaStreamEvent) => void },
   ) => {
     for (const e of events) {
@@ -235,7 +250,7 @@ describe("DocumentQa", () => {
       ...answerDetail,
       messages: [
         answerDetail.messages[0],
-        { ...answerDetail.messages[1], status: "failed", claims: [] },
+        { ...answerDetail.messages[1], status: "failed", claims: [], canRetry: true },
       ],
     });
     renderQa();
@@ -247,6 +262,45 @@ describe("DocumentQa", () => {
       .filter((b) => b.className.includes("bg-blue-600"));
     expect(primaries).toHaveLength(1);
     expect(primaries[0]).toHaveAccessibleName("보내기");
+  });
+
+  it("중단된 답변을 새 질문이 아닌 안전한 스트림으로 다시 시도한다", async () => {
+    streamMock.streamQuestion.mockClear();
+    streamMock.streamRetry.mockClear();
+    const interrupted = {
+      ...answerDetail.messages[1],
+      content: "연결이 끊겨 답변이 중단되었습니다.",
+      status: "interrupted" as const,
+      claims: [],
+      canRetry: true,
+    };
+    apiMock.listThreads.mockResolvedValue([thread]);
+    apiMock.getThread.mockResolvedValue({
+      ...answerDetail,
+      messages: [answerDetail.messages[0], interrupted],
+    });
+    streamMock.streamRetry.mockImplementation(
+      fakeRetryStream([
+        { type: "started", requestId: "retry-1", messageId: "m2" },
+        { type: "phase", phase: "generating" },
+        {
+          type: "completed",
+          message: { ...answerDetail.messages[1], content: "심장은 혈액을 보냅니다[c0]." },
+        },
+      ]),
+    );
+
+    renderQa();
+    await userEvent.click(await screen.findByRole("button", { name: "다시 시도" }));
+
+    await waitFor(() =>
+      expect(streamMock.streamRetry).toHaveBeenCalledWith(
+        "d1",
+        "t1",
+        expect.objectContaining({ learnerLevel: "nursing_student" }),
+      ),
+    );
+    expect(streamMock.streamQuestion).not.toHaveBeenCalled();
   });
 
   it("모델 미연결(501)이면 설정 안내를 보여준다", async () => {

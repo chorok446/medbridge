@@ -17,7 +17,6 @@ import {
   deleteThread,
   getThread,
   listThreads,
-  retryAnswer,
 } from "@/lib/api/qa";
 import type { DocumentSummary } from "@/types/api";
 import type { QaMessage } from "@/types/qa";
@@ -109,12 +108,6 @@ export function DocumentQa({ doc, fileUrl }: Props) {
   });
   const messages = detailQuery.data?.messages ?? [];
 
-  const retryMutation = useMutation({
-    mutationFn: () => retryAnswer(doc.id, effectiveThreadId as string, level),
-    onSuccess: (detail) =>
-      queryClient.setQueryData(["qa-thread", doc.id, detail.thread.id], detail),
-  });
-
   const newThreadMutation = useMutation({
     mutationFn: () => createThread(doc.id),
     onSuccess: (created) => {
@@ -131,8 +124,12 @@ export function DocumentQa({ doc, fileUrl }: Props) {
     },
   });
 
-  const lastFollowups =
-    messages.filter((m) => m.role === "assistant").at(-1)?.followups ?? [];
+  const lastAssistant = messages.filter((m) => m.role === "assistant").at(-1);
+  const lastFollowups = lastAssistant?.followups ?? [];
+  const canRetryLastAnswer =
+    stream.state.phase === "completed"
+      ? Boolean(stream.state.finalMessage?.canRetry)
+      : Boolean(lastAssistant?.canRetry);
   const providerUnavailable = stream.state.phase === "failed" && stream.state.errorStatus === 501;
   const consentNeeded = stream.state.phase === "failed" && stream.state.errorStatus === 403;
   // 청크가 아직 없는 문서(막 올린 자료)는 서버가 409로 막는다. 안내가 없으면 사용자에겐
@@ -143,7 +140,7 @@ export function DocumentQa({ doc, fileUrl }: Props) {
     !providerUnavailable &&
     !consentNeeded &&
     !notReady;
-  const busy = stream.active || retryMutation.isPending;
+  const busy = stream.active;
 
   const navigate = nav.navigate;
 
@@ -174,6 +171,21 @@ export function DocumentQa({ doc, fileUrl }: Props) {
       // 스트림 종료(완료/취소/중단/실패) → DB에 확정된 메시지를 다시 불러온다.
       setPendingQuestion(null);
       void queryClient.invalidateQueries({ queryKey: ["qa-thread", doc.id, threadId] });
+      void queryClient.invalidateQueries({ queryKey: ["qa-threads", doc.id] });
+    } finally {
+      sendingRef.current = false;
+    }
+  }
+
+  async function retryLastAnswer() {
+    if (!effectiveThreadId || busy || sendingRef.current || !canRetryLastAnswer) return;
+    sendingRef.current = true;
+    try {
+      setPendingQuestion(null);
+      await stream.retry(effectiveThreadId, level);
+      void queryClient.invalidateQueries({
+        queryKey: ["qa-thread", doc.id, effectiveThreadId],
+      });
       void queryClient.invalidateQueries({ queryKey: ["qa-threads", doc.id] });
     } finally {
       sendingRef.current = false;
@@ -340,16 +352,10 @@ export function DocumentQa({ doc, fileUrl }: Props) {
             </ul>
           )}
 
-          {!stream.active &&
-            messages.some(
-              (m) =>
-                m.status === "failed" ||
-                m.status === "revision_changed" ||
-                m.status === "interrupted",
-            ) && (
+          {!stream.active && canRetryLastAnswer && (
               <button
                 type="button"
-                onClick={() => retryMutation.mutate()}
+                onClick={() => void retryLastAnswer()}
                 disabled={busy}
                 // Secondary로 둔다. 하단 "보내기"가 이미 파란 버튼이라, 여기도
                 // 파랗게 하면 화면에 "다음 할 일"이 둘이 되어 우선순위가 사라진다.
@@ -359,11 +365,6 @@ export function DocumentQa({ doc, fileUrl }: Props) {
                 다시 시도
               </button>
             )}
-          {retryMutation.isError && (
-            <p role="alert" className="mt-2 rounded bg-amber-50 px-3 py-2 text-sm text-amber-800">
-              지금은 다시 시도할 수 없어요. 아래에 질문을 다시 입력해 주세요.
-            </p>
-          )}
         </div>
 
         <div className="border-t border-slate-100 p-2">
