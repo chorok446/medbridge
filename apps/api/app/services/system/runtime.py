@@ -30,6 +30,10 @@ _active_operations = 0
 _lock_handle: IO[bytes] | None = None
 
 
+class QuiescenceTimeout(RuntimeError):
+    """업데이트 안전 지점까지 제한 시간 안에 도달하지 못했다."""
+
+
 def runtime_dir() -> Path:
     d = get_path_provider().root / "runtime"
     d.mkdir(parents=True, exist_ok=True)
@@ -133,17 +137,29 @@ def active_operations() -> int:
 
 
 async def wait_for_quiescence(timeout_seconds: float = 60.0) -> None:
-    """진행 중 요청과 백그라운드 작업이 모두 끝날 때까지 대기."""
+    """진행 중 요청과 백그라운드 작업이 모두 끝날 때까지 제한 시간 안에서 대기.
+
+    `runner.drain()`은 한 번 들어가면 수 시간짜리 요약이 끝날 때까지 돌아오지 않는다.
+    여기서는 작업을 소유하거나 완료시킬 필요가 없고, 안전 지점에 도달했는지만 보면
+    되므로 비차단 상태를 폴링한다. 제한 시간을 넘기면 백업을 진행하지 않고 실패한다.
+    """
     from app.services.tasks.runner import get_task_runner
 
     runner = get_task_runner()
-    deadline = asyncio.get_event_loop().time() + timeout_seconds
-    while asyncio.get_event_loop().time() < deadline:
-        await runner.drain()
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max(0.0, timeout_seconds)
+    while True:
         if _active_operations == 0 and not runner.has_pending():
             return
-        await asyncio.sleep(0.05)
-    logger.warning("quiescence_timeout", active=_active_operations)
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            logger.warning(
+                "quiescence_timeout",
+                active=_active_operations,
+                pending=runner.has_pending(),
+            )
+            raise QuiescenceTimeout("background work did not reach a safe update point")
+        await asyncio.sleep(min(0.05, remaining))
 
 
 def checkpoint_and_backup() -> str | None:

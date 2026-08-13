@@ -181,6 +181,41 @@ class TestQuiescence:
         assert res.status_code == 200
         runtime.set_updating(False)
 
+    async def test_timeout_is_bounded_and_never_calls_unbounded_drain(self, monkeypatch):
+        """끝나지 않는 대형 요약이 있어도 advertised timeout 안에 반환한다."""
+        import asyncio
+
+        class NeverIdleRunner:
+            drain_called = False
+
+            def has_pending(self):
+                return True
+
+            async def drain(self):
+                self.drain_called = True
+                await asyncio.Event().wait()
+
+        runner = NeverIdleRunner()
+        monkeypatch.setattr(
+            "app.services.tasks.runner.get_task_runner", lambda: runner
+        )
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        with pytest.raises(runtime.QuiescenceTimeout):
+            await runtime.wait_for_quiescence(timeout_seconds=0.02)
+        assert loop.time() - started < 0.5
+        assert runner.drain_called is False
+
+    async def test_prepare_timeout_reopens_work_gate(self, client, monkeypatch):
+        async def timeout():
+            raise runtime.QuiescenceTimeout
+
+        monkeypatch.setattr(runtime, "wait_for_quiescence", timeout)
+        res = await client.post("/api/system/prepare-update")
+        assert res.status_code == 409
+        assert res.json()["error"]["retryable"] is True
+        assert runtime.is_updating() is False
+
 
 class TestVersionConsistency:
     def test_check_versions_script_passes(self):
