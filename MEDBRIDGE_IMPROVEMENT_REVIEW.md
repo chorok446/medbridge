@@ -4,7 +4,7 @@
 > - 최신 자동 검증일: 2026-08-25 (KST)
 > - 기준 브랜치: `fix/summary-context-overflow`
 > - 최초 검토 기준 커밋: `7d688b33e8a905311ebdc0d5a58feab0887c4663`
-> - 마지막 코드 검증 커밋: `87a98dfbfb3aeca7176164cbe2f09dd9d2ab6299`
+> - 마지막 코드 검증 커밋: `bcce77cb7044b51a987311711f2771d1e32e8db3`
 > - 구현 추적 브랜치: `fix/summary-context-overflow`
 > - 문서 상태: 구현 추적 중. 자동 검증과 Windows 실기기 검증을 분리해 기록함.
 
@@ -37,7 +37,7 @@
 - 동일 run 자동 재개/retention: 관련 회귀 `242 passed`
 - HTTP slow-drip 절대 기한: endpoint/provider `145 passed`; 0.6초 제한 요청을
   정상 응답 약 0.62초, 오류 본문 약 0.82초에 중단
-- 요약 협력 취소와 저장 직렬화: 최종 API `987 passed, 4 skipped`; endpoint
+- 요약 협력 취소와 저장 직렬화: 당시 API `987 passed, 4 skipped`; endpoint
   `81 passed` 5회 연속, local AI/QA 관련 `44 passed`, Ruff와 mypy 통과
 - Web 의존성 보안 패치: nanoid 3.x를 3.3.18로 고정; Web `211 passed`,
   frozen install, TypeScript, ESLint, Next production build 통과
@@ -46,12 +46,47 @@
 - Windows 검증 키트 bundle/provenance: `7 passed`
 - Rust locked 검사를 CI에 추가: `fmt`, `check`, `test`, `clippy --locked`
 - 보안 감사를 blocking job으로 전환하고 Windows build가 이를 의존하도록 변경
+- 로컬 qwen3:8b 연결 검사: 관련 회귀 `64 passed`, 전체 API
+  `988 passed, 4 skipped`
 
-위 숫자는 각 원자적 변경 직후의 관련 회귀 기록이다. 마지막 코드 커밋 `87a98df`를
-포함한 API 전체 회귀는 `987 passed, 4 skipped`다. nanoid 수정 뒤 원격 보안 감사와
-Windows build는 최종 push의 GitHub Actions에서 다시 확인해야 한다.
+위 숫자는 각 원자적 변경 직후의 관련 회귀 기록이다. 마지막 코드 커밋 `bcce77c`를
+포함한 API 전체 회귀는 `988 passed, 4 skipped`다. 문서 갱신까지 포함한 최종 HEAD의
+원격 보안 감사와 Windows build는 최종 push의 GitHub Actions에서 다시 확인해야 한다.
 
-### 2.2 아직 자동 테스트로 대체할 수 없는 항목
+### 2.2 Windows 실기기 부분 검증 (2026-08-25)
+
+아래 결과는 PR #7 통합 smoke다. 기존 사용자 데이터와 Ollama가 있는 Windows 실기기에서
+수행했으며, 깨끗한 PC의 전체 36항목이나 공개 릴리스 승인을 뜻하지 않는다.
+
+- GitHub Actions run `32781554276`의 `medbridge-windows-setup` artifact를 검증했다.
+  manifest의 merge SHA `9bd07339b568688c33a4e30f6c44dcd2f8dcd3ef`의 두 번째
+  parent가 당시 head `d2bbc4be98f7d141d4b316a6127c7c100b242268`임을 확인했다.
+- installer SHA-256은
+  `2f21722e9c3cf160d31ce33793da994c3a8606c33bea0f29dc90557bed18aaa2`이며,
+  manifest와 installer 및 7개 테스트 PDF의 크기·SHA-256이 모두 일치했다.
+- 앱 데이터 약 1.47GiB를 외부 경로에 해시 검증 백업한 뒤 installer를 재설치했다.
+  DB는 Alembic `0015`, `quick_check=ok`, foreign key 위반 0건이었고 문서 11건과
+  로컬 모델 설정이 유지됐다. 정상 종료 뒤 app/sidecar 프로세스 0건, 재실행도 통과했다.
+- Ollama 프로세스를 중지하자 앱이 미실행 안내, 공식 URL
+  `https://ollama.com/download/windows`, 주소 복사 경로를 표시했다. 설치 안내 버튼은
+  제목이 `Download Ollama on Windows`인 Edge 창을 열었고, Ollama 재실행 뒤
+  설치된 `qwen3:8b`를 다시 감지했다. Ollama 자체는 이미 설치돼 있었으므로 완전 미설치
+  PC의 설치·모델 다운로드 검증으로 간주하지 않는다.
+- 기존 연결 검사는 Windows cold start에서 30초 timeout이 발생했고, 32 tokens를
+  reasoning에 소진해 빈 content를 반환하는 경우도 재현됐다. `bcce77c`에서 제한을
+  60초, probe 예산을 128 tokens로 조정했다. 모델 unload 뒤 수정 payload는 8.02초,
+  `finish_reason=stop`, content 6자, reasoning 0자로 성공했다. 별도 요약 모델 연결
+  검사도 cold 상태에서 약 20초 안에 성공했다.
+- 이미 등록된 411.6MB·1,060쪽 PDF를 열고 요약 진행률 10%→12%를 확인한 뒤
+  취소했다. UI는 약 3초 안에 취소 완료를 표시했고 DB는 최신 run `CANCELLED`,
+  활성 summary job 0건이었다. 이는 신규 업로드의 시간·peak RSS 벤치마크가 아니다.
+
+`bcce77c` 대상 CI run `32786213277`의 완료 확인과 artifact 검증은 아직 대기 중이다.
+또한 이 run은 이 문서 갱신 전 기준이므로 최종 HEAD artifact가 아니다. 이 문서까지
+포함한 최종 artifact의 재설치·재검증도 대기 중이다. 따라서 위 installer SHA를 최종
+`testedCommit`이나 공개 release 승인 자료로 재사용해서는 안 된다.
+
+### 2.3 아직 자동 테스트로 대체할 수 없는 항목
 
 - 새 installer를 설치한 깨끗한 Windows PC에서 Ollama 미설치 안내부터 모델 활성화,
   앱 재시작, Q&A/요약, 제거까지 수행하는 실기기 검증
@@ -61,7 +96,7 @@ Windows build는 최종 push의 GitHub Actions에서 다시 확인해야 한다.
 - 검증한 RC installer와 공개 installer의 SHA-256 동일성 확인
 - GitHub의 보호된 `main`, required review/ruleset, release Environment reviewer 설정
 
-### 2.3 원자적 변경 기록
+### 2.4 원자적 변경 기록
 
 - 릴리스/운영: `a2e10b6` 승인 gate, `35f1d33` Windows kit provenance,
   `9f732c6` blocking 보안 감사
@@ -75,6 +110,8 @@ Windows build는 최종 push의 GitHub Actions에서 다시 확인해야 한다.
   `05a09f3` 요청별 HTTP 중단, `2423eba` 취소/저장 CAS,
   `87a98df` pull/Q&A 스트림 취소·기한
 - Web build: `b4d743f` nanoid 3.3.18 advisory 패치
+- 의존성/로컬 AI: `d2bbc4b` pypdf 6.16.2 보안 하한,
+  `bcce77c` qwen3 cold 연결 검사
 - Desktop/시작·종료: `4ca964b` Rust locked CI, `027ae44` bounded quiescence,
   `ef99c8c` sidecar 지속 감시, `2b8fb0d` Ollama 설치 안내 복구
 - UI/운영: `db36a67` 저장 요약·pagination, `2ab2a5b` 로그 회전·redaction
@@ -87,7 +124,7 @@ Windows build는 최종 push의 GitHub Actions에서 다시 확인해야 한다.
 
 이하의 `근거`, `문제`, `현재 상태`, `개선안`은 최초 기준 커밋에서 발견한 내용을
 결정 이력으로 보존한 것이다. 현재 코드 반영 여부는 각 제목 바로 아래의 상태 줄과
-2.3 변경 기록을 기준으로 판단한다.
+2.4 변경 기록을 기준으로 판단한다.
 
 ### P0-1. 릴리스 승인 게이트 우회 차단
 
@@ -168,7 +205,8 @@ ruleset도 확인되지 않았다. 현재 PR은 Draft이며 사람 리뷰 결정
 
 ### P0-4. Rust lockfile과 Windows 테스트 실행
 
-**상태: CI 코드 완료 (`4ca964b`) / 실제 설치 smoke는 실기기 대기**
+**상태: CI 코드 완료 (`4ca964b`) / run `32781554276` 설치·종료·재실행 smoke 통과 /
+최종 HEAD 36항목 대기**
 
 **근거**
 
@@ -189,7 +227,8 @@ ruleset도 확인되지 않았다. 현재 PR은 Draft이며 사람 리뷰 결정
 
 ### P0-5. 0013 실데이터 마이그레이션 및 동일 installer 검증
 
-**상태: 자동 검증 부분 완료 (`6665f09`) / 실제 사용자 DB·동일 installer는 대기**
+**상태: 자동 검증 부분 완료 (`6665f09`) / 구 artifact DB `0015`·`quick_check=ok`·
+FK 위반 0건·재기동 통과 / backup 복원·최종 installer 대기**
 
 **근거**
 
@@ -413,12 +452,15 @@ thread 목록이 아직 로딩 중일 때 질문하면 기존 thread가 있어�
 
 ### 5.6 Ollama 미설치 안내
 
-**상태: 자동 검증 완료 (`2b8fb0d`) / 깨끗한 Windows PC 실기기 확인 대기**
+**상태: 자동 검증 완료 (`2b8fb0d`) / 미실행 smoke 통과 / 완전 미설치 PC 대기**
 
 - Tauri opener capability를 공식 Windows 다운로드 URL 하나로 제한한다.
 - opener 거부와 브라우저 popup 차단을 UI에서 숨기지 않고 실패 안내로 표시한다.
 - 설치 페이지를 열지 못해도 항상 공식 URL을 표시하고 복사/수동 입력 경로를 제공한다.
-- 실제 Ollama 미설치 PC에서 버튼, 브라우저, 설치 후 재확인은 Windows 36항목으로 남긴다.
+- Ollama 프로세스 중지 상태에서 안내, 공식 URL, Edge 창 열기, 재실행 뒤 모델 재감지는
+  실기기에서 통과했다.
+- 실제 Ollama 미설치 PC의 설치와 모델 다운로드·취소·중복 차단은 Windows 36항목으로
+  남긴다.
 
 ## 6. 구현 권장 순서
 
@@ -478,7 +520,8 @@ thread 목록이 아직 로딩 중일 때 질문하면 기존 thread가 있어�
 ### 7.1 현재 출시 차단 사유
 
 1. 원격 저장소에 보호된 `main`과 release Environment required reviewer가 없다.
-2. 최종 HEAD로 만든 새 installer의 Windows 36항목 결과가 없다.
+2. PR artifact의 설치·재시작·Ollama 미실행·411.6MB 요약 취소 smoke만 통과했다.
+   최종 HEAD installer의 Windows 36항목 전체 결과는 없다.
 3. 최종 HEAD의 qwen3:8b repeat=3 평가 artifact가 없다.
 4. 실제 300/500/800MB 문서 벤치마크와 사용자 DB 사본 복구 훈련이 없다.
 5. 따라서 `docs/testing/release-approval.json`은 존재하지 않으며 생성해서도 안 된다.
