@@ -29,7 +29,7 @@ from app.services.summary.executor import (
 )
 from app.services.summary.factory import get_summary_provider
 from app.services.summary.provider import provider_checkpoint_fingerprint
-from app.services.tasks.jobs import latest_job
+from app.services.tasks.jobs import claim_current_job_for_write, latest_job
 
 logger = get_logger(__name__)
 
@@ -49,6 +49,7 @@ async def _job_is_current(session, document_id: uuid.UUID, job_id: uuid.UUID) ->
 
 async def _fail_run(
     session,
+    document_id: uuid.UUID,
     run_id: uuid.UUID,
     job_id: uuid.UUID,
     code: str,
@@ -59,6 +60,10 @@ async def _fail_run(
     코드만 남기면 `SUMMARY_INVALID_RESPONSE` 하나에 7가지 원인이 뭉쳐, 오류 보고서를
     받아도 잘린 JSON인지 HTTP 400인지 구분할 수 없다(로그 200줄 창을 벗어나면 끝이다).
     """
+    if not await claim_current_job_for_write(
+        session, document_id, job_id, JobType.SUMMARIZE
+    ):
+        return
     run = await session.get(SummaryRun, run_id)
     if run is not None and run.status in (SummaryRunStatus.QUEUED, SummaryRunStatus.RUNNING):
         run.status = SummaryRunStatus.FAILED
@@ -108,6 +113,10 @@ async def run_summary_job(
     # 1) 잡·run을 RUNNING으로. 시작 시점 revision·청크 해시 스냅샷은 이미 run에 저장돼 있다.
     #    job_id는 이 run에 대응하는 정확한 잡 — 최신 잡을 다시 고르지 않는다(교차 방지).
     async with factory() as session:
+        if not await claim_current_job_for_write(
+            session, document_id, job_id, JobType.SUMMARIZE
+        ):
+            return
         doc = await session.get(Document, document_id)
         run = await session.get(SummaryRun, run_id)
         job = await session.get(DocumentJob, job_id)
@@ -115,8 +124,6 @@ async def run_summary_job(
             return
         if run.job_id is not None and run.job_id != job.id:
             return
-        if not await _job_is_current(session, document_id, job_id):
-            return  # 이미 취소·교체됨
         job.status = JobStatus.RUNNING
         job.attempt_count += 1
         job.started_at = datetime.now(UTC)
@@ -138,7 +145,9 @@ async def run_summary_job(
         async with factory() as session:
             provider = await get_summary_provider(session, resolve_identity=True)
             if not provider.available:
-                await _fail_run(session, run_id, job_id, "PROVIDER_UNAVAILABLE")
+                await _fail_run(
+                    session, document_id, run_id, job_id, "PROVIDER_UNAVAILABLE"
+                )
                 return
             if expected_provider_fingerprint is not None and not hmac.compare_digest(
                 expected_provider_fingerprint,
@@ -149,6 +158,7 @@ async def run_summary_job(
             ):
                 await _fail_run(
                     session,
+                    document_id,
                     run_id,
                     job_id,
                     "PROVIDER_CHANGED",
@@ -164,7 +174,13 @@ async def run_summary_job(
                     or user is None
                     or not (doc.external_evidence_enabled and user.external_ai_allowed)
                 ):
-                    await _fail_run(session, run_id, job_id, "EXTERNAL_CONSENT_MISSING")
+                    await _fail_run(
+                        session,
+                        document_id,
+                        run_id,
+                        job_id,
+                        "EXTERNAL_CONSENT_MISSING",
+                    )
                     return
             chunks = await summary_service.load_chunk_snapshots(session, document_id)
 
@@ -191,49 +207,51 @@ async def run_summary_job(
     except SummaryRevisionChanged:
         logger.info("summary_revision_changed", document_id=str(document_id))
         async with factory() as session:
-            if await _job_is_current(session, document_id, job_id):
-                await _fail_run(session, run_id, job_id, "REVISION_CHANGED")
+            await _fail_run(
+                session, document_id, run_id, job_id, "REVISION_CHANGED"
+            )
         return
     except SummaryConsentRevoked:
         logger.info("summary_external_consent_revoked", document_id=str(document_id))
         async with factory() as session:
-            if await _job_is_current(session, document_id, job_id):
-                await _fail_run(
-                    session,
-                    run_id,
-                    job_id,
-                    "EXTERNAL_CONSENT_MISSING",
-                    "consent_revoked",
-                )
+            await _fail_run(
+                session,
+                document_id,
+                run_id,
+                job_id,
+                "EXTERNAL_CONSENT_MISSING",
+                "consent_revoked",
+            )
         return
     except SummaryProviderChanged:
         logger.info("summary_provider_changed", document_id=str(document_id))
         async with factory() as session:
-            if await _job_is_current(session, document_id, job_id):
-                await _fail_run(
-                    session,
-                    run_id,
-                    job_id,
-                    "PROVIDER_CHANGED",
-                    "provider_settings_changed",
-                )
+            await _fail_run(
+                session,
+                document_id,
+                run_id,
+                job_id,
+                "PROVIDER_CHANGED",
+                "provider_settings_changed",
+            )
         return
     except SummaryCheckpointChanged:
         logger.info("summary_checkpoint_changed", document_id=str(document_id))
         async with factory() as session:
-            if await _job_is_current(session, document_id, job_id):
-                await _fail_run(
-                    session,
-                    run_id,
-                    job_id,
-                    "SUMMARY_RESUME_UNSAFE",
-                    "checkpoint_changed",
-                )
+            await _fail_run(
+                session,
+                document_id,
+                run_id,
+                job_id,
+                "SUMMARY_RESUME_UNSAFE",
+                "checkpoint_changed",
+            )
         return
     except SummaryNoContent:
         async with factory() as session:
-            if await _job_is_current(session, document_id, job_id):
-                await _fail_run(session, run_id, job_id, "SUMMARY_NO_CONTENT")
+            await _fail_run(
+                session, document_id, run_id, job_id, "SUMMARY_NO_CONTENT"
+            )
         return
     except Exception as exc:
         failure_code, failure_category = _classify_pipeline_failure(exc)
@@ -247,24 +265,32 @@ async def run_summary_job(
             failure_reason=_failure_reason(exc) or "none",
         )
         async with factory() as session:
-            if await _job_is_current(session, document_id, job_id):
-                await _fail_run(session, run_id, job_id, failure_code, _failure_reason(exc))
+            await _fail_run(
+                session,
+                document_id,
+                run_id,
+                job_id,
+                failure_code,
+                _failure_reason(exc),
+            )
         return
 
     # 3) revision-guarded 원자적 저장
     async with factory() as session:
-        if not await _job_is_current(session, document_id, job_id):
+        if not await claim_current_job_for_write(
+            session, document_id, job_id, JobType.SUMMARIZE
+        ):
             logger.info("summary_job_superseded_or_cancelled", document_id=str(document_id))
             return
         doc = await session.get(Document, document_id)
         if doc is None or doc.deleted_at is not None:
-            await _fail_run(session, run_id, job_id, "DOCUMENT_GONE")
+            await _fail_run(session, document_id, run_id, job_id, "DOCUMENT_GONE")
             return
         current_hash = await summary_service.current_chunk_hash(session, document_id)
         if doc.content_revision != start_revision or current_hash != start_hash:
             # 요약 도중 문서가 바뀜 — 결과를 저장하지 않는다
             logger.info("summary_revision_changed", document_id=str(document_id))
-            await _fail_run(session, run_id, job_id, "REVISION_CHANGED")
+            await _fail_run(session, document_id, run_id, job_id, "REVISION_CHANGED")
             return
 
         if not drafts:
@@ -273,7 +299,7 @@ async def run_summary_job(
             # 안내조차 뜨지 않는다. 공급자 쪽 게이트를 통과한 응답도 저장 단계에서
             # 전부 버려질 수 있으므로(출처 없는 항목) 여기서 한 번 더 막는다.
             logger.warning("summary_no_artifacts", document_id=str(document_id))
-            await _fail_run(session, run_id, job_id, "SUMMARY_EMPTY")
+            await _fail_run(session, document_id, run_id, job_id, "SUMMARY_EMPTY")
             return
 
         for draft in drafts:
@@ -324,6 +350,10 @@ async def mark_summary_crashed(document_id: uuid.UUID, *, job_id: uuid.UUID) -> 
     """크래시 경계 — 이 잡·대응 run을 실패로 확정한다."""
     factory = get_session_factory()
     async with factory() as session:
+        if not await claim_current_job_for_write(
+            session, document_id, job_id, JobType.SUMMARIZE
+        ):
+            return
         job = await session.get(DocumentJob, job_id)
         if job is not None and job.status in (JobStatus.QUEUED, JobStatus.RUNNING):
             job.status = JobStatus.FAILED

@@ -10,7 +10,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -638,22 +638,94 @@ async def get_summary_artifacts(
 
 
 async def cancel_summary(db: AsyncSession, doc: Document) -> None:
-    job = await _active_summary_job(db, doc.id)
-    if job is None:
+    from datetime import UTC
+
+    document_id = doc.id
+    # route의 소유권 조회가 만든 read transaction을 끝낸다. 아래 active-status UPDATE가
+    # fresh transaction의 첫 SQL이어야 worker의 최종 commit과 SQLite writer lock으로
+    # 직렬화된다(먼저 commit한 쪽만 승리).
+    await db.rollback()
+    completed_at = datetime.now(UTC)
+    job_result = await db.execute(
+        update(DocumentJob)
+        .where(
+            DocumentJob.document_id == document_id,
+            DocumentJob.job_type == JobType.SUMMARIZE,
+            DocumentJob.status.in_([JobStatus.QUEUED, JobStatus.RUNNING]),
+        )
+        .values(
+            status=JobStatus.FAILED,
+            failure_code="CANCELLED",
+            completed_at=completed_at,
+        )
+        .returning(DocumentJob.id)
+        .execution_options(synchronize_session=False)
+    )
+    job_id = job_result.scalar_one_or_none()
+    if job_id is None:
+        await db.rollback()
         raise AppError(
             ErrorCode.INVALID_STATE, "지금은 취소할 요약 작업이 없습니다.", status_code=409
         )
-    from datetime import UTC
 
-    job.status = JobStatus.FAILED
-    job.failure_code = "CANCELLED"
-    job.completed_at = datetime.now(UTC)
-    run = await _latest_run(db, doc.id)
-    if run is not None and run.status in (SummaryRunStatus.QUEUED, SummaryRunStatus.RUNNING):
-        run.status = SummaryRunStatus.CANCELLED
-        run.error_code = "CANCELLED"
-        run.completed_at = datetime.now(UTC)
+    run_update = (
+        update(SummaryRun)
+        .where(
+            SummaryRun.document_id == document_id,
+            SummaryRun.job_id == job_id,
+            SummaryRun.status.in_([SummaryRunStatus.QUEUED, SummaryRunStatus.RUNNING]),
+        )
+        .values(
+            status=SummaryRunStatus.CANCELLED,
+            error_code="CANCELLED",
+            completed_at=completed_at,
+        )
+        .returning(SummaryRun.id)
+        .execution_options(synchronize_session=False)
+    )
+    run_id = (await db.execute(run_update)).scalar_one_or_none()
+    if run_id is None:
+        # 0015 이전 active legacy 행은 job_id가 없다. writer lock을 잡은 현재 transaction
+        # 안에서 최신 active legacy run 하나만 정확한 id로 고른다.
+        legacy_run_id = (
+            await db.execute(
+                select(SummaryRun.id)
+                .where(
+                    SummaryRun.document_id == document_id,
+                    SummaryRun.job_id.is_(None),
+                    SummaryRun.status.in_(
+                        [SummaryRunStatus.QUEUED, SummaryRunStatus.RUNNING]
+                    ),
+                )
+                .order_by(SummaryRun.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if legacy_run_id is not None:
+            run_id = (
+                await db.execute(
+                    update(SummaryRun)
+                    .where(
+                        SummaryRun.id == legacy_run_id,
+                        SummaryRun.status.in_(
+                            [SummaryRunStatus.QUEUED, SummaryRunStatus.RUNNING]
+                        ),
+                    )
+                    .values(
+                        status=SummaryRunStatus.CANCELLED,
+                        error_code="CANCELLED",
+                        completed_at=completed_at,
+                    )
+                    .returning(SummaryRun.id)
+                    .execution_options(synchronize_session=False)
+                )
+            ).scalar_one_or_none()
     await db.commit()
+    # 영속 상태를 먼저 확정해야 앱이 이 직후 종료돼도 취소가 복구된다. 그 다음 현재
+    # 프로세스의 정확한 job/run 신호로 blocking urllib 본문 읽기를 즉시 깨운다.
+    from app.services.summary.cancellation import request_summary_cancellation
+
+    request_summary_cancellation(job_id, run_id)
 
 
 async def delete_summaries(db: AsyncSession, doc: Document) -> None:
@@ -662,15 +734,34 @@ async def delete_summaries(db: AsyncSession, doc: Document) -> None:
     진행 중 잡이 있으면 먼저 FAILED로 확정한다 — 그러지 않으면 run이 사라진 뒤에도
     잡이 QUEUED로 남아 활성 잡 유니크 인덱스가 이후 모든 요약을 영구 차단한다.
     """
-    from datetime import UTC
-
-    job = await _active_summary_job(db, doc.id)
-    if job is not None:
-        job.status = JobStatus.FAILED
-        job.failure_code = "CANCELLED"
-        job.completed_at = datetime.now(UTC)
-    await db.execute(delete(SummaryArtifact).where(SummaryArtifact.document_id == doc.id))
+    document_id = doc.id
+    await db.rollback()
+    # 첫 writer statement가 active job을 상태 조건으로 선점한다. worker 성공 commit이 먼저면
+    # 0행이고 그 성공 산출물을 아래에서 지우며, 이 UPDATE가 먼저면 worker는 inactive guard로
+    # 저장하지 못한다. 어느 interleaving에서도 삭제 뒤 artifact가 부활하지 않는다.
+    job_id = (
+        await db.execute(
+            update(DocumentJob)
+            .where(
+                DocumentJob.document_id == document_id,
+                DocumentJob.job_type == JobType.SUMMARIZE,
+                DocumentJob.status.in_([JobStatus.QUEUED, JobStatus.RUNNING]),
+            )
+            .values(
+                status=JobStatus.FAILED,
+                failure_code="CANCELLED",
+                completed_at=datetime.now(UTC),
+            )
+            .returning(DocumentJob.id)
+            .execution_options(synchronize_session=False)
+        )
+    ).scalar_one_or_none()
+    await db.execute(delete(SummaryArtifact).where(SummaryArtifact.document_id == document_id))
     # 체크포인트 노드도 함께 지운다 — 남겨두면 삭제 후 재요약이 옛 중간 결과를 재사용한다.
-    await db.execute(delete(SummaryNode).where(SummaryNode.document_id == doc.id))
-    await db.execute(delete(SummaryRun).where(SummaryRun.document_id == doc.id))
+    await db.execute(delete(SummaryNode).where(SummaryNode.document_id == document_id))
+    await db.execute(delete(SummaryRun).where(SummaryRun.document_id == document_id))
     await db.commit()
+    if job_id is not None:
+        from app.services.summary.cancellation import request_summary_cancellation
+
+        request_summary_cancellation(job_id)

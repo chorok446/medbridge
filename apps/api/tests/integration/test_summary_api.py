@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 from app.db.session import get_session_factory
 from app.models.document import Document, DocumentJob
 from app.models.enums import JobStatus, JobType, SummaryRunStatus
-from app.models.summary import SummaryArtifact, SummaryRun, SummarySettings
+from app.models.summary import SummaryArtifact, SummaryNode, SummaryRun, SummarySettings
 from app.services.search.chunking import rebuild_chunks
 from tests import extraction_fixtures as fx
 from tests.integration.conftest import drain_jobs
@@ -214,6 +214,528 @@ class TestSummaryDuplicateAndCancel:
                 )
             ).scalar_one()
         assert active == 0
+
+    async def test_cancel_commits_exact_job_before_signalling_worker(
+        self, client, monkeypatch
+    ):
+        """DB 취소가 영속화된 뒤에만 현재 프로세스의 blocking I/O를 끊는다."""
+
+        from sqlalchemy.ext.asyncio import AsyncSession
+
+        from app.services.summary import cancellation as cancellation_mod
+        from app.services.summary import service as summary_service
+
+        await enable_deterministic()
+        doc_id = await upload_chunked(client, fx.single_column_korean(pages=1))
+        document_id = uuid.UUID(doc_id)
+        job_id, run_id = uuid.uuid4(), uuid.uuid4()
+        async with get_session_factory()() as session:
+            doc = await session.get(Document, document_id)
+            session.add(
+                DocumentJob(
+                    id=job_id,
+                    document_id=document_id,
+                    job_type=JobType.SUMMARIZE,
+                    status=JobStatus.RUNNING,
+                    correlation_id="cancel-order",
+                )
+            )
+            session.add(
+                SummaryRun(
+                    id=run_id,
+                    job_id=job_id,
+                    document_id=document_id,
+                    status=SummaryRunStatus.RUNNING,
+                    provider_name="deterministic",
+                    model_name="deterministic-test-v1",
+                    prompt_version="cancel-order",
+                    schema_version=1,
+                    source_revision=doc.content_revision,
+                    source_chunk_hash=await summary_service.current_chunk_hash(
+                        session, document_id
+                    ),
+                    learner_level="nursing_student",
+                    language="ko",
+                )
+            )
+            await session.commit()
+
+        order: list[str] = []
+        original_commit = AsyncSession.commit
+
+        async def observed_commit(session):
+            await original_commit(session)
+            order.append("commit")
+
+        def observed_signal(signalled_job_id, signalled_run_id=None):
+            order.append("signal")
+            assert signalled_job_id == job_id
+            assert signalled_run_id == run_id
+            return 1
+
+        monkeypatch.setattr(AsyncSession, "commit", observed_commit)
+        monkeypatch.setattr(
+            cancellation_mod, "request_summary_cancellation", observed_signal
+        )
+
+        response = await client.post(f"/api/documents/{doc_id}/summaries/cancel")
+
+        assert response.status_code == 200, response.text
+        assert order[-2:] == ["commit", "signal"]
+        async with get_session_factory()() as session:
+            job = await session.get(DocumentJob, job_id)
+            run = await session.get(SummaryRun, run_id)
+        assert job.status == JobStatus.FAILED
+        assert job.failure_code == "CANCELLED"
+        assert run.status == SummaryRunStatus.CANCELLED
+
+    async def test_worker_success_wins_cancel_cas_without_state_reversal(
+        self, client, monkeypatch
+    ):
+        """active 조회 뒤 worker가 끝나는 interleaving에서도 성공을 FAILED로 되돌리지 않는다."""
+
+        from sqlalchemy.ext.asyncio import AsyncSession
+        from sqlalchemy.sql.dml import Update
+
+        from app.services.summary import service as summary_service
+
+        await enable_deterministic()
+        doc_id = await upload_chunked(client, fx.single_column_korean(pages=1))
+        document_id = uuid.UUID(doc_id)
+        job_id, run_id = uuid.uuid4(), uuid.uuid4()
+        async with get_session_factory()() as session:
+            doc = await session.get(Document, document_id)
+            session.add(
+                DocumentJob(
+                    id=job_id,
+                    document_id=document_id,
+                    job_type=JobType.SUMMARIZE,
+                    status=JobStatus.RUNNING,
+                    correlation_id="cancel-race",
+                )
+            )
+            session.add(
+                SummaryRun(
+                    id=run_id,
+                    job_id=job_id,
+                    document_id=document_id,
+                    status=SummaryRunStatus.RUNNING,
+                    provider_name="deterministic",
+                    model_name="deterministic-test-v1",
+                    prompt_version="cancel-race",
+                    schema_version=1,
+                    source_revision=doc.content_revision,
+                    source_chunk_hash=await summary_service.current_chunk_hash(
+                        session, document_id
+                    ),
+                    learner_level="nursing_student",
+                    language="ko",
+                )
+            )
+            await session.commit()
+
+        original_execute = AsyncSession.execute
+        interleaved = False
+
+        async def interleave_worker_commit(session, statement, *args, **kwargs):
+            nonlocal interleaved
+            if (
+                not interleaved
+                and isinstance(statement, Update)
+                and statement.table.name == "document_jobs"
+            ):
+                interleaved = True
+                async with get_session_factory()() as worker:
+                    job = await worker.get(DocumentJob, job_id)
+                    run = await worker.get(SummaryRun, run_id)
+                    job.status = JobStatus.SUCCEEDED
+                    run.status = SummaryRunStatus.SUCCEEDED
+                    await worker.commit()
+            return await original_execute(session, statement, *args, **kwargs)
+
+        monkeypatch.setattr(AsyncSession, "execute", interleave_worker_commit)
+
+        response = await client.post(f"/api/documents/{doc_id}/summaries/cancel")
+
+        assert interleaved
+        assert response.status_code == 409
+        async with get_session_factory()() as session:
+            job = await session.get(DocumentJob, job_id)
+            run = await session.get(SummaryRun, run_id)
+        assert job.status == JobStatus.SUCCEEDED
+        assert run.status == SummaryRunStatus.SUCCEEDED
+
+    async def test_cancel_writer_wins_before_worker_start_without_state_reversal(
+        self, client, monkeypatch
+    ):
+        """cancel이 writer lock을 먼저 잡으면 worker 진입이 RUNNING을 되살리지 않는다."""
+
+        import asyncio
+
+        from sqlalchemy.ext.asyncio import AsyncSession
+        from sqlalchemy.sql.dml import Update
+
+        from app.services.summary import service as summary_service
+        from app.services.summary.provider import DeterministicSummaryProvider
+        from app.services.tasks import jobs as jobs_mod
+        from app.services.tasks import summary_job as job_mod
+
+        await enable_deterministic()
+        doc_id = await upload_chunked(client, fx.single_column_korean(pages=1))
+        document_id = uuid.UUID(doc_id)
+        job_id, run_id = uuid.uuid4(), uuid.uuid4()
+        provider = DeterministicSummaryProvider()
+        async with get_session_factory()() as session:
+            doc = await session.get(Document, document_id)
+            session.add(
+                DocumentJob(
+                    id=job_id,
+                    document_id=document_id,
+                    job_type=JobType.SUMMARIZE,
+                    status=JobStatus.QUEUED,
+                    correlation_id="cancel-start-race",
+                )
+            )
+            session.add(
+                SummaryRun(
+                    id=run_id,
+                    job_id=job_id,
+                    document_id=document_id,
+                    status=SummaryRunStatus.QUEUED,
+                    provider_name=provider.provider_name,
+                    model_name=provider.model_name,
+                    prompt_version="cancel-start-race",
+                    schema_version=1,
+                    source_revision=doc.content_revision,
+                    source_chunk_hash=await summary_service.current_chunk_hash(
+                        session, document_id
+                    ),
+                    learner_level="nursing_student",
+                    language="ko",
+                )
+            )
+            await session.commit()
+
+        cancel_claimed = asyncio.Event()
+        release_cancel = asyncio.Event()
+        worker_attempted = asyncio.Event()
+        cancel_route_task = None
+        worker_task = None
+        original_execute = AsyncSession.execute
+        original_cancel = summary_service.cancel_summary
+        original_claim = jobs_mod.claim_current_job_for_write
+
+        async def observed_cancel(db, doc):
+            nonlocal cancel_route_task
+            cancel_route_task = asyncio.current_task()
+            return await original_cancel(db, doc)
+
+        async def hold_cancel_writer(session, statement, *args, **kwargs):
+            result = await original_execute(session, statement, *args, **kwargs)
+            if (
+                asyncio.current_task() is cancel_route_task
+                and isinstance(statement, Update)
+                and statement.table.name == "document_jobs"
+            ):
+                cancel_claimed.set()
+                await asyncio.wait_for(release_cancel.wait(), 2.0)
+            return result
+
+        async def observed_claim(session, *args, **kwargs):
+            if asyncio.current_task() is worker_task:
+                worker_attempted.set()
+            return await original_claim(session, *args, **kwargs)
+
+        monkeypatch.setattr(summary_service, "cancel_summary", observed_cancel)
+        monkeypatch.setattr(AsyncSession, "execute", hold_cancel_writer)
+        monkeypatch.setattr(jobs_mod, "claim_current_job_for_write", observed_claim)
+        monkeypatch.setattr(job_mod, "claim_current_job_for_write", observed_claim)
+
+        cancel_task = asyncio.create_task(
+            client.post(f"/api/documents/{doc_id}/summaries/cancel")
+        )
+        await asyncio.wait_for(cancel_claimed.wait(), 2.0)
+        worker_task = asyncio.create_task(
+            job_mod.run_summary_job(
+                document_id,
+                "cancel-start-race",
+                run_id=run_id,
+                job_id=job_id,
+            )
+        )
+        await asyncio.wait_for(worker_attempted.wait(), 2.0)
+        release_cancel.set()
+
+        response = await asyncio.wait_for(cancel_task, 3.0)
+        await asyncio.wait_for(worker_task, 3.0)
+
+        assert response.status_code == 200, response.text
+        async with get_session_factory()() as session:
+            job = await session.get(DocumentJob, job_id)
+            run = await session.get(SummaryRun, run_id)
+            artifacts = (
+                await session.execute(
+                    select(func.count()).select_from(SummaryArtifact).where(
+                        SummaryArtifact.summary_run_id == run_id
+                    )
+                )
+            ).scalar_one()
+        assert job.status == JobStatus.FAILED
+        assert job.failure_code == "CANCELLED"
+        assert run.status == SummaryRunStatus.CANCELLED
+        assert artifacts == 0
+
+    async def test_worker_finalization_writer_wins_cancel_without_false_success(
+        self, client, monkeypatch
+    ):
+        """final 저장이 writer lock을 먼저 잡으면 cancel은 완료 상태를 뒤집지 않는다."""
+
+        import asyncio
+
+        from sqlalchemy.ext.asyncio import AsyncSession
+        from sqlalchemy.sql.dml import Update
+
+        from app.models.enums import SummaryArtifactType
+        from app.services.summary import service as summary_service
+        from app.services.summary.provider import DeterministicSummaryProvider
+        from app.services.summary.schema import ArtifactDraft
+        from app.services.tasks import jobs as jobs_mod
+        from app.services.tasks import summary_job as job_mod
+
+        await enable_deterministic()
+        doc_id = await upload_chunked(client, fx.single_column_korean(pages=1))
+        document_id = uuid.UUID(doc_id)
+        job_id, run_id = uuid.uuid4(), uuid.uuid4()
+        provider = DeterministicSummaryProvider()
+        async with get_session_factory()() as session:
+            doc = await session.get(Document, document_id)
+            session.add(
+                DocumentJob(
+                    id=job_id,
+                    document_id=document_id,
+                    job_type=JobType.SUMMARIZE,
+                    status=JobStatus.QUEUED,
+                    correlation_id="finalize-race",
+                )
+            )
+            session.add(
+                SummaryRun(
+                    id=run_id,
+                    job_id=job_id,
+                    document_id=document_id,
+                    status=SummaryRunStatus.QUEUED,
+                    provider_name=provider.provider_name,
+                    model_name=provider.model_name,
+                    prompt_version="finalize-race",
+                    schema_version=1,
+                    source_revision=doc.content_revision,
+                    source_chunk_hash=await summary_service.current_chunk_hash(
+                        session, document_id
+                    ),
+                    learner_level="nursing_student",
+                    language="ko",
+                )
+            )
+            await session.commit()
+
+        pipeline_done = asyncio.Event()
+        final_writer_claimed = asyncio.Event()
+        cancel_attempted = asyncio.Event()
+        cancel_route_task = None
+        worker_task = None
+        original_execute = AsyncSession.execute
+        original_cancel = summary_service.cancel_summary
+        original_claim = jobs_mod.claim_current_job_for_write
+
+        async def fake_execute(*_args, **_kwargs):
+            pipeline_done.set()
+            return [
+                ArtifactDraft(
+                    artifact_type=SummaryArtifactType.OVERVIEW,
+                    title="검증 요약",
+                    position=0,
+                    content_json={"text": "경쟁 조건 검증"},
+                    source_chunk_ids=[],
+                )
+            ]
+
+        async def observed_cancel(db, doc):
+            nonlocal cancel_route_task
+            cancel_route_task = asyncio.current_task()
+            return await original_cancel(db, doc)
+
+        async def observe_cancel_attempt(session, statement, *args, **kwargs):
+            if (
+                asyncio.current_task() is cancel_route_task
+                and isinstance(statement, Update)
+                and statement.table.name == "document_jobs"
+            ):
+                cancel_attempted.set()
+            return await original_execute(session, statement, *args, **kwargs)
+
+        async def hold_final_writer(session, *args, **kwargs):
+            claimed = await original_claim(session, *args, **kwargs)
+            if (
+                claimed
+                and asyncio.current_task() is worker_task
+                and pipeline_done.is_set()
+            ):
+                final_writer_claimed.set()
+                await asyncio.wait_for(cancel_attempted.wait(), 2.0)
+            return claimed
+
+        monkeypatch.setattr(job_mod, "execute_hierarchical_summary", fake_execute)
+        monkeypatch.setattr(summary_service, "cancel_summary", observed_cancel)
+        monkeypatch.setattr(AsyncSession, "execute", observe_cancel_attempt)
+        monkeypatch.setattr(jobs_mod, "claim_current_job_for_write", hold_final_writer)
+        monkeypatch.setattr(job_mod, "claim_current_job_for_write", hold_final_writer)
+        worker_task = asyncio.create_task(
+            job_mod.run_summary_job(
+                document_id,
+                "finalize-race",
+                run_id=run_id,
+                job_id=job_id,
+            )
+        )
+        await asyncio.wait_for(final_writer_claimed.wait(), 2.0)
+        cancel_task = asyncio.create_task(
+            client.post(f"/api/documents/{doc_id}/summaries/cancel")
+        )
+
+        await asyncio.wait_for(worker_task, 3.0)
+        response = await asyncio.wait_for(cancel_task, 3.0)
+
+        assert response.status_code == 409, response.text
+        async with get_session_factory()() as session:
+            job = await session.get(DocumentJob, job_id)
+            run = await session.get(SummaryRun, run_id)
+            artifacts = (
+                await session.execute(
+                    select(func.count()).select_from(SummaryArtifact).where(
+                        SummaryArtifact.summary_run_id == run_id
+                    )
+                )
+            ).scalar_one()
+        assert job.status == JobStatus.SUCCEEDED
+        assert run.status == SummaryRunStatus.SUCCEEDED
+        assert artifacts == 1
+
+    async def test_cancel_writer_prevents_late_failure_from_overwriting_reason(
+        self, client, monkeypatch
+    ):
+        """cancel commit을 기다린 늦은 실패 경계가 CANCELLED 상태를 덮지 않는다."""
+
+        import asyncio
+
+        from sqlalchemy.ext.asyncio import AsyncSession
+        from sqlalchemy.sql.dml import Update
+
+        from app.services.summary import service as summary_service
+        from app.services.tasks import jobs as jobs_mod
+        from app.services.tasks import summary_job as job_mod
+
+        await enable_deterministic()
+        doc_id = await upload_chunked(client, fx.single_column_korean(pages=1))
+        document_id = uuid.UUID(doc_id)
+        job_id, run_id = uuid.uuid4(), uuid.uuid4()
+        async with get_session_factory()() as session:
+            doc = await session.get(Document, document_id)
+            session.add(
+                DocumentJob(
+                    id=job_id,
+                    document_id=document_id,
+                    job_type=JobType.SUMMARIZE,
+                    status=JobStatus.RUNNING,
+                    correlation_id="cancel-failure-race",
+                )
+            )
+            session.add(
+                SummaryRun(
+                    id=run_id,
+                    job_id=job_id,
+                    document_id=document_id,
+                    status=SummaryRunStatus.RUNNING,
+                    provider_name="deterministic",
+                    model_name="deterministic-test-v1",
+                    prompt_version="cancel-failure-race",
+                    schema_version=1,
+                    source_revision=doc.content_revision,
+                    source_chunk_hash=await summary_service.current_chunk_hash(
+                        session, document_id
+                    ),
+                    learner_level="nursing_student",
+                    language="ko",
+                )
+            )
+            await session.commit()
+
+        cancel_claimed = asyncio.Event()
+        release_cancel = asyncio.Event()
+        failure_attempted = asyncio.Event()
+        cancel_route_task = None
+        failure_task = None
+        original_execute = AsyncSession.execute
+        original_cancel = summary_service.cancel_summary
+        original_claim = jobs_mod.claim_current_job_for_write
+
+        async def observed_cancel(db, doc):
+            nonlocal cancel_route_task
+            cancel_route_task = asyncio.current_task()
+            return await original_cancel(db, doc)
+
+        async def hold_cancel_writer(session, statement, *args, **kwargs):
+            result = await original_execute(session, statement, *args, **kwargs)
+            if (
+                asyncio.current_task() is cancel_route_task
+                and isinstance(statement, Update)
+                and statement.table.name == "document_jobs"
+            ):
+                cancel_claimed.set()
+                await asyncio.wait_for(release_cancel.wait(), 2.0)
+            return result
+
+        async def observed_claim(session, *args, **kwargs):
+            if asyncio.current_task() is failure_task:
+                failure_attempted.set()
+            return await original_claim(session, *args, **kwargs)
+
+        async def fail_late():
+            async with get_session_factory()() as session:
+                await job_mod._fail_run(
+                    session,
+                    document_id,
+                    run_id,
+                    job_id,
+                    "SUMMARY_PROVIDER_ERROR",
+                    "provider_error",
+                )
+
+        monkeypatch.setattr(summary_service, "cancel_summary", observed_cancel)
+        monkeypatch.setattr(AsyncSession, "execute", hold_cancel_writer)
+        monkeypatch.setattr(jobs_mod, "claim_current_job_for_write", observed_claim)
+        monkeypatch.setattr(job_mod, "claim_current_job_for_write", observed_claim)
+
+        cancel_task = asyncio.create_task(
+            client.post(f"/api/documents/{doc_id}/summaries/cancel")
+        )
+        await asyncio.wait_for(cancel_claimed.wait(), 2.0)
+        failure_task = asyncio.create_task(fail_late())
+        await asyncio.wait_for(failure_attempted.wait(), 2.0)
+        release_cancel.set()
+
+        response = await asyncio.wait_for(cancel_task, 3.0)
+        await asyncio.wait_for(failure_task, 3.0)
+
+        assert response.status_code == 200, response.text
+        async with get_session_factory()() as session:
+            job = await session.get(DocumentJob, job_id)
+            run = await session.get(SummaryRun, run_id)
+        assert job.status == JobStatus.FAILED
+        assert job.failure_code == "CANCELLED"
+        assert job.failure_reason is None
+        assert run.status == SummaryRunStatus.CANCELLED
+        assert run.error_code == "CANCELLED"
+        assert run.failure_reason is None
 
 
 class TestSummaryRevisionGuard:
@@ -568,6 +1090,119 @@ class TestSummaryDeleteWhileActive:
         )
         assert res.status_code == 202
         await drain_jobs()
+
+    async def test_worker_success_before_delete_is_fully_removed(self, client):
+        """worker 성공 commit이 먼저인 interleaving은 DELETE가 모든 파생 상태를 지운다."""
+
+        await enable_deterministic()
+        doc_id = await upload_chunked(client, fx.single_column_korean(pages=2))
+        document_id = uuid.UUID(doc_id)
+        await make_summary(client, doc_id)
+
+        response = await client.delete(f"/api/documents/{doc_id}/summaries")
+
+        assert response.status_code == 200
+        async with get_session_factory()() as session:
+            for model in (SummaryArtifact, SummaryNode, SummaryRun):
+                remaining = (
+                    await session.execute(
+                        select(func.count()).select_from(model).where(
+                            model.document_id == document_id
+                        )
+                    )
+                ).scalar_one()
+                assert remaining == 0
+
+    async def test_delete_commit_before_worker_result_cannot_resurrect_summary(
+        self, client, monkeypatch
+    ):
+        """DELETE가 먼저 writer lock을 얻으면 늦게 끝난 provider 결과는 저장되지 않는다."""
+
+        import asyncio
+        import threading
+
+        from app.services.summary import service as summary_service
+        from app.services.summary.provider import DeterministicSummaryProvider
+        from app.services.tasks import summary_job as job_mod
+
+        await enable_deterministic()
+        doc_id = await upload_chunked(client, fx.single_column_korean(pages=2))
+        document_id = uuid.UUID(doc_id)
+        job_id, run_id = uuid.uuid4(), uuid.uuid4()
+        provider_entered = threading.Event()
+        release_provider = threading.Event()
+
+        class BlockingProvider(DeterministicSummaryProvider):
+            def summarize_group(self, request):
+                provider_entered.set()
+                assert release_provider.wait(5.0), "test did not release provider"
+                return super().summarize_group(request)
+
+        provider = BlockingProvider()
+
+        async def blocking_provider(_session, **_kwargs):
+            return provider
+
+        monkeypatch.setattr(job_mod, "get_summary_provider", blocking_provider)
+
+        async with get_session_factory()() as session:
+            doc = await session.get(Document, document_id)
+            session.add(
+                DocumentJob(
+                    id=job_id,
+                    document_id=document_id,
+                    job_type=JobType.SUMMARIZE,
+                    status=JobStatus.QUEUED,
+                    correlation_id="delete-race",
+                )
+            )
+            session.add(
+                SummaryRun(
+                    id=run_id,
+                    job_id=job_id,
+                    document_id=document_id,
+                    status=SummaryRunStatus.QUEUED,
+                    provider_name=provider.provider_name,
+                    model_name=provider.model_name,
+                    prompt_version="delete-race",
+                    schema_version=1,
+                    source_revision=doc.content_revision,
+                    source_chunk_hash=await summary_service.current_chunk_hash(
+                        session, document_id
+                    ),
+                    learner_level="nursing_student",
+                    language="ko",
+                )
+            )
+            await session.commit()
+
+        worker = asyncio.create_task(
+            job_mod.run_summary_job(
+                document_id,
+                "delete-race",
+                run_id=run_id,
+                job_id=job_id,
+            )
+        )
+        assert await asyncio.to_thread(provider_entered.wait, 2.0)
+
+        response = await client.delete(f"/api/documents/{doc_id}/summaries")
+        assert response.status_code == 200
+        release_provider.set()
+        await asyncio.wait_for(worker, 3.0)
+
+        async with get_session_factory()() as session:
+            job = await session.get(DocumentJob, job_id)
+            assert job.status == JobStatus.FAILED
+            for model in (SummaryArtifact, SummaryNode, SummaryRun):
+                remaining = (
+                    await session.execute(
+                        select(func.count()).select_from(model).where(
+                            model.document_id == document_id
+                        )
+                    )
+                ).scalar_one()
+                assert remaining == 0
 
 
 class TestSummaryChunkReplacementGuard:

@@ -59,7 +59,13 @@ class LocalTaskRunner:
         include_sections: bool = True,
         include_prerequisites: bool = True,
     ) -> None:
-        self._spawn(
+        from app.services.summary.cancellation import (
+            discard_summary_cancellation,
+            register_summary_cancellation,
+        )
+
+        cancellation_signal = register_summary_cancellation(job_id, run_id)
+        task = self._spawn(
             self._run_summary(
                 document_id,
                 correlation_id,
@@ -67,8 +73,18 @@ class LocalTaskRunner:
                 job_id,
                 include_sections,
                 include_prerequisites,
+                cancellation_signal,
             )
         )
+        # task가 semaphore 진입 전 취소돼 coroutine 본문의 finally가 실행되지 않는
+        # 경우까지 포함해, 완료 callback에서 자신이 등록한 신호를 정확히 제거한다.
+        def finish_summary_task(_task: asyncio.Task) -> None:
+            # outer task/TaskGroup가 await asyncio.to_thread를 취소해도 worker thread와 HTTP
+            # recv는 계속 돈다. 먼저 signal을 세워 그 I/O를 끊고 그 다음 registry를 지운다.
+            cancellation_signal.cancel()
+            discard_summary_cancellation(cancellation_signal)
+
+        task.add_done_callback(finish_summary_task)
 
     async def _run_guarded(
         self,
@@ -100,20 +116,26 @@ class LocalTaskRunner:
         job_id: uuid.UUID,
         include_sections: bool,
         include_prerequisites: bool,
+        cancellation_signal,
     ) -> None:
+        from app.services.summary.cancellation import summary_cancellation_scope
         from app.services.tasks.summary_job import mark_summary_crashed, run_summary_job
+
+        async def run_with_cancellation_scope() -> None:
+            with summary_cancellation_scope(cancellation_signal):
+                await run_summary_job(
+                    document_id,
+                    correlation_id,
+                    run_id=run_id,
+                    job_id=job_id,
+                    include_sections=include_sections,
+                    include_prerequisites=include_prerequisites,
+                )
 
         await self._run_guarded(
             "summary",
             document_id,
-            lambda: run_summary_job(
-                document_id,
-                correlation_id,
-                run_id=run_id,
-                job_id=job_id,
-                include_sections=include_sections,
-                include_prerequisites=include_prerequisites,
-            ),
+            run_with_cancellation_scope,
             lambda: mark_summary_crashed(document_id, job_id=job_id),
         )
 
@@ -142,10 +164,11 @@ class LocalTaskRunner:
             lambda: mark_ocr_job_crashed(document_id),
         )
 
-    def _spawn(self, coro) -> None:
+    def _spawn(self, coro) -> asyncio.Task:
         task = asyncio.get_running_loop().create_task(coro)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+        return task
 
     async def _run_extract(self, document_id: uuid.UUID, correlation_id: str) -> None:
         from app.services.tasks.extract import extract_document, mark_extraction_crashed

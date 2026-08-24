@@ -23,7 +23,12 @@ from sqlalchemy import func, select, update
 
 from app.core.logging import get_logger
 from app.models.document import Document
+from app.models.enums import JobType
 from app.models.summary import SummaryNode, SummaryRun
+from app.services.summary.cancellation import (
+    SummaryCancelled,
+    current_summary_cancellation,
+)
 from app.services.summary.endpoint import SummaryNetworkError
 from app.services.summary.grouping import build_groups
 from app.services.summary.hierarchy import (
@@ -60,6 +65,7 @@ from app.services.summary.settings import (
     SUMMARY_REQUEST_GUARD_TIMEOUT_SEC,
     summary_node_concurrency,
 )
+from app.services.tasks.jobs import claim_current_job_for_write
 
 logger = get_logger(__name__)
 
@@ -90,10 +96,6 @@ MAX_REDUCE_ADAPT = 2
 # 청크 하나가 통째로 컨텍스트를 넘을 때 그 텍스트를 더 나눌지 판단하는 하한.
 # 이보다 짧으면 나눠도 의미 있는 요약이 나오지 않는다.
 MIN_TEXT_SPLIT_CHARS = 200
-
-
-class SummaryCancelled(Exception):
-    """잡이 취소·교체됨 — 실패로 기록하지 않고 조용히 종료한다."""
 
 
 class SummaryRevisionChanged(Exception):
@@ -198,6 +200,9 @@ async def _call_provider(
     최대 12회로 증폭한다. OpenAI provider는 동일 payload 전송만 자체 재시도하고, 여기선
     deterministic/test provider에도 취소·revision 가드를 적용하는 역할만 맡는다.
     """
+    cancellation_signal = current_summary_cancellation()
+    if cancellation_signal is not None:
+        cancellation_signal.raise_if_cancelled()
     if guard is not None:
         remaining = request_budget.remaining_seconds()
         if remaining <= 0:
@@ -210,14 +215,22 @@ async def _call_provider(
             if not deadline.expired():
                 raise
             raise SummaryNetworkError("timeout", "node_deadline_exceeded") from exc
+    if cancellation_signal is not None:
+        cancellation_signal.raise_if_cancelled()
     if attempt_counter is not None:
         attempt_counter.attempts += 1
     with provider_request_budget_scope(request_budget):
-        return await asyncio.to_thread(call, argument)
+        result = await asyncio.to_thread(call, argument)
+    if cancellation_signal is not None:
+        cancellation_signal.raise_if_cancelled()
+    return result
 
 
 def _run_request_guard_from_worker(loop, guard) -> None:
     """worker에서 async 전송 가드를 fail-closed bounded wait로 실행한다."""
+    cancellation_signal = current_summary_cancellation()
+    if cancellation_signal is not None:
+        cancellation_signal.raise_if_cancelled()
     budget = current_provider_request_budget()
     remaining = budget.remaining_seconds() if budget is not None else None
     if remaining is not None and remaining <= 0:
@@ -229,6 +242,8 @@ def _run_request_guard_from_worker(loop, guard) -> None:
     future = asyncio.run_coroutine_threadsafe(guard(), loop)
     try:
         future.result(timeout=timeout)
+        if cancellation_signal is not None:
+            cancellation_signal.raise_if_cancelled()
     except FutureTimeoutError:
         # guard coroutine 자체가 TimeoutError를 올린 경우와 result() 대기 timeout을
         # 구분한다. 완료된 future의 예외는 원형 그대로 전파한다.
@@ -396,6 +411,10 @@ async def execute_hierarchical_summary(
 
     planned = plan_total_nodes(len(groups), REDUCE_FAN_IN)
     async with factory() as session:
+        if not await claim_current_job_for_write(
+            session, document_id, job_id, JobType.SUMMARIZE
+        ):
+            raise SummaryCancelled
         run = await session.get(SummaryRun, run_id)
         if run is not None:
             # 프로세스 중단 전 commit된 노드는 같은 run을 재개할 때 이미 완료한 작업이다.
@@ -751,6 +770,13 @@ async def _process_node(
 
         reusable = await _find_reusable(session, document_id, input_hash)
         if reusable is not None and replace_checkpoint_id is None:
+            # 위 조회 뒤 취소가 commit됐더라도 이 조건부 첫 DML이 실패한다. 성공하면
+            # writer lock 아래에서 current/revision을 다시 확인한 뒤 checkpoint를 쓴다.
+            if not await claim_current_job_for_write(
+                session, document_id, guard_args["job_id"], JobType.SUMMARIZE
+            ):
+                raise SummaryCancelled
+            await _assert_runnable(session, check_full_hash=False, **guard_args)
             evidence_ids = bounded_evidence_chunk_ids(source_ids)
             node = SummaryNode(
                 document_id=document_id,
@@ -841,6 +867,14 @@ async def _process_node(
 
     async def _persist() -> uuid.UUID:
         async with factory() as session:
+            # provider가 끝난 직후 사용자 취소/delete가 commit된 경합에서는 결과를
+            # checkpoint로 되살리지 않는다. 형제 노드 실패로 task만 취소된 경우에는
+            # job이 여전히 active라 통과하므로 기존 "지불한 성공 결과 저장" 의미는 유지한다.
+            if not await claim_current_job_for_write(
+                session, document_id, guard_args["job_id"], JobType.SUMMARIZE
+            ):
+                raise SummaryCancelled
+            await _assert_runnable(session, check_full_hash=False, **guard_args)
             attempts = max(attempt_counter.attempts, request_budget.requests_started)
             if replace_checkpoint_id is not None:
                 node = await session.get(SummaryNode, replace_checkpoint_id)

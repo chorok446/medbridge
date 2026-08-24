@@ -478,6 +478,138 @@ class TestGuards:
             await _run_executor(doc_id, run_id, job_id, rev, chash, provider)
         assert provider.group_calls == 0
 
+    async def test_checkpoint_writer_commits_before_waiting_cancel(self, client, monkeypatch):
+        """checkpoint writer가 먼저면 그 commit 뒤 cancel이 직렬화되어 late write가 없다."""
+
+        from sqlalchemy.ext.asyncio import AsyncSession
+        from sqlalchemy.sql.dml import Update
+
+        from app.services.tasks import jobs as jobs_mod
+
+        doc_id = await _upload_chunked(client, fx.single_column_korean(pages=1))
+        provider_returned = threading.Event()
+
+        class MarkingProvider(CountingProvider):
+            def summarize_group(self, request):
+                result = super().summarize_group(request)
+                provider_returned.set()
+                return result
+
+        provider = MarkingProvider()
+        run_id, job_id, revision, chunk_hash = await _make_run(doc_id, provider)
+        request = GroupRequest(
+            group_id="checkpoint-race",
+            section_title="경쟁 조건",
+            chunks=[
+                ChunkInput(
+                    "checkpoint-source",
+                    "경쟁 조건",
+                    "요약 결과를 저장하기 위한 본문이다.",
+                    1,
+                    1,
+                )
+            ],
+            learner_level="nursing_student",
+            language="ko",
+        )
+
+        checkpoint_claimed = asyncio.Event()
+        cancel_attempted = asyncio.Event()
+        cancel_route_task = None
+        worker_task = None
+        persistence_task = None
+        commit_order: list[str] = []
+        original_claim = jobs_mod.claim_current_job_for_write
+        original_execute = AsyncSession.execute
+        original_commit = AsyncSession.commit
+        original_cancel = summary_service.cancel_summary
+
+        async def observed_cancel(db, doc):
+            nonlocal cancel_route_task
+            cancel_route_task = asyncio.current_task()
+            return await original_cancel(db, doc)
+
+        async def observe_cancel_attempt(session, statement, *args, **kwargs):
+            if (
+                asyncio.current_task() is cancel_route_task
+                and isinstance(statement, Update)
+                and statement.table.name == "document_jobs"
+            ):
+                cancel_attempted.set()
+            return await original_execute(session, statement, *args, **kwargs)
+
+        async def observe_commit(session):
+            await original_commit(session)
+            if provider_returned.is_set():
+                if asyncio.current_task() is persistence_task:
+                    commit_order.append("checkpoint")
+                elif asyncio.current_task() is cancel_route_task:
+                    commit_order.append("cancel")
+
+        async def hold_checkpoint_writer(session, *args, **kwargs):
+            nonlocal persistence_task
+            claimed = await original_claim(session, *args, **kwargs)
+            if (
+                claimed
+                and asyncio.current_task() is not cancel_route_task
+                and provider_returned.is_set()
+            ):
+                persistence_task = asyncio.current_task()
+                checkpoint_claimed.set()
+                await asyncio.wait_for(cancel_attempted.wait(), 2.0)
+            return claimed
+
+        monkeypatch.setattr(summary_service, "cancel_summary", observed_cancel)
+        monkeypatch.setattr(AsyncSession, "execute", observe_cancel_attempt)
+        monkeypatch.setattr(AsyncSession, "commit", observe_commit)
+        monkeypatch.setattr(jobs_mod, "claim_current_job_for_write", hold_checkpoint_writer)
+        monkeypatch.setattr(
+            executor_mod, "claim_current_job_for_write", hold_checkpoint_writer
+        )
+
+        worker_task = asyncio.create_task(
+            executor_mod._process_node(
+                get_session_factory(),
+                provider=provider,
+                run_id=run_id,
+                document_id=doc_id,
+                level=0,
+                position=0,
+                input_hash="cf" * 32,
+                request=request,
+                source_ids=["checkpoint-source"],
+                chunk_sources={"checkpoint-source": ["checkpoint-source"]},
+                section_title="경쟁 조건",
+                counter=executor_mod._Counter(),
+                guard_args={
+                    "document_id": doc_id,
+                    "job_id": job_id,
+                    "start_revision": revision,
+                    "start_hash": chunk_hash,
+                    "job_is_current": _job_is_current,
+                    "current_chunk_hash": summary_service.current_chunk_hash,
+                },
+            )
+        )
+        await asyncio.wait_for(checkpoint_claimed.wait(), 2.0)
+        cancel_task = asyncio.create_task(
+            client.post(f"/api/documents/{doc_id}/summaries/cancel")
+        )
+
+        node = await asyncio.wait_for(worker_task, 3.0)
+        response = await asyncio.wait_for(cancel_task, 3.0)
+
+        assert response.status_code == 200, response.text
+        assert commit_order == ["checkpoint", "cancel"]
+        async with get_session_factory()() as session:
+            stored = await session.get(SummaryNode, node.node_id)
+            job = await session.get(DocumentJob, job_id)
+            run = await session.get(SummaryRun, run_id)
+        assert stored is not None
+        assert job.status == JobStatus.FAILED
+        assert job.failure_code == "CANCELLED"
+        assert run.status == SummaryRunStatus.CANCELLED
+
     async def test_revision_change_stops_execution(self, client):
         doc_id = await _upload_chunked(client, fx.single_column_korean(pages=3))
         provider = CountingProvider()
@@ -690,11 +822,15 @@ class TestExecutorIsolation:
             await s.commit()
 
             monkeypatch.setattr(
-                local_ai_client, "installed_model_digest", lambda _model: "sha256:digest-a"
+                local_ai_client,
+                "installed_model_digest",
+                lambda _model, **_kwargs: "sha256:digest-a",
             )
             first = await get_summary_provider(s, resolve_identity=True)
             monkeypatch.setattr(
-                local_ai_client, "installed_model_digest", lambda _model: "sha256:digest-b"
+                local_ai_client,
+                "installed_model_digest",
+                lambda _model, **_kwargs: "sha256:digest-b",
             )
             replaced = await get_summary_provider(s, resolve_identity=True)
 
@@ -722,12 +858,75 @@ class TestExecutorIsolation:
                 )
             )
             await s.commit()
-            monkeypatch.setattr(local_ai_client, "installed_model_digest", lambda _model: None)
+            monkeypatch.setattr(
+                local_ai_client, "installed_model_digest", lambda _model, **_kwargs: None
+            )
             first = await get_summary_provider(s, resolve_identity=True)
             second = await get_summary_provider(s, resolve_identity=True)
 
         assert first.model_digest is None and second.model_digest is None
         assert provider_checkpoint_fingerprint(first) != provider_checkpoint_fingerprint(second)
+
+    async def test_cancel_releases_all_metadata_workers_before_next_probe(
+        self, monkeypatch
+    ):
+        """취소된 /api/tags 4개가 전용 pool을 timeout까지 점유해 새 실행을 막지 않는다."""
+
+        from app.services.local_ai import client as local_ai_client
+        from app.services.summary.cancellation import (
+            SummaryCancellationSignal,
+            summary_cancellation_scope,
+        )
+        from app.services.summary.factory import get_summary_provider
+
+        async with get_session_factory()() as session:
+            session.add(
+                SummarySettings(
+                    enabled=True,
+                    provider_type="openai_compatible",
+                    endpoint="http://127.0.0.1:11434/v1",
+                    model_name="qwen3:8b",
+                    is_local=True,
+                )
+            )
+            await session.commit()
+
+        entered_all = threading.Event()
+        entered_count = 0
+        entered_lock = threading.Lock()
+
+        def blocked_digest(_model, *, cancellation_signal=None):
+            nonlocal entered_count
+            assert cancellation_signal is not None
+            with entered_lock:
+                entered_count += 1
+                if entered_count == 4:
+                    entered_all.set()
+            assert cancellation_signal.wait(5.0), "metadata probe was not cancelled"
+            cancellation_signal.raise_if_cancelled()
+
+        monkeypatch.setattr(local_ai_client, "installed_model_digest", blocked_digest)
+        signal = SummaryCancellationSignal(job_id=uuid.uuid4(), run_id=uuid.uuid4())
+
+        async def resolve_provider():
+            async with get_session_factory()() as session:
+                return await get_summary_provider(session, resolve_identity=True)
+
+        with summary_cancellation_scope(signal):
+            probes = [asyncio.create_task(resolve_provider()) for _ in range(4)]
+        assert await asyncio.to_thread(entered_all.wait, 2.0)
+
+        signal.cancel()
+        results = await asyncio.gather(*probes, return_exceptions=True)
+        assert all(isinstance(result, SummaryCancelled) for result in results)
+
+        monkeypatch.setattr(
+            local_ai_client,
+            "installed_model_digest",
+            lambda _model, **_kwargs: "sha256:next",
+        )
+        next_provider = await asyncio.wait_for(resolve_provider(), timeout=1.0)
+        assert next_provider.model_digest == "sha256:next"
 
     async def test_non_ollama_local_provider_does_not_use_unrelated_ollama_digest(
         self, client, monkeypatch
@@ -748,7 +947,7 @@ class TestExecutorIsolation:
             )
             await s.commit()
 
-            def unrelated_catalog_must_not_be_read(_model):
+            def unrelated_catalog_must_not_be_read(_model, **_kwargs):
                 raise AssertionError("LM Studio identity must not come from Ollama /api/tags")
 
             monkeypatch.setattr(
@@ -778,12 +977,16 @@ class TestExecutorIsolation:
             )
             await s.commit()
             monkeypatch.setattr(
-                local_ai_client, "installed_model_digest", lambda _model: "sha256:digest-a"
+                local_ai_client,
+                "installed_model_digest",
+                lambda _model, **_kwargs: "sha256:digest-a",
             )
             expected = await get_summary_provider(s, resolve_identity=True)
 
         run_id, job_id, rev, chash = await _make_run(doc_id, expected)
-        monkeypatch.setattr(local_ai_client, "installed_model_digest", lambda _model: None)
+        monkeypatch.setattr(
+            local_ai_client, "installed_model_digest", lambda _model, **_kwargs: None
+        )
         async with get_session_factory()() as s:
             with pytest.raises(SummaryProviderChanged):
                 await executor_mod._assert_network_call_allowed(
@@ -808,7 +1011,7 @@ class TestExecutorIsolation:
         doc_id = await _upload_chunked(client, fx.single_column_korean(pages=2))
         probe_calls = 0
 
-        def unavailable(_model):
+        def unavailable(_model, **_kwargs):
             nonlocal probe_calls
             probe_calls += 1
             return None
