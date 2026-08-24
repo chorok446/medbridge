@@ -21,10 +21,10 @@ overrides:
   # sourceMappingURL 주석으로 임의 파일 읽기 — 빌드 시 CSS를 파싱하는 경로다.
   postcss: "^8.5.18"
 
-  # GHSA-2v37-7h3g-55p8 (예측 가능한 ID 생성)
-  # next·vite·vitest·tailwind가 각각 물고 온다. 취약한 것은 3.x 계열뿐이라
-  # 5.x 이상을 쓰는 소비자는 건드리지 않는다.
-  nanoid@3: "^3.3.17"
+  # GHSA-2v37-7h3g-55p8 (size=0 사용자 정의 생성기 무한 루프)
+  # next·vite·vitest·tailwind가 각각 물고 온다. 3.x는 3.3.18부터
+  # 수정됐으며, 5.x 이상을 쓰는 소비자는 건드리지 않는다.
+  nanoid@3: "^3.3.18"
 
   # GHSA-f88m-g3jw-g9cj (libvips CVE 4건)
   # 이 앱에는 닿지 않는다 — output: "export" + images.unoptimized라 Next 이미지
