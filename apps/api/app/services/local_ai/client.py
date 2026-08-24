@@ -183,7 +183,7 @@ def test_model(model: str) -> tuple[bool, str]:
         "temperature": 0,
         "reasoning_effort": LOCAL_REASONING_EFFORT,
         "stream": False,
-        "max_tokens": 32,
+        "max_tokens": st.TEST_MAX_TOKENS,
         "messages": [
             {"role": "system", "content": st.NO_THINK_HINT},
             {"role": "user", "content": "안녕하세요라고 한 문장으로 답하세요."},

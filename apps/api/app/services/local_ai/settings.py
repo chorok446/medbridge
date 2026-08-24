@@ -14,7 +14,11 @@ GIB = 1024**3
 # --- 네트워크 타임아웃/크기 상한 ---
 STATUS_TIMEOUT_SEC = 4.0  # /api/version, /api/tags — 짧게(감지)
 STATUS_MAX_BYTES = 256 * 1024  # version/tags 응답 상한
-TEST_TIMEOUT_SEC = 30.0  # 연결 테스트(모델 로드 포함될 수 있어 여유)
+# Qwen3 8B의 Windows 최초 적재가 30초를 넘길 수 있어 cold start까지 기다린다.
+TEST_TIMEOUT_SEC = 60.0
+# Ollama의 OpenAI 호환 API가 reasoning_effort를 무시할 때도 내부 추론 뒤 실제
+# content를 생성할 수 있는 프로브 전용 예산이다.
+TEST_MAX_TOKENS = 128
 TEST_MAX_BYTES = 256 * 1024
 PULL_CONNECT_TIMEOUT_SEC = 10.0
 PULL_IDLE_TIMEOUT_SEC = 60.0  # 다운로드 청크 사이 무응답 상한

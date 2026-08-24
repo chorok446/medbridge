@@ -180,6 +180,24 @@ class TestModels:
 
 
 class TestConnectionTest:
+    def test_uses_cold_start_timeout_and_reasoning_budget(self, monkeypatch):
+        observed = {}
+
+        def fake_post_json(_url, payload, _api_key, **kwargs):
+            observed["payload"] = payload
+            observed.update(kwargs)
+            return {"choices": [{"message": {"content": "안녕하세요."}}]}
+
+        monkeypatch.setattr(client, "post_json", fake_post_json)
+
+        ok, _ = client.test_model("qwen3:8b")
+
+        assert ok is True
+        assert observed["timeout"] == st.TEST_TIMEOUT_SEC == 60.0
+        # qwen3:8b 실기기에서 32 tokens는 reasoning만 생성해 content가 비었고,
+        # 128 tokens에서는 실제 답변까지 생성됐다.
+        assert observed["payload"]["max_tokens"] == st.TEST_MAX_TOKENS == 128
+
     def test_success(self, ollama):
         ollama["chat"] = {"choices": [{"message": {"content": "안녕하세요."}}]}
         ok, _ = client.test_model("qwen3:8b")
