@@ -28,6 +28,10 @@ from app.services.summary.endpoint import (
 _cancel_body_started = threading.Event()
 _cancel_error_body_started = threading.Event()
 _cancel_headers_started = threading.Event()
+_stream_partial_headers_started = threading.Event()
+_stream_blocked_body_started = threading.Event()
+_stream_first_line_sent = threading.Event()
+_stream_long_tail_sent = threading.Event()
 
 
 class _BlockingConnectSocket:
@@ -454,6 +458,8 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+            self.wfile.flush()
+            time.sleep(0.02)
         elif path == "/redirect/chat/completions":
             self.send_response(302)
             self.send_header("Location", "http://127.0.0.1/other")
@@ -494,6 +500,8 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+            self.wfile.flush()
+            time.sleep(0.02)
         elif path == "/slow/chat/completions":
             time.sleep(2.0)
             self.send_response(200)
@@ -576,6 +584,53 @@ class _Handler(BaseHTTPRequestHandler):
                     time.sleep(0.2)
             except (BrokenPipeError, OSError):
                 pass
+        elif path == "/stream-partial-headers":
+            _stream_partial_headers_started.set()
+            try:
+                self.wfile.write(b"HTTP/1.1 20")
+                self.wfile.flush()
+                time.sleep(3.0)
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+        elif path == "/stream-blocked-body":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.send_header("Content-Length", "1000")
+            self.end_headers()
+            self.wfile.flush()
+            _stream_blocked_body_started.set()
+            time.sleep(3.0)
+            try:
+                self.wfile.write(b'{"status":"late"}\n')
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+        elif path == "/stream-first-line":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.end_headers()
+            self.wfile.write(b'{"status":"first"}\n')
+            self.wfile.flush()
+            _stream_first_line_sent.set()
+            time.sleep(3.0)
+            try:
+                self.wfile.write(b'{"status":"second"}\n')
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+        elif path == "/stream-long-tail":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.end_headers()
+            self.wfile.write(b"x" * 2048)
+            self.wfile.flush()
+            _stream_long_tail_sent.set()
+            time.sleep(3.0)
+            try:
+                self.wfile.write(b"\n")
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
         elif path == "/ctxlen/chat/completions":
             # OpenAI 호환 서버가 컨텍스트 초과를 알리는 유일한 명시적 신호
             body = (
@@ -587,6 +642,8 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+            self.wfile.flush()
+            time.sleep(0.02)
         elif path == "/badparam/chat/completions":
             body = b'{"error":{"message":"unknown parameter: foo"}}'
             self.send_response(400)
@@ -594,6 +651,8 @@ class _Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+            self.wfile.flush()
+            time.sleep(0.02)
         elif path.startswith("/status"):
             code = int(path.split("/")[2])
             self.send_response(code)
@@ -632,6 +691,367 @@ def _post(base, path, **kw):
         timeout=kw.get("timeout", 5.0),
         max_response_bytes=kw.get("max_response_bytes", 4 * 1024 * 1024),
     )
+
+
+def _stream(base, path, **kwargs):
+    from app.services.summary.endpoint import stream_lines
+
+    return stream_lines(
+        f"{base}{path}",
+        {"stream": True},
+        "secret-key",
+        is_local=True,
+        connect_timeout=kwargs.get("connect_timeout", 2.0),
+        idle_timeout=kwargs.get("idle_timeout", 2.0),
+        total_deadline=kwargs.get("total_deadline", 5.0),
+        max_line_bytes=kwargs.get("max_line_bytes", 64 * 1024),
+        max_total_bytes=kwargs.get("max_total_bytes", 1024 * 1024),
+        should_cancel=kwargs.get("should_cancel"),
+    )
+
+
+class TestSafeStream:
+    def test_already_cancelled_does_not_open_network(self, monkeypatch):
+        """generator 시작 시 이미 취소됐으면 opener를 생성·실행하지 않는다."""
+        import app.services.summary.endpoint as ep
+
+        build_calls = []
+        policy_calls = []
+
+        def build_opener(*_args, **_kwargs):
+            build_calls.append(True)
+            raise AssertionError("cancelled stream must not build or open a transport")
+
+        def assert_url_allowed(*_args, **_kwargs):
+            policy_calls.append(True)
+            raise AssertionError("cancelled stream must not start DNS policy lookup")
+
+        monkeypatch.setattr(ep, "_build_opener", build_opener)
+        monkeypatch.setattr(ep, "_assert_url_allowed", assert_url_allowed)
+
+        assert (
+            list(
+                _stream(
+                    "http://127.0.0.1:1",
+                    "/stream",
+                    should_cancel=lambda: True,
+                )
+            )
+            == []
+        )
+        assert build_calls == []
+        assert policy_calls == []
+
+    @pytest.mark.parametrize(
+        ("path", "started_event"),
+        [
+            ("/stream-partial-headers", _stream_partial_headers_started),
+            ("/stream-blocked-body", _stream_blocked_body_started),
+        ],
+    )
+    def test_cancel_interrupts_blocked_header_and_body_silently(
+        self, local_server, path, started_event
+    ):
+        """pull/Q&A 취소는 100ms watcher로 socket을 깨우고 정상 종료한다."""
+
+        started_event.clear()
+        cancelled = threading.Event()
+        lines: list[str] = []
+        errors: list[BaseException] = []
+
+        def consume() -> None:
+            try:
+                lines.extend(
+                    _stream(
+                        local_server,
+                        path,
+                        connect_timeout=10.0,
+                        idle_timeout=10.0,
+                        total_deadline=10.0,
+                        should_cancel=cancelled.is_set,
+                    )
+                )
+            except BaseException as exc:
+                errors.append(exc)
+
+        worker = threading.Thread(target=consume, daemon=True)
+        worker.start()
+        assert started_event.wait(1.5), "fixture did not enter blocked stream I/O"
+
+        started = time.monotonic()
+        cancelled.set()
+        worker.join(1.5)
+        elapsed = time.monotonic() - started
+
+        assert not worker.is_alive(), "stream cancel waited for the socket timeout"
+        assert elapsed < 1.0
+        assert lines == []
+        assert errors == []
+
+    @pytest.mark.parametrize(
+        ("connect_timeout", "total_deadline"),
+        [(0.4, 2.0), (2.0, 0.4)],
+    )
+    def test_slow_drip_headers_hit_connect_or_total_wall_deadline(
+        self, local_server, connect_timeout, total_deadline
+    ):
+        """idle 내부로 header를 흘려도 connect/total wall 상한을 넘지 못한다."""
+
+        started = time.monotonic()
+        with pytest.raises(SummaryNetworkError) as error:
+            list(
+                _stream(
+                    local_server,
+                    "/drip-headers/chat/completions",
+                    connect_timeout=connect_timeout,
+                    idle_timeout=1.0,
+                    total_deadline=total_deadline,
+                )
+            )
+        elapsed = time.monotonic() - started
+
+        assert error.value.category == "timeout"
+        assert elapsed < 1.5
+
+    def test_slow_drip_body_hits_total_wall_deadline(self, local_server):
+        """read1이 작은 body를 계속 받아도 전체 기한이 socket을 끊는다."""
+
+        started = time.monotonic()
+        with pytest.raises(SummaryNetworkError) as error:
+            list(
+                _stream(
+                    local_server,
+                    "/drip/chat/completions",
+                    connect_timeout=2.0,
+                    idle_timeout=0.5,
+                    total_deadline=0.6,
+                )
+            )
+        elapsed = time.monotonic() - started
+
+        assert error.value.category == "timeout"
+        assert elapsed < 1.5
+
+    def test_first_complete_line_yields_before_8192_bytes_or_eof(self, local_server):
+        """NDJSON/SSE의 첫 완결 줄을 다음 8192 bytes나 EOF까지 보류하지 않는다."""
+
+        _stream_first_line_sent.clear()
+        iterator = _stream(
+            local_server,
+            "/stream-first-line",
+            connect_timeout=2.0,
+            idle_timeout=5.0,
+            total_deadline=5.0,
+        )
+        lines: list[str] = []
+        errors: list[BaseException] = []
+
+        def read_first() -> None:
+            try:
+                lines.append(next(iterator))
+            except BaseException as exc:
+                errors.append(exc)
+
+        worker = threading.Thread(target=read_first, daemon=True)
+        started = time.monotonic()
+        worker.start()
+        assert _stream_first_line_sent.wait(1.5)
+        worker.join(1.0)
+        elapsed = time.monotonic() - started
+
+        assert not worker.is_alive(), "first line waited for stream EOF"
+        assert errors == []
+        assert lines == ['{"status":"first"}']
+        assert elapsed < 1.0
+        iterator.close()
+
+    def test_unterminated_line_hits_line_cap_before_total_cap_or_eof(self, local_server):
+        """newline 없는 현재 줄은 max_total이 아닌 max_line 즉시 거부된다."""
+
+        _stream_long_tail_sent.clear()
+        started = time.monotonic()
+        with pytest.raises(SummaryNetworkError) as error:
+            list(
+                _stream(
+                    local_server,
+                    "/stream-long-tail",
+                    idle_timeout=5.0,
+                    total_deadline=5.0,
+                    max_line_bytes=1024,
+                    max_total_bytes=1024 * 1024,
+                )
+            )
+        elapsed = time.monotonic() - started
+
+        assert _stream_long_tail_sent.is_set()
+        assert error.value.category == "response_too_large"
+        assert elapsed < 1.0
+
+    def test_http_error_is_classified_and_closed(self, monkeypatch):
+        """header 단계 HTTPError는 기존 status 분류를 유지하고 항상 닫힌다."""
+        import urllib.error
+
+        import app.services.summary.endpoint as ep
+
+        closed = threading.Event()
+
+        class TrackingHTTPError(urllib.error.HTTPError):
+            def close(self):
+                closed.set()
+
+        error = TrackingHTTPError(
+            "http://127.0.0.1:1/stream",
+            429,
+            "rate limited",
+            {"Retry-After": "3"},
+            None,
+        )
+        controller = ep._RequestAbortController(None)
+
+        class ErrorOpener:
+            _summary_abort_controller = controller
+
+            def open(self, _req, *, timeout):
+                assert timeout > 0
+                raise error
+
+        monkeypatch.setattr(ep, "_build_opener", lambda *_args, **_kwargs: ErrorOpener())
+
+        with pytest.raises(SummaryNetworkError) as raised:
+            list(_stream("http://127.0.0.1:1", "/stream"))
+
+        assert raised.value.category == "rate_limited"
+        assert raised.value.retry_after_seconds == 3.0
+        assert closed.is_set()
+
+    def test_cancel_wins_over_http_error_and_still_closes(self, monkeypatch):
+        """HTTPError와 취소가 경합하면 pull/Q&A iterator는 예외 없이 닫힌다."""
+        import urllib.error
+
+        import app.services.summary.endpoint as ep
+
+        entered = threading.Event()
+        release = threading.Event()
+        cancelled = threading.Event()
+        closed = threading.Event()
+
+        class TrackingHTTPError(urllib.error.HTTPError):
+            def close(self):
+                closed.set()
+
+        error = TrackingHTTPError("http://127.0.0.1:1/stream", 500, "server error", {}, None)
+        controller = ep._RequestAbortController(None)
+
+        class ErrorAfterCancelOpener:
+            _summary_abort_controller = controller
+
+            def open(self, _req, *, timeout):
+                assert timeout > 0
+                unregister = controller.register_abort(release.set)
+                try:
+                    entered.set()
+                    assert release.wait(2.0)
+                    raise error
+                finally:
+                    unregister()
+
+        monkeypatch.setattr(ep, "_build_opener", lambda *_args, **_kwargs: ErrorAfterCancelOpener())
+        lines: list[str] = []
+        errors: list[BaseException] = []
+
+        def consume() -> None:
+            try:
+                lines.extend(
+                    _stream(
+                        "http://127.0.0.1:1",
+                        "/stream",
+                        should_cancel=cancelled.is_set,
+                    )
+                )
+            except BaseException as exc:
+                errors.append(exc)
+
+        worker = threading.Thread(target=consume, daemon=True)
+        worker.start()
+        assert entered.wait(1.0)
+        cancelled.set()
+        worker.join(1.5)
+
+        assert not worker.is_alive()
+        assert lines == []
+        assert errors == []
+        assert closed.is_set()
+
+    def test_normal_completion_cleans_response_watcher_timers_and_controller(self, monkeypatch):
+        """정상 EOF도 watcher/timer/callback/socket을 남기지 않는다."""
+        import app.services.summary.endpoint as ep
+
+        timers = []
+        response_closed = threading.Event()
+
+        class TrackingTimer:
+            def __init__(self, interval, function):
+                self.interval = interval
+                self.function = function
+                self.daemon = False
+                self.started = False
+                self.cancelled = False
+                self.joined = False
+                timers.append(self)
+
+            def start(self):
+                self.started = True
+
+            def cancel(self):
+                self.cancelled = True
+
+            def is_alive(self):
+                return self.started and not self.joined
+
+            def join(self, timeout=None):
+                assert timeout == 0.2
+                self.joined = True
+
+        class OneLineResponse:
+            headers = {}
+
+            def __init__(self):
+                self.chunks = iter([b'{"status":"ok"}\n', b""])
+
+            def read1(self, _size):
+                return next(self.chunks)
+
+            def close(self):
+                response_closed.set()
+
+        controller = ep._RequestAbortController(None)
+
+        class OneLineOpener:
+            _summary_abort_controller = controller
+
+            def open(self, _req, *, timeout):
+                assert timeout > 0
+                return OneLineResponse()
+
+        monkeypatch.setattr(ep.threading, "Timer", TrackingTimer)
+        monkeypatch.setattr(ep, "_build_opener", lambda *_args, **_kwargs: OneLineOpener())
+
+        assert list(
+            _stream(
+                "http://127.0.0.1:1",
+                "/stream",
+                should_cancel=lambda: False,
+            )
+        ) == ['{"status":"ok"}']
+
+        assert len(timers) == 2
+        assert all(timer.started and timer.cancelled and timer.joined for timer in timers)
+        assert response_closed.is_set()
+        assert controller._abort_callbacks == {}
+        assert not any(
+            thread.name == "summary-stream-cancel" and thread.is_alive()
+            for thread in threading.enumerate()
+        )
 
 
 class TestSafePost:

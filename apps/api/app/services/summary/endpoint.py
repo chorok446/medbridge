@@ -311,12 +311,17 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         raise SummaryNetworkError("redirect_blocked")
 
 
+class _RequestCancelled(Exception):
+    """Callable 기반 stream 취소를 예외 없는 iterator 종료로 전달한다."""
+
+
 class _RequestAbortController:
     """사용자 취소와 wall deadline을 구분하면서 같은 socket abort를 조정한다."""
 
     def __init__(self, cancellation_signal: SummaryCancellationSignal | None) -> None:
         self.cancellation_signal = cancellation_signal
         self._deadline_expired = threading.Event()
+        self._request_cancelled = threading.Event()
         self._lock = threading.Lock()
         self._abort_callbacks: dict[int, Callable[[], None]] = {}
         self._next_callback_id = 0
@@ -351,15 +356,26 @@ class _RequestAbortController:
         self._deadline_expired.set()
         self._abort_callbacks_now()
 
+    def cancel_request(self) -> None:
+        """SummaryCancellationSignal 없이도 blocking stream socket을 중단한다."""
+
+        self._request_cancelled.set()
+        self._abort_callbacks_now()
+
     def is_aborted(self) -> bool:
-        return self._deadline_expired.is_set() or bool(
-            self.cancellation_signal is not None
-            and self.cancellation_signal.is_cancelled()
+        return (
+            self._request_cancelled.is_set()
+            or self._deadline_expired.is_set()
+            or bool(
+                self.cancellation_signal is not None and self.cancellation_signal.is_cancelled()
+            )
         )
 
     def raise_if_aborted(self) -> None:
         if self.cancellation_signal is not None:
             self.cancellation_signal.raise_if_cancelled()
+        if self._request_cancelled.is_set():
+            raise _RequestCancelled
         if self._deadline_expired.is_set():
             raise SummaryNetworkError("timeout")
 
@@ -927,6 +943,44 @@ def parse_chat_content(data: dict) -> str:
     return strip_thinking(content)
 
 
+_STREAM_CANCEL_POLL_SECONDS = 0.05
+
+
+def _start_stream_cancel_watcher(
+    should_cancel: Callable[[], bool] | None,
+    abort_controller: _RequestAbortController,
+) -> tuple[threading.Event, threading.Thread | None, list[Exception]]:
+    """polling cancel token을 request abort로 바꾸는 daemon watcher를 시작한다."""
+
+    stop = threading.Event()
+    failures: list[Exception] = []
+    if should_cancel is None:
+        return stop, None, failures
+
+    def watch() -> None:
+        while not stop.is_set():
+            try:
+                if should_cancel():
+                    abort_controller.cancel_request()
+                    return
+            except Exception as exc:  # noqa: BLE001 — caller callback 예외를 본 thread로 전달
+                failures.append(exc)
+                abort_controller.cancel_request()
+                return
+            if stop.wait(_STREAM_CANCEL_POLL_SECONDS):
+                return
+
+    watcher = threading.Thread(target=watch, name="summary-stream-cancel", daemon=True)
+    watcher.start()
+    return stop, watcher, failures
+
+
+def _stop_timer(timer: threading.Timer) -> None:
+    timer.cancel()
+    if timer.is_alive() and timer is not threading.current_thread():
+        timer.join(timeout=0.2)
+
+
 def stream_lines(
     url: str,
     payload: dict,
@@ -946,6 +1000,12 @@ def stream_lines(
     크기 상한)을 적용하되, 취소 가능하고 idle/total deadline을 강제한다. should_cancel()이
     True면 즉시 응답을 닫고 종료한다. UTF-8 멀티바이트가 청크 경계에서 나뉘어도 안전하다.
     """
+    # 취소가 이미 확정됐으면 endpoint 검증의 DNS 조회조차 시작하지 않는다.
+    # should_cancel은 pull/Q&A에서 threading.Event 기반이므로 이 확인은
+    # 부작용 없이 즉시 끝난다.
+    if should_cancel is not None and should_cancel():
+        return
+
     _assert_url_allowed(url, is_local=is_local)
 
     body = _json.dumps(payload).encode("utf-8")
@@ -955,43 +1015,113 @@ def stream_lines(
         headers=_auth_headers(api_key, "text/event-stream"),
         method="POST",
     )
-    opener = urllib.request.build_opener(_NoRedirect())
+    opener = _build_opener()
+    controller_candidate = getattr(opener, "_summary_abort_controller", None)
+    abort_controller = (
+        controller_candidate
+        if isinstance(controller_candidate, _RequestAbortController)
+        else _RequestAbortController(None)
+    )
     resp = None
+    unregister_response_abort: Callable[[], None] | None = None
     decoder = codecs.getincrementaldecoder("utf-8")()
     buffer = ""
     total = 0
-    deadline = time.monotonic() + total_deadline
+    started_at = time.monotonic()
+    connect_deadline_at = started_at + connect_timeout
+    total_deadline_at = started_at + total_deadline
+    connect_timer = threading.Timer(connect_timeout, abort_controller.expire_deadline)
+    total_timer = threading.Timer(total_deadline, abort_controller.expire_deadline)
+    connect_timer.daemon = True
+    total_timer.daemon = True
+    connect_timer.start()
+    total_timer.start()
+    watcher_stop, watcher, watcher_failures = _start_stream_cancel_watcher(
+        should_cancel, abort_controller
+    )
     try:
         try:
-            resp = opener.open(req, timeout=connect_timeout)  # noqa: S310 (검증된 endpoint)
+            abort_controller.raise_if_aborted()
+            open_timeout = min(
+                _remaining_before_deadline(connect_deadline_at),
+                _remaining_before_deadline(total_deadline_at),
+            )
+            resp = opener.open(req, timeout=open_timeout)  # noqa: S310 (검증된 endpoint)
+            connect_timer.cancel()
+            abort_controller.raise_if_aborted()
+            _remaining_before_deadline(connect_deadline_at)
+            _remaining_before_deadline(total_deadline_at)
+            unregister_response_abort = _register_response_abort(resp, abort_controller)
+            abort_controller.raise_if_aborted()
         except SummaryNetworkError:
+            abort_controller.raise_if_aborted()
+            _remaining_before_deadline(min(connect_deadline_at, total_deadline_at))
             raise
         except urllib.error.HTTPError as exc:
-            raise _classify_http_status(
-                exc.code, retry_after_seconds=_parse_retry_after(exc.headers.get("Retry-After"))
-            ) from None
+            connect_timer.cancel()
+            try:
+                abort_controller.raise_if_aborted()
+                _remaining_before_deadline(connect_deadline_at)
+                _remaining_before_deadline(total_deadline_at)
+                classified = _classify_http_status(
+                    exc.code,
+                    retry_after_seconds=_parse_retry_after(exc.headers.get("Retry-After")),
+                )
+                abort_controller.raise_if_aborted()
+                raise classified from None
+            finally:
+                _invoke_best_effort(exc.close)
         except TimeoutError as exc:
+            abort_controller.raise_if_aborted()
+            _remaining_before_deadline(min(connect_deadline_at, total_deadline_at))
             raise SummaryNetworkError("timeout") from exc
-        except OSError as exc:
+        except urllib.error.URLError as exc:
+            abort_controller.raise_if_aborted()
+            _remaining_before_deadline(min(connect_deadline_at, total_deadline_at))
+            if isinstance(exc.reason, (TimeoutError, socket.timeout)):
+                raise SummaryNetworkError("timeout") from exc
             raise SummaryNetworkError("connect_failed") from exc
-
-        # 개별 읽기는 idle_timeout, 전체는 total_deadline으로 제한
-        try:
-            resp.fp.raw._sock.settimeout(idle_timeout)  # type: ignore[attr-defined]
+        except OSError as exc:
+            abort_controller.raise_if_aborted()
+            _remaining_before_deadline(min(connect_deadline_at, total_deadline_at))
+            if isinstance(exc, socket.timeout):
+                raise SummaryNetworkError("timeout") from exc
+            raise SummaryNetworkError("connect_failed") from exc
         except Exception:
-            pass
+            abort_controller.raise_if_aborted()
+            _remaining_before_deadline(min(connect_deadline_at, total_deadline_at))
+            raise
+
+        length = resp.headers.get("Content-Length")
+        if length is not None:
+            try:
+                if int(length) > max_total_bytes:
+                    raise SummaryNetworkError("response_too_large")
+            except ValueError:
+                pass
 
         while True:
-            if should_cancel is not None and should_cancel():
-                return
-            if time.monotonic() > deadline:
+            abort_controller.raise_if_aborted()
+            remaining_total = _remaining_before_deadline(total_deadline_at)
+            if idle_timeout <= 0:
                 raise SummaryNetworkError("timeout")
+            _set_response_socket_timeout(resp, min(idle_timeout, remaining_total))
             try:
-                chunk = resp.read(8192)
+                read_size = min(8192, max_total_bytes + 1 - total)
+                chunk = _read_response_chunk(resp, read_size)
             except TimeoutError as exc:
+                abort_controller.raise_if_aborted()
                 raise SummaryNetworkError("timeout") from exc
             except OSError as exc:
+                abort_controller.raise_if_aborted()
+                if isinstance(exc, socket.timeout):
+                    raise SummaryNetworkError("timeout") from exc
                 raise SummaryNetworkError("connect_failed") from exc
+            except Exception:
+                abort_controller.raise_if_aborted()
+                raise
+            abort_controller.raise_if_aborted()
+            _remaining_before_deadline(total_deadline_at)
             if not chunk:
                 break
             total += len(chunk)
@@ -1003,15 +1133,28 @@ def stream_lines(
                 if len(line.encode("utf-8")) > max_line_bytes:
                     raise SummaryNetworkError("response_too_large")
                 yield line
-                if should_cancel is not None and should_cancel():
-                    return
+                abort_controller.raise_if_aborted()
+            # newline이 없는 NDJSON/SSE도 개별 줄 상한을 즉시 적용한다.
+            # 총 응답 상한(8~256MiB)까지 하나의 줄을 buffer에 누적하면
+            # pull/Q&A worker의 메모리를 불필요하게 점유한다.
+            if len(buffer.encode("utf-8")) > max_line_bytes:
+                raise SummaryNetworkError("response_too_large")
         # 남은 미완결 버퍼는 폐기(불완전 줄)
+    except _RequestCancelled:
+        if watcher_failures:
+            raise watcher_failures[0] from None
+        return
     finally:
+        watcher_stop.set()
+        if watcher is not None and watcher is not threading.current_thread():
+            watcher.join(timeout=0.2)
+        _stop_timer(connect_timer)
+        _stop_timer(total_timer)
+        if unregister_response_abort is not None:
+            unregister_response_abort()
         if resp is not None:
-            try:
-                resp.close()
-            except Exception:
-                pass
+            _invoke_best_effort(resp.close)
+        abort_controller.close()
 
 
 def _classify_http_error(
