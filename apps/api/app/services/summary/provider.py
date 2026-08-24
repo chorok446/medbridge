@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from app.core.logging import get_logger
+from app.services.summary.cancellation import current_summary_cancellation
 
 # finish_reason/done_reason 분류값은 endpoint.parse_chat_content와 공유한다.
 from app.services.summary.endpoint import KNOWN_FINISH_REASONS as _KNOWN_FINISH_REASONS
@@ -605,8 +606,13 @@ class OpenAICompatibleSummaryProvider:
         self._before_request = guard
 
     def _guard_request(self) -> None:
+        cancellation_signal = current_summary_cancellation()
+        if cancellation_signal is not None:
+            cancellation_signal.raise_if_cancelled()
         if self._before_request is not None:
             self._before_request()
+        if cancellation_signal is not None:
+            cancellation_signal.raise_if_cancelled()
 
     def _request_json(
         self,
@@ -631,12 +637,15 @@ class OpenAICompatibleSummaryProvider:
 
         transient = {"timeout", "connect_failed", "rate_limited", "server_error"}
         per_request_timeout = self._timeout or SUMMARY_REQUEST_TIMEOUT_SEC
+        cancellation_signal = current_summary_cancellation()
         for retry_index in range(SUMMARY_HTTP_MAX_ATTEMPTS):
             # 취소/revision/동의/provider 설정은 actual request마다, retry 직전에도 확인한다.
             # 가드가 실패한 호출은 실제 HTTP 요청이 아니므로 request budget을 쓰지 않는다.
             # 반대로 가드가 오래 걸렸다면 그 시간은 node deadline에 포함돼야 하므로,
             # 가드가 끝난 뒤 남은 시간으로 timeout을 계산한다.
             self._guard_request()
+            if cancellation_signal is not None:
+                cancellation_signal.raise_if_cancelled()
             timeout = budget.claim_request(per_request_timeout)
             try:
                 if self._http is not None:
@@ -649,8 +658,11 @@ class OpenAICompatibleSummaryProvider:
                         is_local=is_local,
                         timeout=timeout,
                         max_response_bytes=SUMMARY_MAX_RESPONSE_BYTES,
+                        cancellation_signal=cancellation_signal,
                     )
             except SummaryNetworkError as exc:
+                if cancellation_signal is not None:
+                    cancellation_signal.raise_if_cancelled()
                 can_retry = (
                     exc.category in transient
                     and retry_index + 1 < SUMMARY_HTTP_MAX_ATTEMPTS
@@ -668,8 +680,14 @@ class OpenAICompatibleSummaryProvider:
                     failure_reason=exc.reason or "none",
                     retry_delay_ms=int(delay * 1000),
                 )
-                _sleep_before_request_retry(delay)
+                if cancellation_signal is None:
+                    _sleep_before_request_retry(delay)
+                elif cancellation_signal.wait(delay):
+                    cancellation_signal.raise_if_cancelled()
                 continue
+
+            if cancellation_signal is not None:
+                cancellation_signal.raise_if_cancelled()
 
             try:
                 parsed = json.loads(data) if isinstance(data, str) else data

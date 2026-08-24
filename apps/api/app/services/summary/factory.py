@@ -7,6 +7,7 @@ import asyncio
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
+from functools import partial
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +16,7 @@ from app.core.config import get_settings
 from app.core.errors import AppError, ErrorCode
 from app.models.summary import SummarySettings
 from app.services.summary import secrets
+from app.services.summary.cancellation import current_summary_cancellation
 from app.services.summary.provider import (
     DeterministicSummaryProvider,
     DisabledSummaryProvider,
@@ -115,8 +117,13 @@ async def get_summary_provider(
         if is_ollama_native_endpoint(row.endpoint or "", is_local=True):
             model_digest = await asyncio.get_running_loop().run_in_executor(
                 _PROVIDER_METADATA_EXECUTOR,
-                local_ai_client.installed_model_digest,
-                row.model_name or "",
+                partial(
+                    local_ai_client.installed_model_digest,
+                    row.model_name or "",
+                    # actual-request guard의 provider metadata probe도 같은 job/run
+                    # 신호를 받아, 취소 뒤 별도 executor에서 4초간 남지 않게 한다.
+                    cancellation_signal=current_summary_cancellation(),
+                ),
             )
         if not model_digest:
             provider_identity_generation = uuid.uuid4().hex

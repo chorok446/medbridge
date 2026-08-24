@@ -6,6 +6,7 @@ Ollama의 /api/version, /api/tags, /api/pull, /v1/chat/completions를 흉내 내
 
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -26,19 +27,19 @@ class _OllamaHandler(BaseHTTPRequestHandler):
             if _STATE.get("version_redirect"):
                 self.send_response(302)
                 self.send_header("Location", "http://127.0.0.1/other")
+                self.send_header("Content-Length", "0")
                 self.end_headers()
+                self.wfile.flush()
+                time.sleep(0.02)
                 return
             self._json(200, _STATE.get("version", {"version": "0.6.8"}))
         elif self.path == "/api/tags":
             if _STATE.get("tags_huge"):
-                body = b'{"models":[' + b'"x",' * (200 * 1024) + b'"y"]}'  # > STATUS_MAX_BYTES
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
+                # 큰 body를 한 번에 쓰지 않고 header에서 즉시 상한을 검증한다.
+                self.send_header("Content-Length", str(st.STATUS_MAX_BYTES + 1))
                 self.end_headers()
-                try:
-                    self.wfile.write(body)
-                except (BrokenPipeError, OSError):
-                    pass
                 return
             self._json(200, _STATE.get("tags", {"models": []}))
         else:
@@ -64,6 +65,11 @@ class _OllamaHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+        # Windows loopback에서 handler가 송신 직후 반환되면 다음 요청이 정상
+        # Content-Length 응답도 RST로 관측할 수 있다. 실제 HTTP 서버처럼 flush
+        # 경계를 보장해 제품 오류 분류와 fixture 종료 타이밍을 분리한다.
+        self.wfile.flush()
+        time.sleep(0.02)
 
     def _ndjson(self, lines):
         self.send_response(200)
@@ -83,8 +89,12 @@ def ollama(monkeypatch):
     base = f"http://127.0.0.1:{server.server_address[1]}"
     monkeypatch.setattr(st, "OLLAMA_BASE", base)
     monkeypatch.setattr(st, "OLLAMA_OPENAI_BASE", base + "/v1")
-    yield _STATE
-    server.shutdown()
+    try:
+        yield _STATE
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2.0)
 
 
 class TestStatus:
@@ -161,6 +171,7 @@ class TestModels:
             "is_local": True,
             "timeout": st.STATUS_TIMEOUT_SEC,
             "max_response_bytes": st.STATUS_MAX_BYTES,
+            "cancellation_signal": None,
         }
 
     def test_empty(self, ollama):

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 from app.services.local_ai import settings as st
 from app.services.model_output import strip_thinking
+from app.services.summary.cancellation import SummaryCancellationSignal
 from app.services.summary.endpoint import (
     SummaryNetworkError,
     get_json,
@@ -78,13 +79,16 @@ def get_status() -> OllamaStatus:
     return OllamaStatus(STATUS_READY, version=version)
 
 
-def list_models() -> list[InstalledModel]:
+def list_models(
+    *, cancellation_signal: SummaryCancellationSignal | None = None
+) -> list[InstalledModel]:
     """GET /api/tags → allowlist 필터 + 내부 필드만 추출. schema 위반은 건너뛴다."""
     data = get_json(
         f"{st.OLLAMA_BASE}/api/tags",
         is_local=True,
         timeout=st.STATUS_TIMEOUT_SEC,
         max_response_bytes=st.STATUS_MAX_BYTES,
+        cancellation_signal=cancellation_signal,
     )
     if not isinstance(data, dict):
         raise SummaryNetworkError("bad_response")
@@ -114,12 +118,14 @@ def list_models() -> list[InstalledModel]:
     return out
 
 
-def installed_model_digest(model: str) -> str | None:
+def installed_model_digest(
+    model: str, *, cancellation_signal: SummaryCancellationSignal | None = None
+) -> str | None:
     """allowlist 모델 tag의 현재 manifest digest. 조회/스키마 실패는 None."""
     if model not in st.ALLOWED_MODELS:
         return None
     try:
-        models = list_models()
+        models = list_models(cancellation_signal=cancellation_signal)
     except SummaryNetworkError:
         return None
     return next((item.digest for item in models if item.name == model), None)
