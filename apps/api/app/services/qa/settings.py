@@ -44,6 +44,12 @@ STREAM_TOTAL_DEADLINE_SEC = 600.0  # 전체 스트림 deadline(콜드 로드 + �
 STREAM_MAX_LINE_BYTES = 64 * 1024
 STREAM_MAX_TOTAL_BYTES = 8 * 1024 * 1024
 
+# Ollama native runner가 일시 종료되면 동일 payload만 제한적으로 다시 보낸다. 모든 시도는
+# 위의 전체 deadline을 공유하므로 재시도가 최악 시간 상한을 배수로 늘리지 않는다.
+STREAM_OLLAMA_MAX_ATTEMPTS = 3
+STREAM_OLLAMA_RETRY_DELAYS_SEC = (1.0, 3.0)
+STREAM_OLLAMA_RETRY_JITTER_SEC = 0.25
+
 # draft 체크포인트 — 이벤트마다 commit하지 않고 묶어 저장
 DRAFT_CHECKPOINT_MS = 500
 DRAFT_CHECKPOINT_CHARS = 1024

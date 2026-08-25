@@ -3,7 +3,10 @@
 import asyncio
 import json
 
+import pytest
+
 from app.services.qa import stream_protocol as sp
+from app.services.qa import streaming as streaming_mod
 from app.services.qa.context import QaChunkRef
 from app.services.qa.provider import QaContextChunk, QaRequest
 from app.services.qa.schema import classify_claim_event
@@ -11,6 +14,7 @@ from app.services.qa.streaming import (
     DeterministicStreamingQaProvider,
     OpenAICompatibleStreamingQaProvider,
 )
+from app.services.summary.endpoint import SummaryNetworkError
 
 
 class _Token:
@@ -19,6 +23,20 @@ class _Token:
 
     def is_cancelled(self):
         return self._c
+
+
+def _install_fake_retry_clock(monkeypatch, *, on_sleep=None):
+    now = [0.0]
+
+    def sleep(delay):
+        now[0] += delay
+        if on_sleep is not None:
+            on_sleep()
+
+    monkeypatch.setattr(streaming_mod.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(streaming_mod.time, "sleep", sleep)
+    monkeypatch.setattr(streaming_mod.random, "uniform", lambda _start, _end: 0.0)
+    return now
 
 
 def _sse(*frames: str) -> list[str]:
@@ -150,6 +168,45 @@ class TestClaimVerification:
         vc, _reason = classify_claim_event(event, lookup, claim_index=0)
         assert vc is not None
 
+    def test_cross_language_claim_with_enough_source_terms_is_supported(self):
+        lookup = self._lookup("The library opens at 9 on weekdays.")
+        event = {
+            "text": (
+                "도서관은 평일 오전 9시에 엽니다 "
+                "(원문: library opens at 9 on weekdays)."
+            ),
+            "sourceChunkIds": ["c1"],
+        }
+
+        claim, reason = classify_claim_event(event, lookup, claim_index=0)
+
+        assert claim is not None
+        assert reason is None
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "도서관은 평일 오전 9시에 정문에서 문을 엽니다.",
+            (
+                "도서관은 평일 오전 9시에 정문에서 문을 엽니다 "
+                "(원문: library)."
+            ),
+        ],
+    )
+    def test_cross_language_claim_without_enough_source_terms_is_rejected(
+        self, text
+    ):
+        lookup = self._lookup("The library opens at 9 on weekdays.")
+        event = {
+            "text": text,
+            "sourceChunkIds": ["c1"],
+        }
+
+        claim, reason = classify_claim_event(event, lookup, claim_index=0)
+
+        assert claim is None
+        assert reason == "not_lexically_grounded"
+
 
 class TestOpenAIStreaming:
     def _provider(self, lines):
@@ -229,6 +286,7 @@ class TestOllamaNativeStreaming:
         seen: dict = {}
 
         def line_source(url, payload, key):
+            seen["calls"] = seen.get("calls", 0) + 1
             seen["url"] = url
             seen["payload"] = payload
             return iter(lines)
@@ -241,6 +299,21 @@ class TestOllamaNativeStreaming:
             line_source=line_source,
         )
         return provider, seen
+
+    @staticmethod
+    def _from_source(
+        line_source,
+        *,
+        endpoint: str = "http://127.0.0.1:11434/v1",
+        is_local: bool = True,
+    ):
+        return OpenAICompatibleStreamingQaProvider(
+            endpoint=endpoint,
+            model_name="qwen3:8b",
+            api_key="" if is_local else "key",
+            is_local=is_local,
+            line_source=line_source,
+        )
 
     def test_ollama_gets_native_url_and_num_ctx(self):
         from app.services.summary.settings import LOCAL_NUM_CTX
@@ -255,6 +328,11 @@ class TestOllamaNativeStreaming:
         assert seen["url"] == "http://127.0.0.1:11434/api/chat"
         assert seen["payload"]["options"]["num_ctx"] == LOCAL_NUM_CTX
         assert seen["payload"]["stream"] is True
+        system_prompt = seen["payload"]["messages"][0]["content"]
+        assert "번역문만" in system_prompt
+        assert "최소 3분의 1" in system_prompt
+        assert "원문 단어 1개만" in system_prompt
+        assert "library opens at 9 on weekdays" in system_prompt
 
     def test_native_frames_are_parsed(self):
         # native 응답은 SSE가 아니라 NDJSON이고 delta 위치도 다르다.
@@ -270,6 +348,357 @@ class TestOllamaNativeStreaming:
         assert events[0]["type"] == "claim"
         assert events[0]["text"] == "심장은 뛴다"
         assert events[-1]["type"] == "final"
+
+    def test_native_done_stops_before_transport_eof(self):
+        def lines():
+            yield (
+                '{"message":{"content":"{\\"type\\":\\"claim\\",'
+                '\\"text\\":\\"심장은 뛴다\\",'
+                '\\"sourceChunkIds\\":[\\"c1\\"]}\\n"},"done":true}'
+            )
+            raise ConnectionResetError(10054, "reset after native done")
+
+        p, seen = self._capture("http://127.0.0.1:11434/v1", True, lines())
+
+        events = list(p.stream_answer(QaRequest(question="q", chunks=[]), _Token()))
+
+        assert [event["type"] for event in events] == ["claim"]
+        assert events[0]["text"] == "심장은 뛴다"
+        assert seen["calls"] == 1
+
+    def test_semantic_final_stops_before_transport_reset(self):
+        def lines():
+            yield (
+                '{"message":{"content":"{\\"type\\":\\"final\\",'
+                '\\"answerStatus\\":\\"answered\\"}\\n"},"done":false}'
+            )
+            raise ConnectionResetError(10054, "reset after semantic final")
+
+        provider, seen = self._capture(
+            "http://127.0.0.1:11434/v1", True, lines()
+        )
+
+        events = list(
+            provider.stream_answer(QaRequest(question="q", chunks=[]), _Token())
+        )
+
+        assert [event["type"] for event in events] == ["final"]
+        assert seen["calls"] == 1
+
+    @pytest.mark.parametrize("category", ["connect_failed", "server_error"])
+    def test_transient_failure_discards_partial_attempt_before_replay(
+        self, monkeypatch, category
+    ):
+        _install_fake_retry_clock(monkeypatch)
+        attempts = 0
+
+        def line_source(_url, _payload, _key):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                def failed_attempt():
+                    yield (
+                        '{"message":{"content":"{\\"type\\":\\"claim\\",'
+                        '\\"text\\":\\"폐기할 주장\\",'
+                        '\\"sourceChunkIds\\":[\\"c1\\"]}\\n"},"done":false}'
+                    )
+                    raise SummaryNetworkError(category)
+
+                return failed_attempt()
+            return iter(
+                [
+                    '{"message":{"content":"{\\"type\\":\\"claim\\",'
+                    '\\"text\\":\\"최종 주장\\",'
+                    '\\"sourceChunkIds\\":[\\"c1\\"]}\\n"},"done":false}',
+                    '{"message":{"content":"{\\"type\\":\\"final\\",'
+                    '\\"answerStatus\\":\\"answered\\"}\\n"},"done":true}',
+                ]
+            )
+
+        provider = self._from_source(line_source)
+
+        stream = provider.stream_answer(QaRequest(question="q", chunks=[]), _Token())
+        first = next(stream)
+        events = [first, *stream]
+
+        assert attempts == 2
+        assert [event["type"] for event in events] == ["claim", "final"]
+        assert events[0]["text"] == "최종 주장"
+
+    def test_cancelled_normal_return_discards_partial_attempt(self):
+        token = _Token()
+
+        def line_source(_url, _payload, _key):
+            yield (
+                '{"message":{"content":"{\\"type\\":\\"claim\\",'
+                '\\"text\\":\\"폐기할 주장\\",'
+                '\\"sourceChunkIds\\":[\\"c1\\"]}\\n"},"done":false}'
+            )
+            token._c = True
+
+        provider = self._from_source(line_source)
+
+        events = list(
+            provider.stream_answer(QaRequest(question="q", chunks=[]), token)
+        )
+
+        assert events == []
+
+    def test_native_eof_retries_and_discards_partial_attempt(self, monkeypatch):
+        _install_fake_retry_clock(monkeypatch)
+        attempts = 0
+
+        def line_source(_url, _payload, _key):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                return iter(
+                    [
+                        '{"message":{"content":"{\\"type\\":\\"claim\\",'
+                        '\\"text\\":\\"폐기할 주장\\",'
+                        '\\"sourceChunkIds\\":[\\"c1\\"]}\\n"},"done":false}'
+                    ]
+                )
+            return iter(
+                [
+                    '{"message":{"content":"{\\"type\\":\\"claim\\",'
+                    '\\"text\\":\\"최종 주장\\",'
+                    '\\"sourceChunkIds\\":[\\"c1\\"]}\\n"},"done":false}',
+                    '{"message":{"content":"{\\"type\\":\\"final\\",'
+                    '\\"answerStatus\\":\\"answered\\"}\\n"},"done":true}',
+                ]
+            )
+
+        provider = self._from_source(line_source)
+
+        events = list(
+            provider.stream_answer(QaRequest(question="q", chunks=[]), _Token())
+        )
+
+        assert attempts == 2
+        assert [event["type"] for event in events] == ["claim", "final"]
+        assert events[0]["text"] == "최종 주장"
+
+    def test_native_eof_without_terminal_fails_after_three_attempts(
+        self, monkeypatch
+    ):
+        _install_fake_retry_clock(monkeypatch)
+        attempts = 0
+
+        def line_source(_url, _payload, _key):
+            nonlocal attempts
+            attempts += 1
+            return iter(
+                [
+                    '{"message":{"content":"{\\"type\\":\\"claim\\",'
+                    '\\"text\\":\\"미완결 주장\\",'
+                    '\\"sourceChunkIds\\":[\\"c1\\"]}\\n"},"done":false}'
+                ]
+            )
+
+        provider = self._from_source(line_source)
+        events = []
+
+        with pytest.raises(SummaryNetworkError) as raised:
+            events.extend(
+                provider.stream_answer(QaRequest(question="q", chunks=[]), _Token())
+            )
+
+        assert attempts == 3
+        assert events == []
+        assert raised.value.category == "bad_response"
+        assert raised.value.reason == "stream_missing_terminal"
+
+    def test_malformed_semantic_output_is_not_retried(self):
+        attempts = 0
+
+        def line_source(_url, _payload, _key):
+            nonlocal attempts
+            attempts += 1
+            return iter(
+                ['{"message":{"content":"not semantic JSON\\n"},"done":true}']
+            )
+
+        provider = self._from_source(line_source)
+
+        events = list(
+            provider.stream_answer(QaRequest(question="q", chunks=[]), _Token())
+        )
+
+        assert attempts == 1
+        assert events == []
+
+    def test_native_error_frame_is_retried_not_completed(self, monkeypatch):
+        _install_fake_retry_clock(monkeypatch)
+        attempts = 0
+
+        def line_source(_url, _payload, _key):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                return iter(['{"error":"runner stopped","done":true}'])
+            return iter(
+                [
+                    '{"message":{"content":"{\\"type\\":\\"final\\",'
+                    '\\"answerStatus\\":\\"answered\\"}\\n"},"done":true}'
+                ]
+            )
+
+        provider = self._from_source(line_source)
+
+        events = list(
+            provider.stream_answer(QaRequest(question="q", chunks=[]), _Token())
+        )
+
+        assert attempts == 2
+        assert [event["type"] for event in events] == ["final"]
+
+    def test_transient_failure_stops_after_three_attempts(self, monkeypatch):
+        _install_fake_retry_clock(monkeypatch)
+        attempts = 0
+
+        def line_source(_url, _payload, _key):
+            nonlocal attempts
+            attempts += 1
+            raise SummaryNetworkError("server_error", f"attempt_{attempts}")
+
+        provider = self._from_source(line_source)
+        events = []
+
+        with pytest.raises(SummaryNetworkError) as raised:
+            events.extend(
+                provider.stream_answer(QaRequest(question="q", chunks=[]), _Token())
+            )
+
+        assert attempts == 3
+        assert events == []
+        assert raised.value.reason == "attempt_3"
+
+    @pytest.mark.parametrize("category", ["timeout", "bad_response", "model_not_found"])
+    def test_non_transient_failure_is_not_retried(self, category):
+        attempts = 0
+
+        def line_source(_url, _payload, _key):
+            nonlocal attempts
+            attempts += 1
+            raise SummaryNetworkError(category)
+
+        provider = self._from_source(line_source)
+
+        with pytest.raises(SummaryNetworkError):
+            list(provider.stream_answer(QaRequest(question="q", chunks=[]), _Token()))
+
+        assert attempts == 1
+
+    @pytest.mark.parametrize(
+        ("endpoint", "is_local"),
+        [("https://api.example.com/v1", False), ("http://127.0.0.1:1234/v1", True)],
+    )
+    def test_retry_does_not_leak_outside_ollama_native(self, endpoint, is_local):
+        attempts = 0
+
+        def line_source(_url, _payload, _key):
+            nonlocal attempts
+            attempts += 1
+            raise SummaryNetworkError("server_error")
+
+        provider = self._from_source(
+            line_source, endpoint=endpoint, is_local=is_local
+        )
+
+        with pytest.raises(SummaryNetworkError):
+            list(provider.stream_answer(QaRequest(question="q", chunks=[]), _Token()))
+
+        assert attempts == 1
+
+    def test_cancel_during_backoff_prevents_next_attempt(self, monkeypatch):
+        token = _Token()
+        _install_fake_retry_clock(monkeypatch, on_sleep=lambda: setattr(token, "_c", True))
+        attempts = 0
+
+        def line_source(_url, _payload, _key):
+            nonlocal attempts
+            attempts += 1
+            raise SummaryNetworkError("connect_failed")
+
+        provider = self._from_source(line_source)
+
+        events = list(
+            provider.stream_answer(QaRequest(question="q", chunks=[]), token)
+        )
+
+        assert attempts == 1
+        assert events == []
+
+    def test_retry_attempts_share_original_deadline(self, monkeypatch):
+        now = _install_fake_retry_clock(monkeypatch)
+        total_deadlines = []
+
+        def stream_lines(*_args, total_deadline, **_kwargs):
+            total_deadlines.append(total_deadline)
+            now[0] += 7.0
+            if len(total_deadlines) < 3:
+                raise SummaryNetworkError("server_error")
+            yield (
+                '{"message":{"content":"{\\"type\\":\\"final\\",'
+                '\\"answerStatus\\":\\"answered\\"}\\n"},"done":true}'
+            )
+
+        monkeypatch.setattr(
+            "app.services.summary.endpoint.stream_lines", stream_lines
+        )
+        provider = OpenAICompatibleStreamingQaProvider(
+            endpoint="http://127.0.0.1:11434/v1",
+            model_name="qwen3:8b",
+            api_key="",
+            is_local=True,
+        )
+
+        events = list(
+            provider.stream_answer(QaRequest(question="q", chunks=[]), _Token())
+        )
+
+        assert [event["type"] for event in events] == ["final"]
+        assert total_deadlines == pytest.approx([600.0, 592.0, 582.0])
+
+    def test_retry_stops_when_backoff_does_not_fit_deadline(self, monkeypatch):
+        now = _install_fake_retry_clock(monkeypatch)
+        attempts = 0
+
+        def line_source(_url, _payload, _key):
+            nonlocal attempts
+            attempts += 1
+            now[0] = 599.5
+            raise SummaryNetworkError("server_error", "runner_unavailable")
+
+        provider = self._from_source(line_source)
+
+        with pytest.raises(SummaryNetworkError) as raised:
+            list(provider.stream_answer(QaRequest(question="q", chunks=[]), _Token()))
+
+        assert attempts == 1
+        assert raised.value.reason == "runner_unavailable"
+
+    def test_completed_attempt_is_not_replayed_after_deadline(self, monkeypatch):
+        now = _install_fake_retry_clock(monkeypatch)
+
+        def line_source(_url, _payload, _key):
+            now[0] = 601.0
+            yield (
+                '{"message":{"content":"{\\"type\\":\\"final\\",'
+                '\\"answerStatus\\":\\"answered\\"}\\n"},"done":true}'
+            )
+
+        provider = self._from_source(line_source)
+        events = []
+
+        with pytest.raises(SummaryNetworkError) as raised:
+            events.extend(
+                provider.stream_answer(QaRequest(question="q", chunks=[]), _Token())
+            )
+
+        assert events == []
+        assert raised.value.category == "timeout"
 
     def test_external_provider_stays_on_openai_path(self):
         # 외부 공급자에게 Ollama 전용 필드를 보내면 400으로 거절당한다.
