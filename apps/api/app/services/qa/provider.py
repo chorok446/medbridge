@@ -9,6 +9,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Protocol
 
+from app.services.qa.prompt_contract import CROSS_LANGUAGE_GROUNDING_RULE
 from app.services.qa.settings import (
     ANSWER_MAX_CHARS,
     MAX_CLAIMS,
@@ -73,6 +74,7 @@ _SYSTEM_PROMPT = (
     "- 상충하는 내용이 있으면 한쪽을 임의로 고르지 말고 conflicting_evidence로 표시한다.\n"
     "- 모든 사실 주장(claim)에는 근거가 된 청크의 chunkId를 sourceChunkIds로 붙인다. "
     "근거 없는 사실 주장을 만들지 않는다.\n"
+    f"{CROSS_LANGUAGE_GROUNDING_RULE}"
     "- answer 산문에서 근거가 있는 문장 끝에 그 claim의 번호를 [c0], [c1] 형태로 붙인다. "
     "번호는 claims 배열의 순서(0부터)다.\n"
     "- 근거가 없는 문장에는 마커를 붙이지 않는다. claims에 없는 번호를 쓰지 않는다.\n"

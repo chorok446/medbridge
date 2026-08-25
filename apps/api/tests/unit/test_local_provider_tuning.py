@@ -66,6 +66,30 @@ class TestQaLocalTuning:
         result = p.answer(self._req())
         assert result["answerStatus"] == "answered"
 
+    def test_cross_language_claim_requires_exact_source_phrase(self):
+        cap = _Capture({"choices": [{"message": {"content": json.dumps(
+            {"answer": "a", "answerStatus": "answered", "claims": []})}}]})
+        p = OpenAICompatibleQaProvider(
+            endpoint="http://127.0.0.1:11434/v1", model_name="qwen3:8b", api_key="",
+            is_local=True, http_client=cap,
+        )
+        p.answer(QaRequest(
+            question="도서관은 언제 여나요?",
+            chunks=[QaContextChunk(
+                "c1", "Library Hours",
+                "The library opens at 9 on weekdays.",
+                1, 1,
+            )],
+            language="ko",
+        ))
+
+        system_prompt = cap.payload["messages"][0]["content"]
+        assert "질문에 쓰인 언어로 답한다" in system_prompt
+        assert "번역문만" in system_prompt
+        assert "최소 3분의 1" in system_prompt
+        assert "원문 단어 1개만" in system_prompt
+        assert "library opens at 9 on weekdays" in system_prompt
+
 
 class TestSummaryLocalTuning:
     def test_local_available_without_key(self):
