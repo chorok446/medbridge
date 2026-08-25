@@ -7,6 +7,8 @@ Ollama의 /api/version, /api/tags, /api/pull, /v1/chat/completions를 흉내 내
 import json
 import threading
 import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -166,13 +168,173 @@ class TestModels:
         monkeypatch.setattr(client, "get_json", fake_get_json)
 
         assert client.installed_model_digest("qwen3:8b") == "sha256:bounded"
+        assert observed.pop("url") == f"{st.OLLAMA_BASE}/api/tags"
+        assert 0 < observed.pop("timeout") <= client._DIGEST_ATTEMPT_TIMEOUT_SEC
         assert observed == {
-            "url": f"{st.OLLAMA_BASE}/api/tags",
             "is_local": True,
-            "timeout": st.STATUS_TIMEOUT_SEC,
             "max_response_bytes": st.STATUS_MAX_BYTES,
             "cancellation_signal": None,
         }
+
+    def test_digest_lookup_retries_transient_catalog_resets(self, monkeypatch):
+        from app.services.summary.endpoint import SummaryNetworkError
+
+        calls = 0
+
+        def flaky_get_json(_url, **_kwargs):
+            nonlocal calls
+            calls += 1
+            if calls < 4:
+                raise SummaryNetworkError("connect_failed")
+            return {"models": [{"name": "qwen3:8b", "digest": "sha256:stable"}]}
+
+        monkeypatch.setattr(client, "get_json", flaky_get_json)
+        monkeypatch.setattr(client.time, "sleep", lambda _delay: None)
+
+        assert client.installed_model_digest("qwen3:8b") == "sha256:stable"
+        assert calls == 4
+
+    def test_digest_lookup_exhaustion_remains_fail_closed(self, monkeypatch):
+        from app.services.summary.endpoint import SummaryNetworkError
+
+        calls = 0
+
+        def unavailable(_url, **_kwargs):
+            nonlocal calls
+            calls += 1
+            raise SummaryNetworkError("connect_failed")
+
+        monkeypatch.setattr(client, "get_json", unavailable)
+        monkeypatch.setattr(client.time, "sleep", lambda _delay: None)
+
+        assert client.installed_model_digest("qwen3:8b") is None
+        assert calls == 4
+
+    def test_digest_lookup_does_not_retry_non_transient_error(self, monkeypatch):
+        from app.services.summary.endpoint import SummaryNetworkError
+
+        calls = 0
+
+        def bad_catalog(_url, **_kwargs):
+            nonlocal calls
+            calls += 1
+            raise SummaryNetworkError("bad_response")
+
+        monkeypatch.setattr(client, "get_json", bad_catalog)
+
+        assert client.installed_model_digest("qwen3:8b") is None
+        assert calls == 1
+
+    def test_digest_lookup_cancellation_breaks_retry_backoff(self, monkeypatch):
+        from app.services.summary.cancellation import (
+            SummaryCancellationSignal,
+            SummaryCancelled,
+        )
+        from app.services.summary.endpoint import SummaryNetworkError
+
+        signal = SummaryCancellationSignal(job_id=uuid.uuid4(), run_id=uuid.uuid4())
+        calls = 0
+
+        def cancelled_reset(_url, **_kwargs):
+            nonlocal calls
+            calls += 1
+            signal.cancel()
+            raise SummaryNetworkError("connect_failed")
+
+        monkeypatch.setattr(client, "get_json", cancelled_reset)
+
+        with pytest.raises(SummaryCancelled):
+            client.installed_model_digest("qwen3:8b", cancellation_signal=signal)
+        assert calls == 1
+
+    def test_digest_lookups_are_serialized(self, monkeypatch):
+        entered = threading.Event()
+        release = threading.Event()
+        state_lock = threading.Lock()
+        calls = 0
+        active = 0
+        max_active = 0
+
+        def slow_catalog(_url, **_kwargs):
+            nonlocal calls, active, max_active
+            with state_lock:
+                calls += 1
+                active += 1
+                max_active = max(max_active, active)
+                call_number = calls
+            if call_number == 1:
+                entered.set()
+                assert release.wait(1)
+            with state_lock:
+                active -= 1
+            return {"models": [{"name": "qwen3:8b", "digest": "sha256:stable"}]}
+
+        monkeypatch.setattr(client, "get_json", slow_catalog)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(client.installed_model_digest, "qwen3:8b")
+            assert entered.wait(1)
+            second = pool.submit(client.installed_model_digest, "qwen3:8b")
+            time.sleep(0.1)
+            assert calls == 1
+            release.set()
+            assert first.result(timeout=1) == "sha256:stable"
+            assert second.result(timeout=1) == "sha256:stable"
+        assert max_active == 1
+
+    def test_digest_lookup_cancellation_breaks_lock_wait(self, monkeypatch):
+        from app.services.summary.cancellation import (
+            SummaryCancellationSignal,
+            SummaryCancelled,
+        )
+
+        acquire_called = threading.Event()
+        signal = SummaryCancellationSignal(job_id=uuid.uuid4(), run_id=uuid.uuid4())
+
+        class BusyLock:
+            def acquire(self, *, timeout):
+                acquire_called.set()
+                time.sleep(timeout)
+                return False
+
+            def release(self):
+                raise AssertionError("획득하지 않은 lock을 해제하면 안 된다")
+
+        monkeypatch.setattr(client, "_DIGEST_LOOKUP_LOCK", BusyLock())
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            waiter = pool.submit(
+                client.installed_model_digest,
+                "qwen3:8b",
+                cancellation_signal=signal,
+            )
+            assert acquire_called.wait(1)
+            signal.cancel()
+            with pytest.raises(SummaryCancelled):
+                waiter.result(timeout=1)
+
+    def test_digest_lock_wait_does_not_consume_probe_budget(self, monkeypatch):
+        now = 0.0
+
+        class DelayedLock:
+            def acquire(self, *, timeout):
+                nonlocal now
+                now += st.STATUS_TIMEOUT_SEC + timeout
+                return True
+
+            def release(self):
+                pass
+
+        monkeypatch.setattr(client, "_DIGEST_LOOKUP_LOCK", DelayedLock())
+        monkeypatch.setattr(client.time, "monotonic", lambda: now)
+        monkeypatch.setattr(
+            client,
+            "get_json",
+            lambda *_args, **_kwargs: {
+                "models": [{"name": "qwen3:8b", "digest": "sha256:stable"}]
+            },
+        )
+
+        assert client.installed_model_digest("qwen3:8b") == "sha256:stable"
 
     def test_empty(self, ollama):
         ollama["tags"] = {"models": []}

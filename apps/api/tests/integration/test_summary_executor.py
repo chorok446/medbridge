@@ -958,6 +958,52 @@ class TestExecutorIsolation:
         assert provider.model_digest is None
         assert provider.provider_identity_generation
 
+    async def test_local_digest_transient_reset_does_not_change_provider(self, client, monkeypatch):
+        from app.services.local_ai import client as local_ai_client
+        from app.services.summary.endpoint import SummaryNetworkError
+        from app.services.summary.factory import get_summary_provider
+
+        doc_id = await _upload_chunked(client, fx.single_column_korean(pages=2))
+        probe_calls = 0
+
+        def flaky_catalog(_url, **_kwargs):
+            nonlocal probe_calls
+            probe_calls += 1
+            if probe_calls == 2:
+                raise SummaryNetworkError("connect_failed")
+            return {"models": [{"name": "qwen3:8b", "digest": "sha256:digest-a"}]}
+
+        monkeypatch.setattr(local_ai_client, "get_json", flaky_catalog)
+        monkeypatch.setattr(local_ai_client.time, "sleep", lambda _delay: None)
+        async with get_session_factory()() as s:
+            s.add(
+                SummarySettings(
+                    enabled=True,
+                    provider_type="openai_compatible",
+                    endpoint="http://127.0.0.1:11434/v1",
+                    model_name="qwen3:8b",
+                    is_local=True,
+                )
+            )
+            await s.commit()
+            expected = await get_summary_provider(s, resolve_identity=True)
+
+        run_id, job_id, rev, chash = await _make_run(doc_id, expected)
+        async with get_session_factory()() as s:
+            await executor_mod._assert_network_call_allowed(
+                s,
+                expected_provider=expected,
+                document_id=doc_id,
+                job_id=job_id,
+                start_revision=rev,
+                start_hash=chash,
+                check_full_hash=False,
+                job_is_current=_job_is_current,
+                current_chunk_hash=summary_service.current_chunk_hash,
+            )
+
+        assert probe_calls == 3  # initial + transient guard attempt + retry
+
     async def test_local_digest_disappearing_during_run_fails_closed(
         self, client, monkeypatch
     ):
