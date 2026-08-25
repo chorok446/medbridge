@@ -107,6 +107,11 @@ def _require_same(actual: object, expected: object, *, field: str) -> None:
         raise GateError(f"artifact의 {field}가 승인 파일과 일치하지 않습니다.")
 
 
+def _require_schema_version(value: object, *, field: str) -> None:
+    if type(value) is not int or value != 1:
+        raise GateError(f"artifact의 {field}은 정수 1이어야 합니다.")
+
+
 def _safe_repo_path(repo_root: Path, rel: str) -> Path:
     """저장소 안의 상대 경로만 허용한다(경로 순회·절대경로·저장소 밖 참조 거부)."""
     if not rel or rel.startswith(("/", "\\")):
@@ -194,7 +199,7 @@ def check_release_gate(
     qwen_rel, qwen_payload = artifact_by_kind[_QWEN_ARTIFACT_KIND]
     _require_same(qwen.get("evalArtifact"), qwen_rel, field="qwen3_8b.evalArtifact")
     _require_same(qwen_payload.get("artifactType"), _QWEN_ARTIFACT_KIND, field="Qwen artifactType")
-    _require_same(qwen_payload.get("schemaVersion"), 1, field="Qwen schemaVersion")
+    _require_schema_version(qwen_payload.get("schemaVersion"), field="Qwen schemaVersion")
     _require_same(qwen_payload.get("testedCommit"), tested, field="Qwen testedCommit")
     _require_same(qwen_payload.get("provider"), "local", field="Qwen provider")
     _require_same(qwen_payload.get("model"), _QWEN_MODEL, field="Qwen model")
@@ -232,7 +237,7 @@ def check_release_gate(
     _require_same(
         win_payload.get("artifactType"), _WINDOWS_ARTIFACT_KIND, field="Windows artifactType"
     )
-    _require_same(win_payload.get("schemaVersion"), 1, field="Windows schemaVersion")
+    _require_schema_version(win_payload.get("schemaVersion"), field="Windows schemaVersion")
     _require_same(win_payload.get("testedCommit"), tested, field="Windows testedCommit")
     _require_same(win_payload.get("status"), "passed", field="Windows status")
     _require_same(win_payload.get("model"), _QWEN_MODEL, field="Windows model")
@@ -292,7 +297,9 @@ def _is_ancestor(repo_root: Path) -> Callable[[str, str], bool]:
 
 def _changed_files(repo_root: Path) -> Callable[[str, str], list[str]]:
     def _inner(base: str, head: str) -> list[str]:
-        res = _git(repo_root, "diff", "--name-only", base, head)
+        # Rename 감지는 source를 숨기므로 끈다. 삭제·추가 경로를 모두 검사해야
+        # 비허용 코드 파일을 허용 artifact 경로로 옮기는 우회를 막을 수 있다.
+        res = _git(repo_root, "diff", "--no-renames", "--name-only", base, head)
         if res.returncode != 0:
             raise GateError(f"git diff 실패: {res.stderr.strip()[:200]}")
         return [line for line in res.stdout.splitlines() if line.strip()]

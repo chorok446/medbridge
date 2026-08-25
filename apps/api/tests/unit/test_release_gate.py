@@ -178,6 +178,39 @@ def test_code_or_release_workflow_changed_since_tested_fails(tmp_path, changed):
         _run(tmp_path, _approval(tmp_path), changed=changed)
 
 
+def test_renamed_code_cannot_hide_behind_allowed_release_report(tmp_path):
+    def run_git(*args: str) -> str:
+        result = gate._git(tmp_path, *args)
+        assert result.returncode == 0, result.stderr
+        return result.stdout.strip()
+
+    run_git("init")
+    run_git("config", "user.email", "release-gate@example.invalid")
+    run_git("config", "user.name", "Release Gate Test")
+    source = tmp_path / "apps/api/app/release-proof.md"
+    source.parent.mkdir(parents=True)
+    source.write_text("unchanged\n", encoding="utf-8")
+    run_git("add", ".")
+    run_git("commit", "-m", "Add release proof")
+    base = run_git("rev-parse", "HEAD")
+
+    destination = tmp_path / "docs/testing/sprint4c-qa-release-report.md"
+    destination.parent.mkdir(parents=True)
+    source.rename(destination)
+    run_git("add", "-A")
+    run_git("commit", "-m", "Move release proof")
+    head = run_git("rev-parse", "HEAD")
+
+    changed = gate._changed_files(tmp_path)(base, head)
+
+    assert set(changed) == {
+        "apps/api/app/release-proof.md",
+        "docs/testing/sprint4c-qa-release-report.md",
+    }
+    with pytest.raises(gate.GateError, match="재평가 필요"):
+        _run(tmp_path, _approval(tmp_path), changed=changed)
+
+
 def test_empty_artifacts_fails_closed(tmp_path):
     with pytest.raises(gate.GateError, match="비어"):
         _run(tmp_path, _approval(tmp_path, artifacts=[]))
@@ -246,6 +279,14 @@ def test_historical_windows_artifact_commit_mismatch_fails(tmp_path):
     approval = _approval(tmp_path)
     _replace_artifact(tmp_path, approval, "windows_validation", testedCommit="9" * 40)
     with pytest.raises(gate.GateError, match="Windows testedCommit"):
+        _run(tmp_path, approval)
+
+
+@pytest.mark.parametrize("kind", ["qwen3_8b_evaluation", "windows_validation"])
+def test_artifact_schema_version_rejects_bool(tmp_path, kind):
+    approval = _approval(tmp_path)
+    _replace_artifact(tmp_path, approval, kind, schemaVersion=True)
+    with pytest.raises(gate.GateError, match="schemaVersion"):
         _run(tmp_path, approval)
 
 
