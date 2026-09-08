@@ -1,15 +1,18 @@
 """Q&A 공급자 — 요약과 별개의 Protocol이지만 네트워크 안전 경로와 모델 설정·키를
 재사용한다(별도 HTTP 클라이언트·키 저장소를 만들지 않는다).
 
-공급자는 chunkId·sectionTitle·text·pageStart/pageEnd만 본다. bbox·저장 경로·내부 DB
-구조는 전달하지 않는다.
+모델은 chunkId·text만 본다. 제목·쪽수 등 위치 메타데이터는 출처 복원용으로 서버에
+유지하며 bbox·저장 경로·내부 DB 구조도 전달하지 않는다.
 """
 
 import json
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from app.services.qa.prompt_contract import CROSS_LANGUAGE_GROUNDING_RULE
+from app.services.qa.prompt_contract import (
+    CLAIM_SOURCE_AND_ABSTENTION_RULE,
+    CROSS_LANGUAGE_GROUNDING_RULE,
+)
 from app.services.qa.settings import (
     ANSWER_MAX_CHARS,
     MAX_CLAIMS,
@@ -75,6 +78,7 @@ _SYSTEM_PROMPT = (
     "- 모든 사실 주장(claim)에는 근거가 된 청크의 chunkId를 sourceChunkIds로 붙인다. "
     "근거 없는 사실 주장을 만들지 않는다.\n"
     f"{CROSS_LANGUAGE_GROUNDING_RULE}"
+    f"{CLAIM_SOURCE_AND_ABSTENTION_RULE}"
     "- answer 산문에서 근거가 있는 문장 끝에 그 claim의 번호를 [c0], [c1] 형태로 붙인다. "
     "번호는 claims 배열의 순서(0부터)다.\n"
     "- 근거가 없는 문장에는 마커를 붙이지 않는다. claims에 없는 번호를 쓰지 않는다.\n"
@@ -217,8 +221,7 @@ def _build_user_prompt(request: QaRequest) -> str:
         hist = "\n".join(f"[{t.role}] {t.content}" for t in request.history)
         parts.append(f"이전 대화(질문 해석용 참고, 근거로 쓰지 마라):\n{hist}")
     chunk_block = "\n\n".join(
-        f"[chunkId {c.chunk_id}] (제목: {c.section_title or '없음'}, "
-        f"{c.page_start}-{c.page_end}쪽)\n{c.text}"
+        f"[chunkId {c.chunk_id}]\n{c.text}"
         for c in request.chunks
     )
     parts.append(f"문서 청크:\n{chunk_block}")
