@@ -783,6 +783,17 @@ class TestFinalStatusSafety:
         st, _ = _final_status([self._sc("심장은 혈액을 보낸다")], "", had_results=True)
         assert st == QaMessageStatus.COMPLETED
 
+    @pytest.mark.parametrize("hint", ["not_found", "insufficient_evidence"])
+    def test_abstention_is_not_promoted_by_related_claim(self, hint):
+        from app.services.qa.stream_service import _final_status
+
+        st, content = _final_status(
+            [self._sc("심장은 혈액을 보낸다")], hint, had_results=True,
+        )
+        assert st.value == hint
+        assert "혈액" not in content
+        assert "[c0]" not in content
+
     def test_contradiction_without_final_hint_is_conflicting(self):
         from app.models.enums import QaMessageStatus
         from app.services.qa.stream_service import _final_status

@@ -39,6 +39,24 @@ def _lookup(*specs) -> dict[str, QaChunkRef]:
 
 
 class TestVerify:
+    @pytest.mark.parametrize("hint", ["not_found", "insufficient_evidence"])
+    def test_abstention_discards_related_claim_and_answer(self, hint):
+        out = verify(
+            {
+                "answer": "심장은 혈액을 보낸다[c0]",
+                "answerStatus": hint,
+                "claims": [{"text": "심장은 혈액을 보낸다", "sourceChunkIds": ["c1"]}],
+                "followUpSuggestions": ["심장 수술 통계는?"],
+            },
+            _lookup(("c1", "심장은 혈액을 보낸다")),
+            had_results=True,
+        )
+        assert out.answer_status == hint
+        assert out.claims == []
+        assert out.followups == []
+        assert "혈액" not in out.answer
+        assert "[c0]" not in out.answer
+
     def test_supported_claim_reconstructs_refs_from_chunks(self):
         lookup = _lookup(("c1", "심장은 혈액을 보낸다"))
         out = verify(

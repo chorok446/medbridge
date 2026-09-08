@@ -279,8 +279,10 @@ def verify(
 
     # 최종 상태 결정 (모델 상태를 신뢰하지 않고 서버가 확정)
     model_flags_conflict = model_status == "conflicting_evidence"
-    if not had_results:
+    if not had_results or model_status == "not_found":
         status = "not_found"
+    elif model_status == "insufficient_evidence":
+        status = "insufficient_evidence"
     elif not supported:
         status = "insufficient_evidence"
     elif len(supported) >= 2 and (
@@ -298,8 +300,11 @@ def verify(
     followups = sanitize_followups(model_output.get("followUpSuggestions"))
 
     if status in ("not_found", "insufficient_evidence"):
-        # 근거가 없으면 unsupported claim을 확정 사실처럼 저장하지 않는다
-        verified = [c for c in verified if c.verification_status != QaClaimVerification.UNSUPPORTED]
+        # 관련 청크를 인용한 설명도 질문에 답하지 못할 수 있다. 보류 결론이면
+        # 모델 산문·주장·후속 질문을 최종 사실 답변으로 남기지 않는다.
+        verified = []
+        followups = []
+        answer = "이 자료에서는 확인할 수 없습니다."
 
     # 마커 정리는 claim 필터링이 끝난 뒤에 돈다 — 걸러진 claim의 마커도 함께 사라져야 한다.
     answer, dropped_citations = _rewrite_citations(answer, verified, raw_to_index)

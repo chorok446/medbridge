@@ -5,6 +5,7 @@ import threading
 import uuid
 from datetime import UTC, datetime
 
+import pytest
 from sqlalchemy import func, select
 
 from app.db.session import get_session_factory
@@ -109,6 +110,47 @@ class TestHappyPath:
 
 
 class TestSourceSafety:
+    @pytest.mark.parametrize("hint", ["not_found", "insufficient_evidence"])
+    async def test_abstention_clears_draft_claims_from_final_message(
+        self, client, monkeypatch, hint
+    ):
+        await enable_deterministic()
+        doc_id, tid = await setup_doc(client)
+
+        class AbstainingProvider:
+            provider_name = "deterministic"
+            model_name = "m"
+            available = True
+            is_local = True
+
+            def stream_answer(self, request, token):
+                chunk = request.chunks[0]
+                yield {"type": "claim", "text": chunk.text[:200],
+                       "sourceChunkIds": [chunk.chunk_id]}
+                yield {"type": "final", "answerStatus": hint,
+                       "followUpSuggestions": ["관련된 다른 질문"]}
+
+        monkeypatch.setattr(
+            "app.services.qa.stream_service.get_qa_streaming_provider",
+            lambda db: _fake_async(AbstainingProvider()),
+        )
+        events = await collect(client, doc_id, tid)
+        assert any(e["type"] == "claim" for e in events)  # 실제 draft 경로를 통과
+        message = events[-1]["message"]
+        assert message["status"] == hint
+        assert message["claims"] == []
+        assert "[c0]" not in message["content"]
+        async with get_session_factory()() as session:
+            saved = await session.get(QaMessage, uuid.UUID(message["id"]))
+            assert saved.status.value == hint
+            assert saved.content == message["content"]
+            assert not saved.followups_json
+            assert saved.draft_content is None
+            count = await session.scalar(
+                select(func.count()).select_from(QaClaim).where(QaClaim.message_id == saved.id)
+            )
+            assert count == 0
+
     async def test_unsupported_claim_not_emitted(self, client, monkeypatch):
         # 검색되지 않은/무관한 chunk id를 붙인 claim은 스트림으로 나가지 않는다
         await enable_deterministic()

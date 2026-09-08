@@ -585,6 +585,10 @@ async def run_stream(
             )
             return
         status, content = _final_status(supported, stream_final_hint, had_results=True)
+        if status in (QaMessageStatus.NOT_FOUND, QaMessageStatus.INSUFFICIENT_EVIDENCE):
+            # 관련 설명이 검증됐어도 질문의 답이 있다는 뜻은 아니다. 보류 결론이면
+            # 앞서 생성된 draft 주장과 후속 질문을 최종 답변에 저장하지 않는다.
+            supported.clear()
         if status == QaMessageStatus.CONFLICTING_EVIDENCE:
             for c in supported:
                 c.verification_status = QaClaimVerification.CONFLICTING
@@ -656,9 +660,16 @@ async def run_stream(
 
 
 def _final_status(supported: list, final_hint: str, *, had_results: bool):
+    # 답할 수 있다는 힌트로 출처 검증을 우회하지 않지만, 답할 수 없다는 결론은
+    # 관련 청크/주장이 있다는 이유만으로 답변 완료로 승격하지 않는다.
+    if not had_results or final_hint == "not_found":
+        return QaMessageStatus.NOT_FOUND, "이 자료에서는 확인할 수 없습니다."
+    if final_hint == "insufficient_evidence":
+        return (
+            QaMessageStatus.INSUFFICIENT_EVIDENCE,
+            "문서에서 충분한 근거를 찾지 못했어요. 다른 표현으로 다시 물어봐 주세요.",
+        )
     if not supported:
-        if not had_results:
-            return QaMessageStatus.NOT_FOUND, "이 자료에서는 확인할 수 없습니다."
         return (
             QaMessageStatus.INSUFFICIENT_EVIDENCE,
             "문서에서 충분한 근거를 찾지 못했어요. 다른 표현으로 다시 물어봐 주세요.",
