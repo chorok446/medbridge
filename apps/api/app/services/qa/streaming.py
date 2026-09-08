@@ -315,12 +315,18 @@ class OpenAICompatibleStreamingQaProvider:
             from app.services.summary.endpoint import stream_lines
 
             total_deadline = remaining_deadline or STREAM_TOTAL_DEADLINE_SEC
+            # urllib.open은 TCP 연결뿐 아니라 응답 헤더까지 기다린다. Ollama는
+            # 콜드 로드 동안 헤더도 보내지 않으므로 native 요청의 초기 응답에는
+            # 첫 청크와 같은 예산을 준다. 외부 공급자와 전체/취소 상한은 유지한다.
+            initial_response_timeout = (
+                STREAM_IDLE_TIMEOUT_SEC if uses_ollama_native else STREAM_CONNECT_TIMEOUT_SEC
+            )
             sse_lines = stream_lines(
                 url,
                 payload,
                 self._api_key,
                 is_local=self.is_local,
-                connect_timeout=min(STREAM_CONNECT_TIMEOUT_SEC, total_deadline),
+                connect_timeout=min(initial_response_timeout, total_deadline),
                 idle_timeout=min(STREAM_IDLE_TIMEOUT_SEC, total_deadline),
                 total_deadline=total_deadline,
                 max_line_bytes=STREAM_MAX_LINE_BYTES,

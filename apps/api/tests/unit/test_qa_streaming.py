@@ -25,6 +25,37 @@ class _Token:
         return self._c
 
 
+@pytest.mark.parametrize(
+    ("native", "remaining", "expected_open"),
+    [(True, 600.0, 180.0), (True, 8.0, 8.0), (False, 600.0, 15.0)],
+)
+def test_initial_response_budget_allows_native_cold_load(
+    monkeypatch, native, remaining, expected_open
+):
+    captured = {}
+
+    def capture_lines(*args, **kwargs):
+        captured.update(kwargs)
+        return iter(['{"done":true}'] if native else ["data: [DONE]"])
+
+    monkeypatch.setattr("app.services.summary.endpoint.stream_lines", capture_lines)
+    provider = OpenAICompatibleStreamingQaProvider(
+        endpoint="http://127.0.0.1:11434/v1",
+        model_name="qwen3:8b",
+        api_key="",
+        is_local=True,
+    )
+    token = _Token()
+    list(provider._stream_attempt(
+        "http://127.0.0.1:11434/api/chat", {}, token,
+        uses_ollama_native=native, remaining_deadline=remaining,
+    ))
+    assert captured["connect_timeout"] == expected_open
+    assert captured["idle_timeout"] == min(180.0, remaining)
+    assert captured["total_deadline"] == remaining
+    assert captured["should_cancel"] == token.is_cancelled
+
+
 def _install_fake_retry_clock(monkeypatch, *, on_sleep=None):
     now = [0.0]
 
