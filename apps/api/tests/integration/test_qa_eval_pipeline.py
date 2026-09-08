@@ -6,9 +6,13 @@
 
 from pathlib import Path
 
+import pytest
+
 from app.db.session import get_session_factory
 from app.qa_eval import manifest
+from app.qa_eval.run_case import materialize_and_verify_local_runtime
 from app.qa_eval.runner import run_evaluation
+from app.services.qa import factory as qa_factory
 
 DATASET = Path(__file__).resolve().parents[1] / "fixtures" / "qa_evaluation"
 
@@ -59,3 +63,64 @@ async def test_summary_and_gate_shape():
     assert summary.total_runs == summary.total_cases * 2
     assert 0.0 <= summary.protocol_success_rate <= 1.0
     assert gate.verdict  # 판정 문자열이 존재
+
+
+async def test_run_boundary_wraps_every_case_run():
+    ds = manifest.load_dataset(DATASET)
+    events = []
+
+    async def boundary(stage, case_id, run_index):
+        events.append((stage, case_id, run_index))
+
+    summary, _gate, _ = await run_evaluation(
+        get_session_factory(),
+        ds,
+        model_label="deterministic",
+        provider_mode="deterministic",
+        categories=["grounded_basic"],
+        repeat=2,
+        timeout_sec=60,
+        run_boundary=boundary,
+    )
+
+    assert len(events) == summary.total_runs * 2
+    assert [stage for stage, _case_id, _run_index in events] == [
+        expected
+        for _ in range(summary.total_runs)
+        for expected in ("before", "after")
+    ]
+
+
+async def test_run_boundary_failure_aborts_evaluation():
+    ds = manifest.load_dataset(DATASET)
+
+    async def boundary(stage, _case_id, _run_index):
+        if stage == "after":
+            raise RuntimeError("model digest changed")
+
+    with pytest.raises(RuntimeError, match="digest"):
+        await run_evaluation(
+            get_session_factory(),
+            ds,
+            model_label="deterministic",
+            provider_mode="deterministic",
+            categories=["grounded_basic"],
+            repeat=1,
+            timeout_sec=60,
+            run_boundary=boundary,
+        )
+
+
+async def test_local_runtime_identity_is_verified_after_settings_are_materialized(monkeypatch):
+    class EvalSettings:
+        qa_provider = "auto"
+
+    monkeypatch.setattr(qa_factory, "get_settings", lambda: EvalSettings())
+
+    provider = await materialize_and_verify_local_runtime(
+        get_session_factory(), model="qwen3:8b"
+    )
+
+    assert provider.provider_name == "openai_compatible"
+    assert provider.model_name == "qwen3:8b"
+    assert provider.is_local is True

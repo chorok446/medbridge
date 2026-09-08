@@ -203,3 +203,61 @@ def test_report_json_has_no_leak_and_valid_shape(tmp_path):
         "explicitSafetyViolation", "criticalCaseFailure",
     }
     assert "질문" not in mp.read_text(encoding="utf-8")
+
+
+def test_release_report_adds_strict_provenance_without_changing_legacy_schema(tmp_path):
+    per_case = [[_result("g1", "grounded_basic", True, "completed")]]
+    summary = summarize("qwen3:8b", per_case)
+    gate = evaluate_gate(summary)
+    legacy = report.build_json(summary, gate, generated_at="2026-08-25T00:00:00Z")
+    provenance = report.ReleaseProvenance(
+        tested_commit="a" * 40,
+        model_digest="sha256:" + "b" * 64,
+        endpoint="http://127.0.0.1:11434/v1",
+    )
+
+    release = report.build_json(
+        summary,
+        gate,
+        generated_at="2026-08-25T00:00:00Z",
+        provenance=provenance,
+    )
+
+    assert set(release) == set(legacy) | {
+        "artifactType",
+        "schemaVersion",
+        "testedCommit",
+        "provider",
+        "modelDigest",
+        "endpoint",
+    }
+    assert release["artifactType"] == "qwen3_8b_evaluation"
+    assert release["schemaVersion"] == 1
+    assert release["testedCommit"] == "a" * 40
+    assert release["provider"] == "local"
+    assert release["model"] == "qwen3:8b"
+    assert release["modelDigest"] == "sha256:" + "b" * 64
+    assert release["endpoint"] == "http://127.0.0.1:11434/v1"
+    assert "artifactType" not in legacy
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("tested_commit", "A" * 40),
+        ("tested_commit", "a" * 39),
+        ("model_digest", "b" * 64),
+        ("model_digest", "sha256:" + "B" * 64),
+        ("endpoint", "http://localhost:11434/v1"),
+    ],
+)
+def test_release_provenance_rejects_noncanonical_identity(field, value):
+    values = {
+        "tested_commit": "a" * 40,
+        "model_digest": "sha256:" + "b" * 64,
+        "endpoint": "http://127.0.0.1:11434/v1",
+    }
+    values[field] = value
+
+    with pytest.raises(ValueError):
+        report.ReleaseProvenance(**values)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from typing import Literal
 
 from app.qa_eval.evaluate import CaseResult, evaluate_case
@@ -9,6 +10,8 @@ from app.qa_eval.gate import GateResult, evaluate_gate
 from app.qa_eval.manifest import Dataset
 from app.qa_eval.metrics import EvalSummary, summarize
 from app.qa_eval.run_case import run_case
+
+RunBoundary = Callable[[Literal["before", "after"], str, int], Awaitable[None]]
 
 
 async def run_evaluation(
@@ -21,6 +24,7 @@ async def run_evaluation(
     repeat: int = 1,
     categories: list[str] | None = None,
     timeout_sec: float = 120.0,
+    run_boundary: RunBoundary | None = None,
 ) -> tuple[EvalSummary, GateResult, list[list[CaseResult]]]:
     """반환: (요약, 게이트, 케이스별 반복 결과)."""
     effective_repeat = max(1, repeat)  # 실행·게이트에 같은 값을 쓴다
@@ -33,6 +37,8 @@ async def run_evaluation(
         fixture = dataset.fixtures[case.document_fixture]
         results: list[CaseResult] = []
         for run_index in range(effective_repeat):
+            if run_boundary is not None:
+                await run_boundary("before", case.case_id, run_index)
             run = await run_case(
                 factory,
                 case,
@@ -41,6 +47,8 @@ async def run_evaluation(
                 model=model,
                 timeout_sec=timeout_sec,
             )
+            if run_boundary is not None:
+                await run_boundary("after", case.case_id, run_index)
             results.append(evaluate_case(case, run, run_index=run_index))
         per_case.append(results)
 

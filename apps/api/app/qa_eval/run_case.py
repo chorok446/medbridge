@@ -25,6 +25,10 @@ from app.services.local_ai import settings as local_st
 from app.services.qa import stream_service
 
 
+class RuntimeIdentityError(RuntimeError):
+    """평가가 요청한 고정 local Ollama runtime과 실제 provider가 다름."""
+
+
 @dataclass
 class ClaimView:
     text: str
@@ -116,6 +120,30 @@ async def _set_provider(factory, *, provider_mode: str, model: str | None) -> No
                 )
             )
         await s.commit()
+
+
+async def materialize_and_verify_local_runtime(factory, *, model: str):
+    """DB 설정을 쓴 뒤 실제 Q&A factory 결과가 고정 Ollama인지 확인한다."""
+    from app.services.qa.factory import get_qa_streaming_provider
+    from app.services.qa.streaming import OpenAICompatibleStreamingQaProvider
+
+    await _set_provider(factory, provider_mode="local", model=model)
+    async with factory() as session:
+        provider = await get_qa_streaming_provider(session)
+    valid = (
+        isinstance(provider, OpenAICompatibleStreamingQaProvider)
+        and provider.provider_name == "openai_compatible"
+        and provider.model_name == model
+        and provider.is_local is True
+        and provider.available is True
+        and provider._endpoint == local_st.OLLAMA_OPENAI_BASE
+        and provider._uses_ollama_native()
+    )
+    if not valid:
+        raise RuntimeIdentityError(
+            "출시 평가 provider가 local Ollama qwen3:8b 고정 runtime과 일치하지 않습니다."
+        )
+    return provider
 
 
 async def run_case(
