@@ -1,7 +1,37 @@
 # Sprint 4C-B — 로컬 Q&A 출시 판정 보고서
 
-> **출시 판정: 보류 (HOLD)** — 2026-09-08 qwen3:8b 전체 평가는 게이트 미달이다.
-> 최종 installer의 Windows 36항목도 미완료이며 승인 파일은 생성하지 않는다.
+> **출시 판정: 보류 (HOLD)** — 2026-09-08 qwen3:8b 재평가는 통과했다.
+> 최종 installer의 Windows 36항목은 미완료이며 승인 파일은 생성하지 않는다.
+
+## 2026-09-08 전체 모델 재평가 — 5aad9f9
+
+- testedCommit: `5aad9f9a8e0a8818373eec5d38ca628a6e1add8a`.
+  PR 수정 브랜치 평가이며, 병합 후 새 develop SHA의 최종 승인을 대체하지 않는다.
+- 환경: Windows, Python 3.13.14, Ollama 0.33.3, local qwen3:8b.
+  모델 digest는 아래 실패 평가와 동일하다.
+- 전체 12케이스 × repeat 3 = 36회 모두 통과. 종료 코드 0,
+  판정 `default_recommended`. 실제 위해 노출·안전 중요 실패·변동 모두 0건.
+- 프로토콜·상태 정확도·유효 답변률·보류 정확도·모든 카테고리 통과율 100%.
+  latency p50 2.024초, p95 3.733초. 측정 중 일시 연결 오류 1회가 기존 제한
+  재시도로 복구됐으며 미완결 첫 시도의 claim은 폐기됐다.
+- [전체 결과와 provenance JSON](qa-evaluation-20260908-5aad9f9.json)
+  (저장소 사본 SHA-256:
+  `b018d38b1c1d2dfc33ac267ffa58b724b20d1adb914a1c29cad1117674e8bf90`).
+- 확인된 원인과 수정:
+  - 모델이 `not_found`/`insufficient_evidence`를 보내도 관련 claim만 있으면 서버가
+    `completed`로 승격했다. 보류를 보존하고 최종 본문·주장·후속 질문을 비운다.
+    스트리밍 draft가 있었다가 보류된 경우의 DB 상태도 통합 검증했다 (`ef02e48`).
+  - 부정 문장에서는 `sourceChunkIds`가 누락됐고, 출처 지침 보강 뒤에는 메타데이터
+    쪽수가 답변 본문 수치로 섞였다. 필수 출처 계약을 공유하고 모델에게는 chunkId와
+    실제 본문만 전달한다. 페이지/bbox 복원은 서버에 유지한다 (`d066d59`).
+  - 출처·수치·극성 검증 및 평가 임계치는 완화하지 않았다.
+  - 직전 Windows CI의 OCR 테스트는 살아 있는 워커와 재현 상태 덮어쓰기가 경쟁했다.
+    워커 종료 후 상태를 구성하고 취소 HTTP 성공도 확인한다. 제품 동작은 변경하지
+    않았다 (`5aad9f9`, 집중 회귀 9 passed).
+- Windows 전체 API 회귀: 1,083 passed / 4 skipped. Ruff 및 mypy 126개 소스 통과.
+  진단용 계측은 공식 평가에 사용하지 않았다. 사용자 DB·PDF·자격증명은 변경하지 않았다.
+- 새 Windows CI/installer 및 36항목은 별도 검증 대상이다. 이전 실패 결과는 아래에
+  보존하며, 실제 모델 평가 통과를 전체 출시 승인으로 확대하지 않는다.
 
 ## 2026-09-08 전체 모델 평가 — 22f4a63
 
@@ -58,7 +88,7 @@
 | 계층 | 내용 | 상태 |
 |---|---|---|
 | Layer 1 | 결정론적 파이프라인 평가(실제 서비스 경로) | ✅ 자동 검증 완료 |
-| Layer 2 | 실제 Ollama + qwen3:4b/8b/14b 평가 | 8b 전체 실행 완료·HOLD, 나머지 대기 |
+| Layer 2 | 실제 Ollama + qwen3:4b/8b/14b 평가 | 8b PR 커밋 재평가 통과, 나머지 대기 |
 | Layer 3 | Windows 실기기 UX 검증 | ⏳ 대기 |
 
 Layer 1은 실제 애플리케이션 경로(검색 → 컨텍스트 → provider → NDJSON 스트리밍 → 주장
@@ -107,7 +137,7 @@ cd apps/api && uv run python scripts/evaluate_local_qa.py --model qwen3:30b-a3b 
 
 | 모델 | 판정 | 근거 |
 |---|---|---|
-| qwen3:8b | release_hold | 2026-09-08 repeat=3: 안전 중요 실패 2건, 변동 1건 |
+| qwen3:8b | default_recommended | 5aad9f9 repeat=3: 36/36, 안전 실패·변동 0건 |
 | qwen3:4b | _대기_ | Layer 2 미실행 |
 | qwen3:14b | _대기_ | Layer 2 미실행 |
 | qwen3:30b-a3b | _대기_ | Layer 2 미실행 |
