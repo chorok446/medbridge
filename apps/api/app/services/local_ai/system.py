@@ -34,6 +34,8 @@ def total_ram_bytes() -> int | None:
     try:
         import os
 
+        if not hasattr(os, "sysconf"):
+            return None
         pages = os.sysconf("SC_PHYS_PAGES")
         page_size = os.sysconf("SC_PAGE_SIZE")
         if pages > 0 and page_size > 0:
