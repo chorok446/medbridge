@@ -737,10 +737,10 @@ class TestRunRowsAreClosed:
         monkeypatch.setattr(ocr_service, "engine", lambda: FakeEngine())
         doc = await upload_extracted(client, fx.blank_image_page())
         await client.post(f"/api/documents/{doc['id']}/ocr")
+        await drain_jobs()
 
-        # 진행 중인 실행을 재현한다. 백그라운드 잡이 먼저 끝나 버리면 cancel_ocr이
-        # 409로 거절돼(취소할 작업 없음) 정리 자체가 돌지 않으므로, 잡 상태를 직접
-        # RUNNING으로 고정해 경쟁을 없앤다.
+        # 워커 종료를 기다린 후 진행 중인 실행을 구성한다. 워커가 살아 있는 채로
+        # RUNNING을 덮어쓰면 직후 완료돼 cancel이 409가 되는 경쟁이 남는다.
         async with get_session_factory()() as session:
             row = await session.get(Document, uuid.UUID(doc["id"]))
             job = (
@@ -776,7 +776,8 @@ class TestRunRowsAreClosed:
             await session.commit()
         assert await self._open_runs(doc["id"]) > 0
 
-        await client.post(f"/api/documents/{doc['id']}/ocr/cancel")
+        cancelled = await client.post(f"/api/documents/{doc['id']}/ocr/cancel")
+        assert cancelled.status_code == 200
 
         assert await self._open_runs(doc["id"]) == 0
 
@@ -786,6 +787,7 @@ class TestRunRowsAreClosed:
         monkeypatch.setattr(ocr_service, "engine", lambda: FakeEngine())
         doc = await upload_extracted(client, fx.blank_image_page())
         await client.post(f"/api/documents/{doc['id']}/ocr")
+        await drain_jobs()
 
         # 앱이 꺼진 순간을 재현한다: 잡은 RUNNING인 채, 실행 기록도 열린 채 남는다.
         async with get_session_factory()() as session:
