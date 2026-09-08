@@ -1,10 +1,10 @@
 # MedBridge 전체 기술 검토 및 개선 계획
 
 > - 검토 기준일: 2026-08-13 (KST)
-> - 최신 자동 검증일: 2026-08-25 (KST)
+> - 최신 자동 검증일: 2026-09-08 (KST)
 > - 기준 브랜치: `fix/summary-context-overflow`
 > - 최초 검토 기준 커밋: `7d688b33e8a905311ebdc0d5a58feab0887c4663`
-> - 마지막 코드 검증 커밋: `bcce77cb7044b51a987311711f2771d1e32e8db3`
+> - 마지막 코드 검증 커밋: `35007a44857e2d08233cba9e533091af220006b9`
 > - 구현 추적 브랜치: `fix/summary-context-overflow`
 > - 문서 상태: 구현 추적 중. 자동 검증과 Windows 실기기 검증을 분리해 기록함.
 
@@ -21,14 +21,15 @@
 
 최초 검토에서 가장 먼저 지적한 릴리스 승인 게이트, Q&A 안전 재시도, Rust lockfile,
 대형 PDF 스트리밍 처리, 실데이터 형태 DB 마이그레이션 검증은 코드와 자동 테스트에
-반영했다. 다만 보호된 `main`/Environment, 새 installer의 실기기 36항목, 실제
-300/500/800MB 문서 벤치마크는 저장소 코드만으로 완료할 수 없으므로 출시 `HOLD`를 유지한다.
+반영했다. 동일 콘텐츠 기반 300/500/800MiB 크기 경계와 중단 복구도 실측했다. 다만
+보호된 `main`/Environment, 최종 installer의 실기기 36항목, 서로 다른 실제 대형 PDF
+soak가 남아 있으므로 출시 `HOLD`를 유지한다.
 
 ## 2. 확인된 검증 상태
 
 ### 2.1 구현·자동 검증 완료
 
-- 릴리스 승인 gate fail-closed 회귀: `39 passed`
+- 릴리스 승인 gate fail-closed와 rename/schema 우회 회귀: `42 passed`
 - 대형 PDF raw streaming 경로: API `77 passed, 1 skipped`, Web `188 passed`
 - 청크 generation/O(1) 전환 및 소비 경로: 관련 회귀 `61 passed`
 - 요약 provider identity/retry/동의/Windows checkpoint race: 전체 API
@@ -48,10 +49,19 @@
 - 보안 감사를 blocking job으로 전환하고 Windows build가 이를 의존하도록 변경
 - 로컬 qwen3:8b 연결 검사: 관련 회귀 `64 passed`, 전체 API
   `988 passed, 4 skipped`
+- Ollama native 스트림의 원자적 복구와 다국어 근거 계약: Q&A `196 passed`,
+  전체 API `1019 passed, 4 skipped`
+- 출시 Qwen 평가 provenance: 임시 DB/provider 격리, Git snapshot, 각 run의 tag와
+  실제 loaded digest 검증을 포함한 qa_eval 회귀 `103 passed`
 
-위 숫자는 각 원자적 변경 직후의 관련 회귀 기록이다. 마지막 코드 커밋 `bcce77c`를
-포함한 API 전체 회귀는 `988 passed, 4 skipped`다. 문서 갱신까지 포함한 최종 HEAD의
-원격 보안 감사와 Windows build는 최종 push의 GitHub Actions에서 다시 확인해야 한다.
+위 숫자는 각 원자적 변경 직후의 관련 회귀 기록이다. 벤치마크 기준 코드 커밋
+`849fcd2`를 포함한 API 전체 회귀는 `1019 passed, 4 skipped`다. 이 SHA의 CI run
+`32805755402`에서 backend, frontend, security, versions, Windows build가 모두
+성공했다. installer artifact digest는
+`sha256:21de8aeff12377e3ed2ccf1cd807ceb976ac687d127998f27d1fea0f44dd2152`다.
+이후 문서와 릴리스 도구 변경이 추가되므로 이를 최종 release artifact로 재사용하지 않는다.
+최신 코드 `35007a4`는 release gate `42 passed`, qa_eval `103 passed`, Ruff와 mypy를
+통과했지만 전체 API와 원격 CI는 아직 다시 실행하지 않았다.
 
 ### 2.2 Windows 실기기 부분 검증 (2026-08-25)
 
@@ -86,25 +96,51 @@
 포함한 최종 artifact의 재설치·재검증도 대기 중이다. 따라서 위 installer SHA를 최종
 `testedCommit`이나 공개 release 승인 자료로 재사용해서는 안 된다.
 
-### 2.3 아직 자동 테스트로 대체할 수 없는 항목
+### 2.3 Windows 대형 PDF 크기 경계 실측 (2026-08-25)
+
+세부 provenance와 주장 한계는
+[`docs/testing/windows-large-pdf-size-envelope-benchmark.md`](docs/testing/windows-large-pdf-size-envelope-benchmark.md)에
+기록했다.
+
+- 동일한 2,173쪽 실제 PDF에 comment padding만 추가해 정확히 300/500/800MiB
+  fixture를 만들었다. 이는 크기 경계 근거이며 서로 다른 콘텐츠 복잡도 근거가 아니다.
+- 세 실행 모두 HTTP 201, 2,173개 고유 page row, 2,171쪽 `EXTRACTED`, 2쪽
+  `OCR_REQUIRED`, blocks 308,991개로 정상 종결했다.
+- 업로드/검증/추출/E2E는 각각 300MiB `2.538/3.611/1019.644/1027.232초`,
+  500MiB `3.973/3.731/912.218/920.081초`, 800MiB
+  `8.366/5.365/969.923/985.041초`였다.
+- OS peak working set은 세 크기 모두 약 2.25GiB였고 DB+WAL 증가는
+  265.95~268.04MiB였다. 100ms sample 오류는 0건이었다.
+- 세 정상 재기동은 `recovered_jobs=0`이었다. 별도 300MiB 중단 fixture는 같은
+  문서/job이 attempt 1에서 attempt 2로 복구돼 2,173쪽을 완성했고, 다음 재기동은
+  다시 `recovered_jobs=0`이었다.
+- 모든 최종 DB는 Alembic `0015`, `quick_check=ok`, foreign key 위반 0건,
+  활성 job 0건이었다.
+
+사전 성능 SLA가 없었으므로 SLA 통과를 주장하지 않는다. source Uvicorn 측정이므로
+packaged sidecar 메모리와 Windows GUI 36항목도 별도로 남아 있다.
+
+### 2.4 아직 자동 테스트로 대체할 수 없는 항목
 
 - 새 installer를 설치한 깨끗한 Windows PC에서 Ollama 미설치 안내부터 모델 활성화,
   앱 재시작, Q&A/요약, 제거까지 수행하는 실기기 검증
 - 실제 qwen3:8b 전체 평가 3회와 안전/변동 gate
-- 실제 300MB, 500MB, 800MB PDF의 peak RSS, 처리 시간, DB/WAL 증가량
+- 서로 다른 실제 300MiB, 500MiB, 800MiB PDF의 full extraction soak
 - 실제 사용자 DB 사본의 장시간 migration, backup 복원 및 실패 훈련
 - 검증한 RC installer와 공개 installer의 SHA-256 동일성 확인
 - GitHub의 보호된 `main`, required review/ruleset, release Environment reviewer 설정
 
-### 2.4 원자적 변경 기록
+### 2.5 원자적 변경 기록
 
-- 릴리스/운영: `a2e10b6` 승인 gate, `35f1d33` Windows kit provenance,
+- 릴리스/운영: `a2e10b6` 승인 gate, `cf69b9b` rename/schema 우회 차단,
+  `35007a4` 출시 평가 provenance, `35f1d33` Windows kit provenance,
   `9f732c6` blocking 보안 감사
 - 데이터 보존: `6665f09` migration fixture·디스크 사전 점검,
   `00b6284` 단일 스트림 업로드, `8232572` 청크 generation,
   `0aa9770` OCR/청크 interleaving 차단
 - Q&A/설정: `c635f40` 안전한 스트림 재시도, `34237f8` thread·설정 UX,
-  `9bae435` 삭제 대상·공백 키 경합 차단
+  `9bae435` 삭제 대상·공백 키 경합 차단, `7d2ad1f` 다국어 근거 보존,
+  `849fcd2` Ollama native 원자적 스트림 복구
 - 요약: `7936eaa` provider identity·retry·동의, `8abd75b` bounded evidence,
   `8fe3c5e` HTTP 절대 기한, `2cc3fbf` 동일 run 자동 재개·retention,
   `05a09f3` 요청별 HTTP 중단, `2423eba` 취소/저장 CAS,
@@ -124,11 +160,12 @@
 
 이하의 `근거`, `문제`, `현재 상태`, `개선안`은 최초 기준 커밋에서 발견한 내용을
 결정 이력으로 보존한 것이다. 현재 코드 반영 여부는 각 제목 바로 아래의 상태 줄과
-2.4 변경 기록을 기준으로 판단한다.
+2.5 변경 기록을 기준으로 판단한다.
 
 ### P0-1. 릴리스 승인 게이트 우회 차단
 
-**상태: 코드 완료 (`a2e10b6`) / 실제 승인 자료 없음으로 HOLD**
+**상태: 코드 완료 (`a2e10b6`, `cf69b9b`, `35007a4`) /
+실제 승인 자료 없음으로 HOLD**
 
 **근거**
 
@@ -252,7 +289,8 @@ FK 위반 0건·재기동 통과 / backup 복원·최종 installer 대기**
 
 ### P1-1. 업로드와 PDF 검증을 파일 스트리밍 방식으로 변경
 
-**상태: 코드 완료 (`00b6284`) / 300·500·800MB 실측 대기**
+**상태: 코드 완료 (`00b6284`) / same-content 300·500·800MiB 실측 완료 /
+서로 다른 실제 대형 문서 soak `HOLD`**
 
 **현재 상태**
 
@@ -260,7 +298,7 @@ FK 위반 0건·재기동 통과 / backup 복원·최종 installer 대기**
 - `apps/api/app/services/documents/storage.py:67-68`은 저장된 원본을 `read_bytes()`로 읽는다.
 - `apps/api/app/services/documents/validation.py:46-79`는 전체 bytes를 `BytesIO`로 감싼다.
 
-300-800MB 문서는 파일 크기 외에도 Python 객체, PDF parser, OCR의 메모리가 추가된다.
+300-800MiB 문서는 파일 크기 외에도 Python 객체, PDF parser, OCR의 메모리가 추가된다.
 저사양 PC에서는 pagefile thrashing이나 OOM 가능성이 있다.
 
 **개선안**
@@ -269,7 +307,8 @@ FK 위반 0건·재기동 통과 / backup 복원·최종 installer 대기**
 - 스트리밍 중 크기 제한, `%PDF` signature, SHA-256을 증분 계산한다.
 - 저장 완료 후 `fsync`와 원자적 rename을 사용한다.
 - PDF parser에는 경로 또는 파일 handle을 전달한다.
-- 300MB, 500MB, 800MB fixture로 peak RSS와 소요시간을 기록한다.
+- 300MiB, 500MiB, 800MiB fixture로 peak RSS와 소요시간을 기록한다.
+- 동일 콘텐츠 padding fixture와 서로 다른 실제 대형 문서 soak의 주장을 분리한다.
 
 ### P1-2. 청크 재생성의 메모리와 SQLite writer lock 축소
 
@@ -495,7 +534,7 @@ thread 목록이 아직 로딩 중일 때 질문하면 기존 thread가 있어�
 - 요약 완료 refetch 및 취소 UI
 - 문서 cursor pagination
 - Q&A retry/thread 계약 통일
-- 300MB, 500MB, 800MB 실문서 soak test
+- 서로 다른 실제 300MiB, 500MiB, 800MiB 문서 soak test
 - 업데이트, 강제 종료, 디스크 부족, 네트워크 중단 복구 시험
 
 ## 7. 출시 판단 체크리스트
@@ -515,7 +554,9 @@ thread 목록이 아직 로딩 중일 때 질문하면 기존 thread가 있어�
 - [x] 취소가 먼저 확정되면 늦은 요약 결과가 저장되지 않고 활성 socket이 중단된다.
 - [x] sidecar crash를 감지하고 전역 복구 화면으로 전환한다.
 - [x] Q&A 최종 본문에는 서버가 검증한 supported/conflicting claim만 표시된다.
-- [ ] 300MB, 500MB, 800MB 문서의 시간, peak RAM, DB 증가량, 재시작 복구 결과가 기록됐다.
+- [x] 동일 콘텐츠 기반 300/500/800MiB fixture의 시간, peak RAM, DB/WAL,
+  정상 재기동과 중단 복구 결과가 기록됐다.
+- [ ] 서로 다른 실제 300/500/800MiB PDF의 full extraction soak가 통과했다.
 
 ### 7.1 현재 출시 차단 사유
 
@@ -523,7 +564,8 @@ thread 목록이 아직 로딩 중일 때 질문하면 기존 thread가 있어�
 2. PR artifact의 설치·재시작·Ollama 미실행·411.6MB 요약 취소 smoke만 통과했다.
    최종 HEAD installer의 Windows 36항목 전체 결과는 없다.
 3. 최종 HEAD의 qwen3:8b repeat=3 평가 artifact가 없다.
-4. 실제 300/500/800MB 문서 벤치마크와 사용자 DB 사본 복구 훈련이 없다.
+4. 동일 콘텐츠 300/500/800MiB 크기 경계는 실측했지만 서로 다른 실제 대형 PDF
+   soak와 사용자 DB 사본 복구 훈련이 없다.
 5. 따라서 `docs/testing/release-approval.json`은 존재하지 않으며 생성해서도 안 된다.
 
 ## 8. 문서 유지 규칙
