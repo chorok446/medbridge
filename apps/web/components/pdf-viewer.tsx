@@ -80,7 +80,14 @@ export function PdfViewer({
           import.meta.url,
         ).toString();
         if (cancelled) return;
-        task = pdfjs.getDocument({ url: fileUrl });
+        task = pdfjs.getDocument({
+          url: fileUrl,
+          // 글꼴이 내장되지 않은 한글 PDF도 오프라인에서 그릴 수 있도록 번들 리소스를 쓴다.
+          cMapUrl: new URL("/pdfjs/cmaps/", window.location.href).href,
+          cMapPacked: true,
+          standardFontDataUrl: new URL("/pdfjs/standard_fonts/", window.location.href).href,
+          wasmUrl: new URL("/pdfjs/wasm/", window.location.href).href,
+        });
         const d = await task.promise;
         if (!cancelled) setDoc(d);
       } catch {

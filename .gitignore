@@ -38,6 +38,9 @@ apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/binaries/
 apps/desktop/src-tauri/resources/ocr/
 
+# 잠금 파일의 PDF.js 패키지에서 dev/build 시 복사하는 오프라인 렌더링 리소스
+/apps/web/public/pdfjs/
+
 # Windows 실기기 검증 테스트 PDF (재생성 가능, git 미추적)
 docs/testing/windows-test-kit/*.pdf
 
