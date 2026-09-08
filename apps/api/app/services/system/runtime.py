@@ -184,10 +184,12 @@ def checkpoint_and_backup() -> str | None:
     # 삭제·설정 저장 같은 쓰기는 그대로 진행된다. 그 경로를 전부 잠그는 대신 SQLite가
     # 이미 제공하는 것을 쓴다: `.backup()`은 복사 중 원본이 바뀌면 바뀐 페이지를 다시
     # 읽어 일관된 스냅샷을 만든다. 쓰기를 막지 않으므로 사용자 작업도 멈추지 않는다.
-    with sqlite3.connect(db_path) as src:
+    # Connection의 context manager는 commit/rollback만 하므로 직접 close해야
+    # Windows의 파일 잠금과 DB 핸들이 GC 시점까지 남지 않는다.
+    with contextlib.closing(sqlite3.connect(db_path)) as src:
         # 먼저 WAL을 본체로 접어 넣는다 — 사본이 WAL 파일 없이도 완결되게.
         src.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        with sqlite3.connect(backup) as dst:
+        with contextlib.closing(sqlite3.connect(backup)) as dst:
             src.backup(dst)
     logger.info("pre_update_backup_created", backup=backup.name)
     # 새 백업이 자리 잡은 뒤에 정리한다 — 먼저 지우면 복사가 실패했을 때

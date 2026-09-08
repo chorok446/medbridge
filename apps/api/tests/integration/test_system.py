@@ -2,6 +2,7 @@
 
 import json
 import os
+from contextlib import closing
 
 import pytest
 
@@ -59,7 +60,7 @@ class TestPrepareUpdate:
         res = await client.post("/api/system/prepare-update")
         backup = get_path_provider().backups_dir / res.json()["data"]["backupFile"]
 
-        with sqlite3.connect(backup) as conn:
+        with closing(sqlite3.connect(backup)) as conn:
             assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
             tables = {
                 row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
