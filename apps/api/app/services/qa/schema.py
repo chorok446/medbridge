@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from app.core.logging import get_logger
 from app.models.enums import QaClaimVerification
 from app.services.qa.context import QaChunkRef
+from app.services.qa.literal_sources import complete_literal_source_ids
 from app.services.qa.settings import (
     ANSWER_MAX_CHARS,
     CLAIM_TEXT_MAX_CHARS,
@@ -82,10 +83,11 @@ def classify_claim_event(
     지원이면 (claim, None), 거부면 (None, 사유코드). 사유코드는 안전한 분류값이며 모델
     응답 원문을 담지 않는다.
     """
-    text = str(event.get("text") or "").strip()[:CLAIM_TEXT_MAX_CHARS]
+    raw_text = str(event.get("text") or "").strip()
+    text = raw_text[:CLAIM_TEXT_MAX_CHARS]
     if not text:
         return None, REJECT_EMPTY
-    ids = _valid_ids(event.get("sourceChunkIds"), lookup)
+    ids = _claim_source_ids(raw_text, event.get("sourceChunkIds"), lookup)
     if not ids:
         return None, REJECT_NO_SOURCE
     if not _numbers_present(text, ids, lookup):
@@ -110,6 +112,14 @@ def _valid_ids(raw_ids, lookup: dict[str, QaChunkRef]) -> list[str]:
             seen.add(sid)
             out.append(sid)
     return out
+
+
+def _claim_source_ids(text: str, raw_ids, lookup: dict[str, QaChunkRef]) -> list[str]:
+    ids = _valid_ids(raw_ids, lookup)
+    # 알 수 없는/다른 문서 ID를 정상 ID로 교체해 구제하지 않는다.
+    if isinstance(raw_ids, list) and all(isinstance(cid, str) and cid in lookup for cid in raw_ids):
+        return complete_literal_source_ids(text, ids, lookup)
+    return ids
 
 
 def _refs_for(ids: list[str], lookup: dict[str, QaChunkRef]) -> list[dict]:
@@ -301,13 +311,14 @@ def verify(
     for raw_pos, raw in enumerate((model_output.get("claims") or [])[: MAX_CLAIMS * 2]):
         if not isinstance(raw, dict):
             continue
-        text = str(raw.get("text") or "").strip()[:CLAIM_TEXT_MAX_CHARS]
+        raw_text = str(raw.get("text") or "").strip()
+        text = raw_text[:CLAIM_TEXT_MAX_CHARS]
         if not text:
             continue
         if text in seen_text:
             raw_to_index[raw_pos] = seen_text[text]
             continue
-        ids = _valid_ids(raw.get("sourceChunkIds"), lookup)
+        ids = _claim_source_ids(raw_text, raw.get("sourceChunkIds"), lookup)
         # 지원 조건: 유효 출처 있음 + 수치가 원문에 존재 + 근거 청크에 어휘적으로 연결됨
         if (
             not ids

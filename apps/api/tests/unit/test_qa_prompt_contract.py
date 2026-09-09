@@ -14,6 +14,8 @@ def test_both_qa_paths_require_sources_and_abstention():
         assert "같은 언어면 번역용 원문 괄호를" in prompt
         assert "원문 인용을 붙여도" in prompt
         assert "없는 정의·기능·기전은 추가하지 않는다" in prompt
+        assert "실제로 사용한 모든 조각의 chunkId" in prompt
+        assert "중간 조각 하나의 ID로 문장 전체를 인용하지 않는다" in prompt
 
 
 def test_grounding_prompt_keeps_evidence_but_not_location_metadata():
