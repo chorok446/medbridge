@@ -9,6 +9,10 @@ CLAIM_SOURCE_AND_ABSTENTION_RULE = (
     "- 질문이 요구한 사실을 청크에서 확인할 수 없으면 관련 주제의 설명으로 "
     "답을 대신하지 않는다. 이 경우 claim을 하나도 만들지 않고 not_found 또는 "
     "insufficient_evidence로 보류한다.\n"
+    "- claim 하나에는 청크가 직접 뒷받침하는 사실만 쓴다. 원문 인용을 붙여도 "
+    "그 앞뒤의 설명까지 근거가 생기지는 않는다. 단어 풀이를 요청받아도 청크에 "
+    "없는 정의·기능·기전은 추가하지 않는다. 같은 언어의 인용문과 설명은 각각 "
+    "독립적으로 근거 검증을 통과해야 한다.\n"
 )
 
 CROSS_LANGUAGE_GROUNDING_RULE = (

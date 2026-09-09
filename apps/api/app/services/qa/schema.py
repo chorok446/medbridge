@@ -25,6 +25,15 @@ from app.services.qa.settings import (
 _CLAIM_NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?%?")
 # 어절 토큰(길이 2 이상) — claim이 근거 청크에 실제로 어휘적으로 연결되는지 확인용
 _WORD_RE = re.compile(r"[0-9A-Za-z가-힣]{2,}")
+# 인용과 설명을 따로 검사한다. 괄호 안 원문·일반 따옴표를 인식하되, '혈액' 같은
+# 단어 강조는 설명에 남긴다. 완전한 언어/함의 판별기가 아닌 인용 세탁 방어다.
+_QUOTE_RE = re.compile(
+    r"[（(\[]\s*(?:원문|인용|출처|original|source|quote)\s*[:：]"
+    r"\s*([^）)\]]+)[）)\]]"
+    r'|"([^"\n]+)"|“([^”]+)”|‘([^’]+)’|「([^」]+)」'
+    r"|(?<!\w)'([^'\n]+)'(?!\w)",
+    re.IGNORECASE,
+)
 # 부정 극성 표지 — 어휘 중복만으로 "A는 X한다"의 반대인 "A는 X하지 않는다"가 통과하는
 # 것을 막는다(의료 안전상 극성 뒤집힘이 가장 위험). 한국어 부정소 + 영어 부정어.
 _NEGATION_MARKERS = ("않", "없", "아니", "못", " 안 ", " no ", " not ", "n't", "없이")
@@ -138,17 +147,65 @@ def _lexically_grounded(claim_text: str, ids: list[str], lookup: dict[str, QaChu
     """claim이 근거 청크에 어휘적으로 연결되는지 — 무관한 날조에 임의 chunk id를 붙인
     경우를 걸러낸다. 완전한 함의 검증은 아니지만(그건 검증 모델이 필요), 근거 청크와
     공유 토큰이 사실상 없는 주장을 supported로 저장하지 않는다."""
-    claim_tokens = {t.lower() for t in _WORD_RE.findall(claim_text)}
-    if not claim_tokens:
-        return False
     haystack = "\n".join(lookup[c].text for c in ids).lower()
     hay_tokens = set(_WORD_RE.findall(haystack))
+    if not _has_lexical_overlap(claim_text, hay_tokens):
+        return False
+    if not _unquoted_assertion_grounded(claim_text, hay_tokens):
+        return False
+    return _polarity_consistent(claim_text, haystack)
+
+
+def _has_lexical_overlap(text: str, hay_tokens: set[str]) -> bool:
+    claim_tokens = {t.lower() for t in _WORD_RE.findall(text)}
+    if not claim_tokens:
+        return False
     shared = len(claim_tokens & hay_tokens)
     # claim 토큰의 1/3 이상(최소 1개)이 근거 청크에 나타나야 한다. 공유 어휘가 거의
     # 없는(=사실상 0) 무관한 날조를 걸러내는 게 목적이며, 완전한 함의 검증은 아니다.
-    if not (shared >= max(1, math.ceil(len(claim_tokens) / 3)) or shared == len(claim_tokens)):
-        return False
-    return _polarity_consistent(claim_text, haystack)
+    return shared >= max(1, math.ceil(len(claim_tokens) / 3))
+
+
+def _text_script(text: str) -> str | None:
+    """한글/라틴 문자 구분만 한다. 언어나 번역의 정확성 판정으로 쓰지 않는다."""
+    if re.search(r"[가-힣]", text):
+        return "hangul"
+    if re.search(r"[a-z]", text, re.IGNORECASE):
+        return "latin"
+    return None
+
+
+def _unquoted_assertion_grounded(claim_text: str, hay_tokens: set[str]) -> bool:
+    """같은 문자계의 인용으로 설명의 부족한 어휘 근거를 보충하지 못하게 한다.
+
+    순수 인용과 기존 한/영 번역 계약은 보존한다. 번역을 별도 검증하지 못하는 상한은
+    그대로이며, 인용 없는 복합 주장까지 의미적으로 입증하는 검증기는 아니다.
+    """
+    quotes: list[str] = []
+
+    def _remove(match: re.Match) -> str:
+        quote = next(group for group in match.groups() if group is not None)
+        if len(_WORD_RE.findall(quote)) < 2:
+            return match.group(0)  # 문장 인용이 아닌 짧은 용어 강조
+        quotes.append(quote)
+        return " "
+
+    assertion = _QUOTE_RE.sub(_remove, claim_text)
+    if not quotes or not _WORD_RE.search(assertion):
+        return True
+    script = _text_script(assertion)
+    if script is not None and all(_text_script(quote) != script for quote in quotes):
+        return True  # 번역문은 기존 전체 claim 검사에 맡긴다(함의 검증 아님).
+    # 원문을 괄호 밖에도 그대로 반복한 뒤 설명을 덧붙이면 다시 비율을 채울 수 있다.
+    # 동일 인용 구절의 반복도 제외한다. 순수 원문 반복은 설명이 없어 그대로 허용한다.
+    for quote in quotes:
+        literal = quote.strip().strip("\"'“”‘’").rstrip(".!?。")
+        pattern = r"\s+".join(re.escape(part) for part in literal.split())
+        if pattern:
+            assertion = re.sub(pattern, " ", assertion, flags=re.IGNORECASE)
+    if not _WORD_RE.search(assertion):
+        return True
+    return _has_lexical_overlap(assertion, hay_tokens)
 
 
 def _polarity_consistent(claim_text: str, haystack: str) -> bool:

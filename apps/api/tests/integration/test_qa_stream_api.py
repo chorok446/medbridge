@@ -176,6 +176,54 @@ class TestSourceSafety:
         completed = next(e for e in events if e["type"] == "completed")
         assert completed["message"]["status"] == "insufficient_evidence"
 
+    @pytest.mark.parametrize("with_supported", [False, True])
+    async def test_quote_laundering_never_reaches_stream_or_storage(
+        self, client, monkeypatch, with_supported
+    ):
+        await enable_deterministic()
+        doc_id, tid = await setup_doc(client)
+        source = "심장은 온몸에 혈액을 보내는 근육 기관이다."
+
+        class QuotedExpansionProvider:
+            provider_name = "deterministic"
+            model_name = "m"
+            available = True
+            is_local = True
+
+            def stream_answer(self, request, token):
+                ids = [request.chunks[0].chunk_id]
+                for explanation in (
+                    "'혈액'은 심장이 보내는 유체로, 산소와 영양분을 운반하는 역할을 합니다",
+                    "'근육'은 심장이 근육 조직으로 이루어져 있으며, "
+                    "수축과 이완을 통해 혈액을 펌프하는 특성을 나타냅니다",
+                ):
+                    yield {"type": "claim", "text": f"{explanation} (원문: {source}).",
+                           "sourceChunkIds": ids}
+                if with_supported:
+                    yield {"type": "claim", "text": source, "sourceChunkIds": ids}
+                yield {"type": "final", "answerStatus": "answered"}
+
+        monkeypatch.setattr(
+            "app.services.qa.stream_service.get_qa_streaming_provider",
+            lambda db: _fake_async(QuotedExpansionProvider()),
+        )
+        events = await collect(client, doc_id, tid)
+        emitted = [e for e in events if e["type"] == "claim"]
+        assert [e["text"] for e in emitted] == ([source] if with_supported else [])
+        message = events[-1]["message"]
+        assert message["status"] == ("completed" if with_supported else "insufficient_evidence")
+        assert len(message["claims"]) == int(with_supported)
+        async with get_session_factory()() as session:
+            saved = await session.get(QaMessage, uuid.UUID(message["id"]))
+            claims = (await session.execute(
+                select(QaClaim).where(QaClaim.message_id == saved.id)
+            )).scalars().all()
+            assert [c.claim_text for c in claims] == ([source] if with_supported else [])
+            assert saved.content == message["content"]
+            assert saved.draft_content is None
+            assert "산소" not in saved.content
+            assert "수축" not in saved.content
+
 
 class TestConcurrency:
     async def test_one_stream_per_thread(self, client):
