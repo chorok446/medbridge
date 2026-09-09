@@ -12,9 +12,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.search import DocumentChunk
 from app.services.qa.provider import QaContextChunk
+from app.services.qa.query import keyword_query
 from app.services.qa.settings import (
     CHUNK_TEXT_MAX_CHARS,
     CONTEXT_MAX_CHARS,
+    CONTEXT_MAX_CHUNKS,
     QA_SEARCH_LIMIT,
 )
 from app.services.search.embedding import get_embedding_provider
@@ -45,12 +47,15 @@ class RetrievalResult:
 async def retrieve(db: AsyncSession, document_id: uuid.UUID, question: str) -> RetrievalResult:
     provider = get_embedding_provider()
     mode = "hybrid" if provider.available else "keyword"
+    query = keyword_query(question)
+    if not query:
+        return RetrievalResult(chunks=[], lookup={}, retrieval_mode=mode, searched_ids=[])
 
     if mode == "hybrid":
         results = await run_search(
             db,
             document_id,
-            query=question,
+            query=query,
             mode=mode,
             limit=QA_SEARCH_LIMIT,
             embedding_provider=provider,
@@ -58,9 +63,7 @@ async def retrieve(db: AsyncSession, document_id: uuid.UUID, question: str) -> R
         ordered_ids = [r.chunk_id for r in results]
     else:
         # 자연어 질문은 일부 단어만 겹쳐도 되므로 keyword를 OR로 검색한다(기존 검색은 AND 유지).
-        hits = await search_keyword(
-            db, document_id, question, limit=QA_SEARCH_LIMIT, match_all=False
-        )
+        hits = await search_keyword(db, document_id, query, limit=QA_SEARCH_LIMIT, match_all=False)
         ordered_ids = [h.chunk_id for h in hits]
 
     if not ordered_ids:
@@ -82,15 +85,48 @@ async def retrieve(db: AsyncSession, document_id: uuid.UUID, question: str) -> R
         .all()
     )
     by_id = {row.id: row for row in rows}
+    # 정확한 주제 제목을 우선한다. 짧은 제목만 반환하면 바로 뒤의 정의 본문을
+    # 모델이 볼 수 없으므로 같은 쪽의 제한된 읽기 순서 범위를 함께 가져온다.
+    terms = {term.casefold() for term in query.split()}
+    anchors = [by_id[cid] for cid in ordered_ids if cid in by_id]
+    if mode == "keyword":
+        anchors.sort(key=lambda row: (row.section_title or "").strip().casefold() not in terms)
+    expanded_rows: list[DocumentChunk] = []
+    for anchor in anchors:
+        neighbors = (
+            (
+                await db.execute(
+                    select(DocumentChunk)
+                    .where(
+                        DocumentChunk.document_id == document_id,
+                        DocumentChunk.generation_id == anchor.generation_id,
+                        DocumentChunk.chunk_index.between(
+                            anchor.chunk_index - 3, anchor.chunk_index + 8
+                        ),
+                    )
+                    .order_by(DocumentChunk.chunk_index, DocumentChunk.id)
+                    .limit(12)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        pages = _source_pages(anchor)
+        # 중복 제목의 page_start/end는 멀리 떨어진 출처를 아우를 수 있다.
+        # 범위 겹침이 아니라 실제 source_ref의 페이지가 같은 경우만 확장한다.
+        expanded_rows.extend(
+            row
+            for row in neighbors
+            if row.id == anchor.id or pages.intersection(_source_pages(row))
+        )
 
     chunks: list[QaContextChunk] = []
     lookup: dict[str, QaChunkRef] = {}
     seen_hashes: set[str] = set()
     total_chars = 0
-    for cid in ordered_ids:
-        row = by_id.get(cid)
-        if row is None:
-            continue
+    for row in expanded_rows:
+        if len(chunks) >= CONTEXT_MAX_CHUNKS:
+            break
         if row.content_hash in seen_hashes:  # near-dup 제거(동일 content_hash)
             continue
         text = (row.normalized_text or "")[:CHUNK_TEXT_MAX_CHARS]
@@ -128,3 +164,11 @@ async def retrieve(db: AsyncSession, document_id: uuid.UUID, question: str) -> R
         searched_ids=list(lookup.keys()),
         chunk_hash_pairs=hash_pairs,
     )
+
+
+def _source_pages(row: DocumentChunk) -> set[int]:
+    return {
+        ref["pageNumber"]
+        for ref in (row.source_refs_json or [])
+        if isinstance(ref.get("pageNumber"), int)
+    }

@@ -6,7 +6,8 @@ PROMPT_VERSION = "4a-1"
 MAX_QUESTION_CHARS = 2000
 
 # 검색·컨텍스트
-QA_SEARCH_LIMIT = 8  # 모델에 전달할 최대 청크 수
+QA_SEARCH_LIMIT = 8  # 검색 앵커 수(가까운 분절 청크는 별도로 확장)
+CONTEXT_MAX_CHUNKS = 32  # 짧은 분절 청크의 ID·프롬프트 부가 비용도 제한
 CONTEXT_MAX_CHARS = 12000  # 청크 텍스트 합계 상한(순위대로 절단)
 CHUNK_TEXT_MAX_CHARS = 3000  # 청크 하나당 상한
 
