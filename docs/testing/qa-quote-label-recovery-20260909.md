@@ -1,5 +1,8 @@
 # Q&A 순수 인용의 원문 문단 표기 복원 — 2026-09-09
 
+최신 상태: 후속 보완 e22eef0의 전체 모델 평가는 39/39 통과했다. 첫 38/39 실패와
+저장 응답을 이용한 원인 확인을 아래에 보존한다. 새 installer 검증 전 출시 HOLD다.
+
 ## 출발점과 확인한 범위
 
 - [CI 34320629043](https://github.com/chorok446/medbridge/actions/runs/34320629043)의
@@ -96,6 +99,28 @@
 - 최종 전체 API **1,173 passed / 4 skipped**, 기존 Starlette 경고 1개,
   109.12초다. Ruff와 mypy 127개 소스도 통과했다. 새 고정 커밋 전체 평가는
   이 보완을 포함해 별도로 실행한다.
+
+## 후속 고정 커밋 전체 모델 평가 — e22eef0
+
+- testedCommit: `e22eef0f5f4ee6eeb08012065e84b0abf956f3ed`.
+  같은 Windows Python 3.13.14 / Ollama 0.33.3 / local qwen3:8b 환경에서
+  필터 없이 전체 13케이스 × 3회, 기존 문단 누락·안전 기준으로 재평가했다.
+- **39/39 통과, default_recommended, 종료 코드 0**이다. 위해 노출 위반·
+  안전 중요 실패·변동 모두 0건이다. p50 2.340초 / p95 21.692초다.
+  연결 오류 3회는 기존 재시도로 복구됐고 각 미완결 시도의 claim 1개는 폐기됐다.
+- 긴 질문은 3/3 통과했다. 완료된 평가 DB를 읽기 전용으로 대조해 매회 저장된
+  claim이 정확한 원문 표기의 문단 1~12 순서이고 출처가 비어 있지 않음을 확인했다.
+  첫 두 실행의 문서 밖 설명 각 5개는 기존 어휘 검증이 계속 차단했다.
+- 모델 digest는 첫 평가와 동일하며 시작·종료 commit/clean tree와 실행 경계
+  digest 검증을 통과했다. 모델 호출을 건너뛴 합성 정답 주입 평가가 아니다.
+- [전체 결과 JSON](qa-evaluation-20260909-e22eef0.json)의 LF 사본 SHA-256:
+  `2b914ba5bde15d4840ac9187ad34b1f728ea9ad0b825e1b10977d8779bd40ae4`.
+  첫 실패 JSON과 이번 성공 JSON 모두 실행 원본과 전체 구조·값이 같음을 확인했다.
+- 재현: `apps/api`에서 다음 명령을 실행한다. 사용자 DB 대신 임시 DB를 사용한다.
+
+```powershell
+.\.venv\Scripts\python.exe -X utf8 scripts/evaluate_local_qa.py --model qwen3:8b --repeat 3 --fail-on-gate
+```
 
 ## 남은 한계
 
