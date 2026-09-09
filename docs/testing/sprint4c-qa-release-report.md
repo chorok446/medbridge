@@ -3,6 +3,48 @@
 > **출시 판정: 보류 (HOLD)** — 2026-09-08 qwen3:8b 재평가는 통과했다.
 > 최종 installer의 Windows 36항목은 미완료이며 승인 파일은 생성하지 않는다.
 
+## 2026-09-09 CI 보안 검사 실패와 의존성 수정
+
+- [CI 34292922093](https://github.com/chorok446/medbridge/actions/runs/34292922093)는
+  문서 커밋 `5c3e422`에서 JS 보안 검사로 실패했다. backend/frontend/versions는
+  성공했고, windows-build는 선행 security 실패로 건너뛰었다.
+  문서 변경에 따른 앱 테스트 실패가 아니라 잠금 의존성의 취약점 검출이다.
+- 수정 전 로컬 `pnpm audit --audit-level=high`도 종료 코드 1로 재현됐다.
+  Critical 2 / High 2 / Moderate 2였으며 아래 버전만 올렸다.
+
+| 의존성 | 이전 | 수정 | 근거 |
+|---|---|---|---|
+| next / eslint-config-next | 16.2.12 | 16.3.3 | [Windows 서버 RCE](https://github.com/vercel/next.js/security/advisories/GHSA-p293-qw3h-jr36), [AVIF RCE](https://github.com/vercel/next.js/security/advisories/GHSA-2xp9-vwfh-vxw4) |
+| sharp | 0.35.3 | 0.35.4 | [libheif 취약점](https://github.com/advisories/GHSA-rgj7-g3m4-5g8c) |
+| js-yaml | 4.3.1 | 4.3.2 | [빈 merge source CPU 고갈](https://github.com/advisories/GHSA-2883-xcg3-v3hh) |
+
+- Next.js와 ESLint 설정은 동일 버전으로 고정했다. sharp/js-yaml override의 최소
+  수정 버전을 높이되 기존 버전 계열 범위는 유지했다. lockfile의 동반 변경은
+  Next.js·sharp 플랫폼 패키지 및 필요한 SWC helper·ESLint utility에 한정된다.
+  ESLint 9.39.5의 deprecated 메타데이터 갱신 외 관련 없는 패키지 버전 변경은 없다.
+- MedBridge는 정적 export 및 `images.unoptimized`를 사용한다. 따라서 Next.js
+  서버·이미지 최적화 공격 조건과 설치 앱의 노출을 동일시하지 않는다.
+  보안 감사의 차단 기준·예외 목록은 변경하지 않고 의존성을 수정했다.
+- 추가 검증에서 `public/pdfjs`의 복사된 JavaScript까지 린트되어 오류 4개와
+  경고 162개가 발생했다. 생성 디렉터리만 제외했으며 앱 소스, 리소스 준비
+  스크립트, 다른 public 스크립트가 계속 검사되는 회귀 테스트를 추가했다.
+  생성물 제외 테스트는 수정 전 실패했고 수정 후 통과했다.
+- Windows / Node 22.16.0 / pnpm 11.19.0 검증:
+  - frozen-lockfile 설치, Web 30파일 / 215테스트, 린트·타입 검사 통과.
+  - Next.js 16.3.3 정적 빌드 및 빌드 후 재린트 통과.
+  - export의 PDF.js 리소스 199파일 / 3,503,550 bytes가 패키지 원본과 해시 일치.
+  - `pnpm audit --audit-level=high`: 종료 코드 0, Critical 0 / High 0.
+  - Python 잠금 의존성 `pip-audit 2.9.0`: 알려진 취약점 없음, 종료 코드 0.
+- 전체 JS 감사에는 기존 Vitest 4.1.10 / @vitest/mocker 4.1.10의 Moderate 2건
+  ([GHSA-82fw-gwwq-j7x9](https://github.com/advisories/GHSA-82fw-gwwq-j7x9))이 남는다.
+  수정 버전은 4.1.11이며 이번 승인 범위에 포함하지 않았다. 전체 감사는 여전히
+  종료 코드 1이고, 모든 위험도가 0건이라는 의미는 아니다.
+- 기존 `@napi-rs/wasm-runtime`과 `@emnapi/core/runtime`의 peer 불일치는 수정 전
+  잠금 파일에도 있었다. 별도 의존성 정비 대상으로 남기고 이번에 범위를 넓히지 않았다.
+- 프런트엔드 의존성이 변경됐으므로 아래 c97aee6 설치본 검증을 새 패키지 검증으로
+  재사용하지 않는다. 새 CI·installer와 미완료 36항목은 별도 확인해야 한다.
+  출시 **HOLD**, PR **Draft**, 승인 파일 미생성 상태를 유지한다.
+
 ## 2026-09-09 PDF 수정 설치본 재검증 — c97aee6
 
 - CI `34232145369`의 모든 job이 성공했고, manifest·installer 해시 확인과

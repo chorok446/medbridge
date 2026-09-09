@@ -26,15 +26,16 @@ overrides:
   # 수정됐으며, 5.x 이상을 쓰는 소비자는 건드리지 않는다.
   nanoid@3: "^3.3.18"
 
-  # GHSA-f88m-g3jw-g9cj (libvips CVE 4건)
+  # GHSA-f88m-g3jw-g9cj (libvips), GHSA-rgj7-g3m4-5g8c (libheif)
   # 이 앱에는 닿지 않는다 — output: "export" + images.unoptimized라 Next 이미지
   # 최적화가 꺼져 있고 sharp는 optional이다. 그래도 설치는 되므로 올려 둔다.
-  sharp: "^0.35.0"
+  sharp: "^0.35.4"
 
   # ReDoS — eslint 계열 전용(dev)이라 사용자에게 닿지 않는다. 두 계열이 동시에
   # 걸려 있어 각각 지정한다.
   brace-expansion@1: "^1.1.18"
   brace-expansion@5: "^5.0.9"
 
-  # prototype pollution — eslint 설정 로딩 경로(dev). 4.x 계열만 취약하다.
-  js-yaml@4: "^4.3.1"
+  # prototype pollution 및 GHSA-2883-xcg3-v3hh (빈 merge source CPU 고갈).
+  # eslint 설정 로딩 경로(dev)의 4.x 계열을 수정 버전 이상으로 유지한다.
+  js-yaml@4: "^4.3.2"
