@@ -3,6 +3,27 @@
 > **출시 판정: 보류 (HOLD)** — 2026-09-08 qwen3:8b 재평가는 통과했다.
 > 최종 installer의 Windows 36항목은 미완료이며 승인 파일은 생성하지 않는다.
 
+## 2026-09-09 Windows PID 전달 테스트 경합 수정
+
+- `98e5f6c`의 [CI 34294261269](https://github.com/chorok446/medbridge/actions/runs/34294261269)는
+  security/frontend/backend/versions가 통과했다. Windows API 테스트에서만
+  1 failed / 1,083 passed / 3 skipped로 실패했다.
+- `test_windows_sidecar_hook_joins_job_and_kills_descendants`가 PID 파일의
+  존재만 확인한 뒤 아직 빈 내용을 정수로 변환해 `ValueError`가 발생했다.
+  자식 프로세스 종료 검증에 도달하기 전 테스트의 준비 신호 경합이다.
+  직전 보안 의존성 수정에서는 API 코드와 이 테스트를 변경하지 않았다.
+- Windows / Python 3.13.14에서 PID 쓰기에 0.2초 지연을 주어 같은 오류를
+  재현했다. 수정 전 일반 사례는 통과하고 지연 사례는 빈 문자열 변환으로 실패했다.
+- PID는 같은 디렉터리의 `.pending` 파일에 완전히 쓰고 닫은 뒤 최종 경로로
+  원자적으로 게시한다. 일반·지연 쓰기 모두 기존 Job Object 종료 검증을 수행한다.
+  제품 코드, 10초 준비 기한, 자식 프로세스 종료 조건과 CI 게이트는 변경하지 않았다.
+- 집중 회귀 2 passed, 20회 반복 총 40건 통과. Ruff 및 mypy 126개 소스 통과.
+  Windows API 전체 회귀는 1,084 passed / 4 skipped / 1 warning, 117.92초다.
+  경고는 기존 Starlette TestClient의 httpx 사용 중단 예고다.
+- CI의 Python은 3.12.10이므로 로컬 결과를 새 CI 성공으로 확대하지 않는다.
+  새 Windows CI·installer와 미완료 실기기 검증이 필요하다.
+  출시 **HOLD**, PR **Draft**, 승인 파일 미생성 상태를 유지한다.
+
 ## 2026-09-09 CI 보안 검사 실패와 의존성 수정
 
 - [CI 34292922093](https://github.com/chorok446/medbridge/actions/runs/34292922093)는
