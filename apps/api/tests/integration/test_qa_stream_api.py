@@ -1,5 +1,6 @@
 """Q&A 스트리밍 API 통합 테스트 — 프로토콜·출처·취소·복구·revision·동의·동시성."""
 
+import asyncio
 import json
 import re
 import threading
@@ -361,6 +362,75 @@ class TestConcurrency:
 
 
 class TestCancel:
+    @pytest.mark.parametrize("explicit_cancel", [False, True])
+    @pytest.mark.parametrize("stop_after", ["started", "finalizing", "completed"])
+    @pytest.mark.parametrize("close_mode", ["aclose", "cancelled_error"])
+    async def test_stream_close_preserves_cancel_intent(
+        self, client, explicit_cancel, stop_after, close_mode
+    ):
+        # GUI는 취소 POST 성공 뒤 연결을 닫는다. 다음 이벤트를 기다리는 기존
+        # 취소 테스트와 달리 제너레이터 정리가 먼저 실행되는 순서를 고정한다.
+        from app.services.qa import cancel_registry, stream_service
+
+        await enable_deterministic()
+        doc_id, tid = await setup_doc(client)
+        factory = get_session_factory()
+        async with factory() as session:
+            user = (await session.execute(select(User))).scalars().first()
+            doc = await session.get(Document, uuid.UUID(doc_id))
+            thread = await session.get(QaThread, uuid.UUID(tid))
+            _, assistant, request_id = await stream_service.prepare_stream(
+                session, doc, user, thread, "심장은 무엇을 하나요?"
+            )
+            aid = assistant.id
+            revisions = doc.content_revision, doc.chunk_revision
+        stream = stream_service.run_stream(
+            uuid.UUID(doc_id), uuid.UUID(tid), aid, "심장은 무엇을 하나요?",
+            request_id, *revisions, _FakeRequest(),
+        )
+        async for event in stream:
+            if event["type"] == stop_after or event.get("phase") == stop_after:
+                break
+        else:
+            pytest.fail(f"중단 지점 미도달: {stop_after}")
+
+        before = await stream_service._message_dto(factory, aid)
+        if stop_after == "finalizing":
+            async with factory() as session:
+                assert (await session.get(QaMessage, aid)).draft_content
+        if explicit_cancel:
+            response = await client.post(
+                f"/api/documents/{doc_id}/qa/threads/{tid}/messages/{aid}/cancel"
+            )
+            assert response.status_code == 200
+        if close_mode == "cancelled_error":
+            with pytest.raises(asyncio.CancelledError):
+                await stream.athrow(asyncio.CancelledError())
+        else:
+            await stream.aclose()
+
+        completed = stop_after == "completed"
+        expected = (QaMessageStatus.COMPLETED if completed else
+                    QaMessageStatus.CANCELLED if explicit_cancel else QaMessageStatus.INTERRUPTED)
+        async with factory() as session:
+            message = await session.get(QaMessage, aid)
+            assert message.status == expected
+            assert message.error_code == (
+                None if completed else "CANCELLED" if explicit_cancel else "CONNECTION_LOST"
+            )
+            assert (message.cancel_requested_at is not None) == (explicit_cancel and not completed)
+            assert (message.interrupted_at is not None) == (not completed and not explicit_cancel)
+            assert message.completed_at is not None
+            assert message.draft_content is None
+        after = await stream_service._message_dto(factory, aid)
+        if completed:
+            assert after == before  # 완료된 본문·출처를 정리 경로가 덮어쓰지 않는다.
+        else:
+            assert after["claims"] == []  # 부분 응답을 완료된 주장으로 저장하지 않는다.
+        assert cancel_registry.request_cancel(str(aid)) is False
+        following = await collect(client, doc_id, tid)
+        assert following[-1]["message"]["status"] == "completed"
+
     async def test_cancel_during_stream(self, client, monkeypatch):
         # ASGITransport에서 스트림 소비 중 중첩 요청은 교착되므로, 취소 경로는
         # run_stream 제너레이터를 in-process로 구동해 검증한다(HTTP 왕복 없음).

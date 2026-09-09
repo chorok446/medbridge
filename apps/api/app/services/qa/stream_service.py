@@ -650,20 +650,13 @@ async def run_stream(
         yield sp.completed(await _message_dto(factory, assistant_id))
     finally:
         # 정상 종료·예외·클라이언트 연결 종료(aclose)로 제너레이터가 어떻게 끝나든
-        # (1) worker를 멈추고 (2) 아직 활성이면 반드시 terminal(INTERRUPTED)로 확정한다.
-        # _set_terminal은 이미 확정된 경우 no-op이라 정상 완료/취소 경로엔 영향이 없다.
+        # (1) worker를 멈추고 (2) 아직 활성이면 저장된 취소 요청을 반영해 확정한다.
+        # GUI는 취소 POST 후 연결을 닫으므로 폴링보다 이 정리가 먼저 실행될 수 있다.
+        # 취소 요청이 없을 때만 INTERRUPTED이며 이미 확정된 상태는 CAS로 보존한다.
         # aclose가 GeneratorExit을 던져도 정리가 잘리지 않도록 shield로 감싼다.
         cancel_event.set()
         with contextlib.suppress(Exception):
-            await asyncio.shield(
-                _set_terminal(
-                    factory,
-                    assistant_id,
-                    QaMessageStatus.INTERRUPTED,
-                    content="연결이 끊겨 답변이 중단되었습니다.",
-                    error_code="CONNECTION_LOST",
-                )
-            )
+            await asyncio.shield(_finish_cancel_or_interrupt(factory, assistant_id))
         cancel_registry.discard(str(assistant_id))
 
 
