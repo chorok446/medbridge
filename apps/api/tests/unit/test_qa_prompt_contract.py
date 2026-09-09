@@ -16,6 +16,7 @@ def test_both_qa_paths_require_sources_and_abstention():
         assert "없는 정의·기능·기전은 추가하지 않는다" in prompt
         assert "실제로 사용한 모든 조각의 chunkId" in prompt
         assert "중간 조각 하나의 ID로 문장 전체를 인용하지 않는다" in prompt
+        assert "목차 항목이나 제목만 확인되면 그것을 정의 답변으로" in prompt
 
 
 def test_grounding_prompt_keeps_evidence_but_not_location_metadata():

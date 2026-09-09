@@ -558,7 +558,7 @@ async def run_stream(
                     return
 
             vc, reject_reason = classify_claim_event(
-                event, retrieval.lookup, claim_index=claim_index
+                event, retrieval.lookup, claim_index=claim_index, question=user_content
             )
             if vc is None:
                 if diag is not None:

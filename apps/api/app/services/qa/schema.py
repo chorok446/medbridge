@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from app.core.logging import get_logger
 from app.models.enums import QaClaimVerification
 from app.services.qa.context import QaChunkRef
+from app.services.qa.definition_guard import is_definition_heading_only
 from app.services.qa.literal_sources import complete_literal_source_ids
 from app.services.qa.settings import (
     ANSWER_MAX_CHARS,
@@ -72,10 +73,11 @@ REJECT_EMPTY = "empty_text"
 REJECT_NO_SOURCE = "no_valid_source"
 REJECT_NUMBER_ABSENT = "number_not_in_source"
 REJECT_NOT_GROUNDED = "not_lexically_grounded"
+REJECT_DEFINITION_HEADING = "definition_heading_only"
 
 
 def classify_claim_event(
-    event: dict, lookup: dict[str, QaChunkRef], *, claim_index: int
+    event: dict, lookup: dict[str, QaChunkRef], *, claim_index: int, question: str = ""
 ) -> tuple[VerifiedClaim | None, str | None]:
     """claim 이벤트를 검증한다. 반환: (지원 claim | None, 거부 사유 코드 | None).
 
@@ -90,6 +92,8 @@ def classify_claim_event(
     ids = _claim_source_ids(raw_text, event.get("sourceChunkIds"), lookup)
     if not ids:
         return None, REJECT_NO_SOURCE
+    if is_definition_heading_only(question, text, ids, lookup):
+        return None, REJECT_DEFINITION_HEADING
     if not _numbers_present(text, ids, lookup):
         return None, REJECT_NUMBER_ABSENT
     if not _lexically_grounded(text, ids, lookup):
@@ -291,7 +295,7 @@ def sanitize_followups(raw) -> list[str]:
 
 
 def verify(
-    model_output: dict, lookup: dict[str, QaChunkRef], *, had_results: bool
+    model_output: dict, lookup: dict[str, QaChunkRef], *, had_results: bool, question: str = ""
 ) -> VerifiedAnswer:
     """모델 출력 dict → 검증된 답변. 지원 claim만 남기고 최종 상태를 결정한다."""
     # 절단은 마커를 다시 쓴 뒤에 한다(아래). 여기서 자르면 경계에 걸린 '[c1' 조각이
@@ -322,6 +326,7 @@ def verify(
         # 지원 조건: 유효 출처 있음 + 수치가 원문에 존재 + 근거 청크에 어휘적으로 연결됨
         if (
             not ids
+            or is_definition_heading_only(question, text, ids, lookup)
             or not _numbers_present(text, ids, lookup)
             or not _lexically_grounded(text, ids, lookup)
         ):

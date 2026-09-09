@@ -518,7 +518,9 @@ async def _generate(
                 return await _fail(db, assistant_msg, "EXTERNAL_CONSENT_MISSING")
         model_output = await asyncio.to_thread(provider.answer, request)
         # 잘못된 최상위 타입(배열·문자열 등)도 여기서 잡아 pending 고착을 막는다
-        verified = verify(model_output, retrieval.lookup, had_results=bool(retrieval.chunks))
+        verified = verify(
+            model_output, retrieval.lookup, had_results=bool(retrieval.chunks), question=question
+        )
     except Exception as exc:
         logger.warning(
             "qa_generate_failed",
