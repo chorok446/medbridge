@@ -44,6 +44,26 @@ def test_repeated_literal_quotes_keep_all_source_paragraph_labels(with_final):
         assert restored[-1] == events[-1]
 
 
+@pytest.mark.parametrize("suffix", ["", "."])
+def test_duplicate_original_quote_from_failed_evaluation_is_restored(suffix):
+    text = f"{SOURCE} (원문: {SOURCE}){suffix}"
+    events = [_claim(text, ["c1"]), _claim(text, ["c2"])] * 6
+    out = _restore(events, chunks=[_chunk(), _chunk("c2")])
+    assert [e["text"] for e in out] == [f"문단 {i}. {SOURCE}" for i in range(1, 13)]
+    assert all(e["sourceChunkIds"] == ["c1", "c2"] for e in out)
+
+
+@pytest.mark.parametrize("text", [
+    f"산소를 운반한다. {SOURCE} (원문: {SOURCE})",
+    f"{SOURCE} (원문: 다른 문장이다.)",
+    f"{SOURCE} (원문: {SOURCE}) 산소를 운반한다.",
+    f"심장은 수축한다 (원문: {SOURCE}).",
+])
+def test_original_quote_with_any_added_explanation_is_not_repaired(text):
+    events = [_claim(text)]
+    assert _restore(events) == events
+
+
 def test_canonical_order_and_only_model_cited_matching_sources_are_preserved():
     events = [_claim(f"문단 {i}: {SOURCE}", ["c2"]) for i in reversed(range(1, 13))]
     events.insert(3, _claim())

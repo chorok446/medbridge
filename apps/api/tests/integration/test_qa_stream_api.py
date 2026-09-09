@@ -112,8 +112,9 @@ class TestHappyPath:
 
 class TestSourceSafety:
     @pytest.mark.parametrize("hint", ["answered", "insufficient_evidence"])
+    @pytest.mark.parametrize("duplicate_original", [False, True])
     async def test_native_literal_quote_labels_reach_stream_and_saved_claims(
-        self, client, monkeypatch, hint
+        self, client, monkeypatch, hint, duplicate_original
     ):
         from app.services.qa import stream_service
         from app.services.qa.streaming import OpenAICompatibleStreamingQaProvider
@@ -125,7 +126,8 @@ class TestSourceSafety:
         def model_lines(_url, payload, _key):
             prompt = payload["messages"][1]["content"]
             cid = re.search(r"\[chunkId ([^\]]+)\]", prompt)[1]
-            claims = [{"type": "claim", "text": source, "sourceChunkIds": [cid]}] * 12
+            quote = f"{source} (원문: {source})" if duplicate_original else source
+            claims = [{"type": "claim", "text": quote, "sourceChunkIds": [cid]}] * 12
             # 원문 인용이 있어도 문서 밖 설명을 고쳐주거나 지원 주장으로 만들면 안 된다.
             claims.insert(0, {"type": "claim", "text": f"산소를 운반하는 체액이다 (원문: {source})",
                               "sourceChunkIds": [cid]})

@@ -25,6 +25,7 @@ _QUOTE_REQUEST = re.compile(
 _LOCATION = re.compile(r"\d\s*(?:장|절|쪽|페이지)")
 _PARAGRAPH = re.compile(r"문단\s*([1-9][0-9]{0,2})[.:：]\s+(.+)", re.DOTALL)
 _NESTED_LABEL = re.compile(r"(?m)^\s*문단\s*\d+[.:：]")
+_DUPLICATE_ORIGINAL = re.compile(r"(.+?)\s*\(원문\s*:\s*([^()]*)\)\.?\s*", re.DOTALL)
 
 
 @dataclass
@@ -37,6 +38,14 @@ class _Paragraph:
 def _literal_key(text: str) -> str:
     # 줄바꿈/공백과 문장 끝 마침표만 허용한다. 바꿔쓰기나 인용 앞뒤 설명은 매칭하지 않는다.
     return " ".join(text.split()).removesuffix(".")
+
+
+def _model_literal_key(text: str) -> str:
+    repeated = _DUPLICATE_ORIGINAL.fullmatch(text.strip())
+    if repeated and _literal_key(repeated[1]) == _literal_key(repeated[2]):
+        return _literal_key(repeated[1])
+    # 인용 괄호 밖에 다른 설명이 있으면 한 글자도 버리지 않는다.
+    return _literal_key(text)
 
 
 def _source_paragraphs(request: QaRequest) -> dict[int, _Paragraph]:
@@ -88,7 +97,7 @@ def restore_quote_labels(request: QaRequest, events: list[dict]) -> list[dict]:
             continue
         cited = {cid for cid in ids if isinstance(cid, str)}
         labelled = _PARAGRAPH.fullmatch(text.strip())
-        key = _literal_key(labelled[2] if labelled else text)
+        key = _model_literal_key(labelled[2] if labelled else text)
         for number, paragraph in paragraphs.items():
             if labelled and number != int(labelled[1]):
                 continue
