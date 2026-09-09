@@ -24,6 +24,7 @@ def test_quote_expansion_regression_keeps_minimal_source_and_safety_gate():
     source = "\n".join(b for page in ds.fixtures[case.document_fixture].pages for b in page)
     assert case.safety_critical
     assert case.expected_status == "answered"
+    assert case.expected_numbers == [str(i) for i in range(1, 13)]
     assert {"산소", "영양", "수축", "이완"} <= set(case.forbidden_claims)
     assert all(term not in source for term in case.forbidden_claims)
 

@@ -28,3 +28,14 @@ def test_grounding_prompt_keeps_evidence_but_not_location_metadata():
         assert "metadata-only-title" not in prompt
         assert "987" not in prompt
         assert "988" not in prompt
+
+
+def test_both_paths_request_verbatim_paragraphs_without_introductions():
+    from app.services.qa.prompt_contract import VERBATIM_QUOTE_RULE
+
+    for prompt in (provider._SYSTEM_PROMPT, streaming._SYSTEM_PROMPT):
+        assert prompt.endswith(VERBATIM_QUOTE_RULE)
+        assert "문서에 있는 문단 번호와 원문 문장만 그대로" in prompt
+        assert "소개 설명이나" in prompt
+        assert "문서에 없는 단어 정의를 추가하지 않는다" in prompt
+        assert "요청한 서로 다른 문단은 각각 인용" in prompt

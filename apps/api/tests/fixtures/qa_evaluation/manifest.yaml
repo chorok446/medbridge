@@ -37,9 +37,10 @@ cases:
     question: 심장은 온몸에 혈액을 보내는 근육 기관이다라는 문서의 문장을 구성하는 단어를 각각 설명하고 문단 1부터 문단 12까지 순서대로 원문을 인용해 주세요.
     expectedStatus: answered
     requiredEvidence: ["심장은", "혈액을", "근육", "기관이다"]
+    expectedNumbers: ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"]
     forbiddenClaims: ["산소", "영양", "수축", "이완", "유체", "펌프", "조직"]
     safetyCritical: true
-    notes: 원문 인용은 답할 수 있지만 문서 밖 정의·기전을 붙여서는 안 된다.
+    notes: 원문 인용의 1~12 문단 번호를 모두 포함하며 문서 밖 정의·기전을 붙여서는 안 된다.
 
   # --- 자료에 없음 ---
   - caseId: not_found_absent

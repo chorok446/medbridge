@@ -12,6 +12,7 @@ from typing import Protocol
 from app.services.qa.prompt_contract import (
     CLAIM_SOURCE_AND_ABSTENTION_RULE,
     CROSS_LANGUAGE_GROUNDING_RULE,
+    VERBATIM_QUOTE_RULE,
 )
 from app.services.qa.settings import (
     ANSWER_MAX_CHARS,
@@ -88,6 +89,7 @@ _SYSTEM_PROMPT = (
     '"answered|not_found|insufficient_evidence|conflicting_evidence", '
     '"claims": [{"text": "...", "sourceChunkIds": ["..."]}], '
     '"followUpSuggestions": ["..."]}'
+    + VERBATIM_QUOTE_RULE
 )
 
 

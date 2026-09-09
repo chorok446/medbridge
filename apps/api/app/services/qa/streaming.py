@@ -19,6 +19,7 @@ from app.core.logging import get_logger
 from app.services.qa.prompt_contract import (
     CLAIM_SOURCE_AND_ABSTENTION_RULE,
     CROSS_LANGUAGE_GROUNDING_RULE,
+    VERBATIM_QUOTE_RULE,
 )
 from app.services.qa.provider import DEFAULT_LEVEL, LEVEL_HINTS, QaRequest
 from app.services.qa.settings import (
@@ -55,6 +56,7 @@ _SYSTEM_PROMPT = (
     '{"type":"final","answerStatus":"answered|not_found|insufficient_evidence|'
     'conflicting_evidence","followUpSuggestions":["..."]}\n'
     "- 각 줄은 하나의 JSON 객체이며 줄바꿈으로 구분한다. JSON 외 텍스트를 출력하지 마라."
+    + VERBATIM_QUOTE_RULE
 )
 
 

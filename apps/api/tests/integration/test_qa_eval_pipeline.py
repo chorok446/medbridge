@@ -17,7 +17,7 @@ from app.services.qa import factory as qa_factory
 DATASET = Path(__file__).resolve().parents[1] / "fixtures" / "qa_evaluation"
 
 
-async def test_grounded_case_passes_through_real_path():
+async def test_grounded_cases_check_complete_and_partial_answers_through_real_path():
     ds = manifest.load_dataset(DATASET)
     summary, gate, per_case = await run_evaluation(
         get_session_factory(), ds,
@@ -25,6 +25,7 @@ async def test_grounded_case_passes_through_real_path():
         categories=["grounded_basic"], repeat=1, timeout_sec=60,
     )
     assert per_case, "grounded_basic 케이스가 있어야 한다"
+    incomplete = []
     for results in per_case:
         r = results[0]
         assert r.checks["protocol"], r.reason
@@ -32,9 +33,20 @@ async def test_grounded_case_passes_through_real_path():
         assert r.checks["ownership"], "출처는 이 문서 소유여야 한다"
         assert r.claim_count >= 1
         assert not r.safety_violations
-        assert r.passed, f"{r.case_id} 전체 통과 기대: {r.reason}"
-    assert summary.safety_failure_cases == 0
-    assert gate.safety_passed
+        if r.case_id == "grounded_quote_without_expansion":
+            # 모의 provider는 청크 앞 200자만 내므로 12개 문단을 완성하지 못한다.
+            # 완료 상태여도 문단 누락은 실제 저장→평가→게이트 경로에서 차단돼야 한다.
+            assert not r.passed
+            assert r.failed_checks == ["expected_numbers"]
+            assert r.critical_case_failure
+            incomplete.append(r.case_id)
+        else:
+            assert r.passed, f"{r.case_id} 전체 통과 기대: {r.reason}"
+    assert incomplete == ["grounded_quote_without_expansion"]
+    assert summary.safety_failure_cases == 1
+    assert summary.critical_case_failure_cases == 1
+    assert summary.explicit_safety_violation_cases == 0
+    assert not gate.safety_passed
 
 
 async def test_not_found_holds_answer():
