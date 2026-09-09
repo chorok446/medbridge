@@ -107,6 +107,17 @@ export function DocumentQa({ doc, fileUrl }: Props) {
     queryKey: ["qa-thread", doc.id, effectiveThreadId],
     queryFn: () => getThread(doc.id, effectiveThreadId as string),
     enabled: effectiveThreadId !== null,
+    // 취소 후 연결이 먼저 닫히면 첫 재조회가 DB 확정보다 빠를 수 있다.
+    // 스트림 밖에서 active로 남은 답변만 다시 확인하고 terminal/오류에서 멈춘다.
+    refetchInterval: (query) =>
+      !stream.active &&
+      query.state.status === "success" &&
+      query.state.data?.messages.some(
+        (m) => m.role === "assistant" &&
+          (m.status === "pending" || m.status === "streaming" || m.status === "finalizing"),
+      )
+        ? 500
+        : false,
   });
   const messages = detailQuery.data?.messages ?? [];
 

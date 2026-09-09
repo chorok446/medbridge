@@ -359,6 +359,81 @@ describe("DocumentQa", () => {
     await waitFor(() => expect(streamMock.cancelStream).toHaveBeenCalled());
   });
 
+  it.each(["pending", "streaming", "finalizing"] as const)(
+    "취소 직후 %s가 조회돼도 확정 상태를 다시 읽고 갱신을 멈춘다",
+    async (status) => {
+      let serverDetail: QaThreadDetail = { thread, messages: [] };
+      apiMock.listThreads.mockResolvedValue([thread]);
+      apiMock.getThread.mockImplementation(async () => serverDetail);
+      streamMock.cancelStream.mockResolvedValue({ id: "m2", status, errorCode: null });
+      streamMock.streamQuestion.mockImplementation(
+        async (
+          _d: string,
+          _t: string,
+          _q: string,
+          opts: { signal: AbortSignal; onEvent: (e: QaStreamEvent) => void },
+        ) => {
+          serverDetail = {
+            thread,
+            messages: [answerDetail.messages[0], {
+              ...answerDetail.messages[1], status, content: "", claims: [],
+            }],
+          };
+          opts.onEvent({ type: "started", requestId: "r1", messageId: "m2" });
+          opts.onEvent({ type: "phase", phase: "generating" });
+          await new Promise<void>((resolve) => {
+            opts.signal.addEventListener("abort", () => resolve());
+          });
+        },
+      );
+      const { unmount, client } = renderQa();
+      await screen.findByText("이 대화에는 아직 질문이 없습니다.");
+      await userEvent.click(screen.getByRole("button", { name: "이 문서의 핵심 내용은 무엇인가요?" }));
+      await userEvent.click(await screen.findByRole("button", { name: "중단" }));
+      await waitFor(() => expect(apiMock.getThread).toHaveBeenCalledTimes(2));
+      // 연결 종료가 DB 확정보다 빠르다. 첫 재조회는 아직 빈 active 메시지다.
+      expect(screen.queryByText("답변을 중단했어요.")).toBeNull();
+      serverDetail = {
+        thread,
+        messages: [answerDetail.messages[0], {
+          ...answerDetail.messages[1], status: "cancelled", content: "답변 생성을 취소했습니다.",
+          claims: [],
+        }],
+      };
+      expect(await screen.findByText("답변을 중단했어요.", {}, { timeout: 2000 }))
+        .toBeInTheDocument();
+      expect(streamMock.streamQuestion).toHaveBeenCalledTimes(1);
+      const settledCalls = apiMock.getThread.mock.calls.length;
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 650)); });
+      expect(apiMock.getThread).toHaveBeenCalledTimes(settledCalls);
+      unmount();
+      client.clear();
+    },
+  );
+
+  it.each(["조회 오류", "화면 이탈"])("미확정 답변 재조회를 %s에서 멈춘다", async (stop) => {
+    apiMock.listThreads.mockResolvedValue([thread]);
+    const activeDetail = {
+      thread,
+      messages: [{ ...answerDetail.messages[1], status: "streaming", content: "", claims: [] }],
+    };
+    apiMock.getThread.mockResolvedValueOnce(activeDetail).mockRejectedValue(new Error("offline"));
+    const { unmount, client } = renderQa();
+    await waitFor(() => expect(client.getQueryState(["qa-thread", doc.id, thread.id])?.status)
+      .toBe("success"));
+    if (stop === "조회 오류") {
+      expect(await screen.findByText("선택한 대화 내용을 불러오지 못했습니다.", {}, { timeout: 2000 }))
+        .toBeInTheDocument();
+    } else {
+      unmount();
+    }
+    const stoppedCalls = apiMock.getThread.mock.calls.length;
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 650)); });
+    expect(apiMock.getThread).toHaveBeenCalledTimes(stoppedCalls);
+    unmount();
+    client.clear();
+  });
+
   it("terminal 이벤트 없이 연결이 끊기면 진행 상태에 멈추지 않는다", async () => {
     apiMock.listThreads.mockResolvedValue([]);
     apiMock.createThread.mockResolvedValue({ thread });
