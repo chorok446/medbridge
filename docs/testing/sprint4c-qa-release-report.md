@@ -1,8 +1,24 @@
 # Sprint 4C-B — 로컬 Q&A 출시 판정 보고서
 
-> **출시 판정: 보류 (HOLD)** — 2026-09-08 qwen3:8b 재평가는 통과했지만,
-> 2026-09-09 설치본에서 새 근거 충실도 실패가 확인됐다. Windows 36항목도 미완료이며
-> 승인 파일은 생성하지 않는다.
+> **출시 판정: 보류 (HOLD)** — 2026-09-09 설치본 근거 실패를 보강한
+> `0db39ae`의 qwen3:8b 전체 재평가는 통과했다. 새 installer 재검증과 Windows
+> 36항목이 미완료이므로 승인 파일은 생성하지 않는다.
+
+## 2026-09-09 전체 모델 재평가 — 0db39ae
+
+- testedCommit: `0db39aeeeb8c48842823f4c72a0177117150bc51`.
+  Windows Python 3.13.14 / Ollama 0.33.3 / local qwen3:8b 환경에서
+  commit과 모델 digest를 고정한 `--repeat 3 --fail-on-gate` 실행이다.
+- 새 인용문 회귀를 포함한 전체 13케이스 × 3회 = **39/39 통과**.
+  종료 코드 0, 모델 판정 `default_recommended`, 안전 위반·안전 중요 실패 0건.
+  latency p50 2.091초 / p95 14.411초. 실행 중 HTTP 500 한 번은 재시도로 복구됐다.
+- 변동 1케이스는 관련어 부재 질문이 insufficient_evidence/not_found로 달라진 것이며
+  모두 주장 0개로 보류했다. 변동을 지우거나 평가 기준을 완화하지 않았다.
+- 새 회귀의 마지막 실행은 원문 claim 1개만 남았다. 문서 밖 설명 차단은 통과했지만
+  요청한 문단별 인용의 완전성까지 입증한 것은 아니다. 답변 완성도 개선은 남는다.
+- [전체 JSON](qa-evaluation-20260909-0db39ae.json),
+  [수정·검증·한계와 artifact 해시](qa-quote-grounding-fix-20260909.md).
+  새 Windows installer 검증 전까지 PR Draft / 출시 HOLD를 유지한다.
 
 ## 2026-09-09 인용문 근거 검증 보강
 
@@ -220,7 +236,7 @@
 | 계층 | 내용 | 상태 |
 |---|---|---|
 | Layer 1 | 결정론적 파이프라인 평가(실제 서비스 경로) | ✅ 자동 검증 완료 |
-| Layer 2 | 실제 Ollama + qwen3:4b/8b/14b 평가 | 8b 과거 재평가 통과, 새 근거 실패 반영 재평가 필요 |
+| Layer 2 | 실제 Ollama + qwen3:4b/8b/14b 평가 | 8b 0db39ae 전체 39/39 통과, 4b/14b 미평가 |
 | Layer 3 | Windows 실기기 UX 검증 | PDF·보존·취소·복구 부분 통과, 근거 충실도 실패로 HOLD |
 
 Layer 1은 실제 애플리케이션 경로(검색 → 컨텍스트 → provider → NDJSON 스트리밍 → 주장
@@ -269,7 +285,7 @@ cd apps/api && uv run python scripts/evaluate_local_qa.py --model qwen3:30b-a3b 
 
 | 모델 | 판정 | 근거 |
 |---|---|---|
-| qwen3:8b | release_hold | 5aad9f9 평가 36/36 이후 35362c1 설치본에서 원문 밖 주장에 supported 표시 |
+| qwen3:8b | default_recommended (모델 평가만) | 0db39ae 전체 39/39; 새 설치본 미검증으로 제품 출시 HOLD |
 | qwen3:4b | _대기_ | Layer 2 미실행 |
 | qwen3:14b | _대기_ | Layer 2 미실행 |
 | qwen3:30b-a3b | _대기_ | Layer 2 미실행 |
