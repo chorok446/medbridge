@@ -110,6 +110,64 @@ class TestHappyPath:
 
 
 class TestSourceSafety:
+    async def test_duplicate_claims_do_not_repeat_stream_draft_or_saved_answer(
+        self, client, monkeypatch
+    ):
+        from app.services.qa import stream_service
+
+        await enable_deterministic()
+        doc_id, tid = await setup_doc(client)
+        source = "심장은 온몸에 혈액을 보내는 근육 기관이다."
+        checkpointed = []
+        original_checkpoint = stream_service._checkpoint_draft
+
+        async def capture_checkpoint(factory, assistant_id, claims):
+            checkpointed.append([c.text for c in claims])
+            await original_checkpoint(factory, assistant_id, claims)
+
+        class RepeatingProvider:
+            provider_name = "deterministic"
+            model_name = "m"
+            available = True
+            is_local = True
+
+            def stream_answer(self, request, token):
+                cid = request.chunks[0].chunk_id
+                # An invalid earlier copy must not hide a later supported claim.
+                yield {"type": "claim", "text": source, "sourceChunkIds": ["unknown"]}
+                for _ in range(12):
+                    yield {"type": "claim", "text": f"  {source}  ",
+                           "sourceChunkIds": [cid, cid]}
+                # Paragraph labels are not duplicates and must keep sequential citations.
+                yield {"type": "claim", "text": f"문단 2. {source}", "sourceChunkIds": [cid]}
+                yield {"type": "final", "answerStatus": "answered"}
+
+        monkeypatch.setattr(stream_service, "_checkpoint_draft", capture_checkpoint)
+        monkeypatch.setattr(
+            stream_service, "get_qa_streaming_provider",
+            lambda db: _fake_async(RepeatingProvider()),
+        )
+        events = await collect(client, doc_id, tid)
+        claims = [e for e in events if e["type"] == "claim"]
+        expected = [source, f"문단 2. {source}"]
+        assert [c["text"] for c in claims] == expected
+        assert [c["claimIndex"] for c in claims] == [0, 1]
+        assert [c["seq"] for c in claims] == [1, 2]
+        assert checkpointed == [[source], expected]
+        message = events[-1]["message"]
+        assert message["status"] == "completed"
+        assert message["content"] == f"{source}[c0]\n문단 2. {source}[c1]"
+        assert len(message["claims"]) == 2
+        async with get_session_factory()() as session:
+            saved = await session.get(QaMessage, uuid.UUID(message["id"]))
+            rows = (await session.execute(
+                select(QaClaim).where(QaClaim.message_id == saved.id).order_by(QaClaim.claim_index)
+            )).scalars().all()
+            assert [r.claim_text for r in rows] == expected
+            assert saved.content == message["content"]
+            assert saved.draft_content is None
+            assert saved.last_stream_seq == 2
+
     @pytest.mark.parametrize("hint", ["not_found", "insufficient_evidence"])
     async def test_abstention_clears_draft_claims_from_final_message(
         self, client, monkeypatch, hint

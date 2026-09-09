@@ -390,6 +390,7 @@ async def run_stream(
     cancel_event = cancel_registry.register(str(assistant_id))
     token = _CancelToken(cancel_event)
     supported: list = []
+    seen_claims: set[tuple[str, frozenset[str]]] = set()
     if diag is not None:
         diag.setdefault("emitted_claims", 0)
         diag.setdefault("rejected_claims", 0)
@@ -565,6 +566,13 @@ async def run_stream(
                     if reject_reason:
                         diag["rejection_reasons"].append(reject_reason)
                 continue  # unsupported → 사용자에게 노출하지 않음
+            # 검증을 통과한 같은 문장·같은 출처 집합만 한 번 내보낸다.
+            # 서로 다른 문단 표기나 추가 출처는 버리지 않고, 거부된 복사본이
+            # 나중의 정상 주장을 가리지 않도록 검증 뒤에 중복을 판단한다.
+            claim_key = (vc.text, frozenset(vc.source_chunk_ids))
+            if claim_key in seen_claims:
+                continue
+            seen_claims.add(claim_key)
             supported.append(vc)
             seq += 1
             yield sp.claim_event(
