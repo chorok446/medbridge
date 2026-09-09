@@ -80,6 +80,9 @@ class _OllamaHandler(BaseHTTPRequestHandler):
         for line in lines:
             self.wfile.write(line.encode("utf-8"))
             self.wfile.flush()
+        # _json과 같은 Windows 종료 경계를 둔다. 다중 write 직후 닫으면
+        # 표준 urllib에서도 응답 대신 WinError 10054가 간헐적으로 관측된다.
+        time.sleep(0.02)
 
 
 @pytest.fixture
@@ -398,9 +401,8 @@ class TestPull:
         ]
         events = list(client.pull_model("qwen3:8b"))
         statuses = [e.get("status") for e in events]
-        assert "pulling manifest" in statuses
-        assert "success" in statuses
-        assert any(e.get("completed") == 40 for e in events)
+        assert statuses == ["pulling manifest", "downloading", "success"]
+        assert events[1]["completed"] == 40
 
     def test_rejects_non_allowlist_model(self, ollama):
         from app.services.summary.endpoint import SummaryNetworkError
