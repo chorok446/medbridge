@@ -88,13 +88,35 @@ content/chunk revision 17. PARTIALLY_EXTRACTED 상태의 기존 자료다.
   이 세 번의 오답 미노출을 기존 오답의 완전 해결이나 전체 안전성 통과로 확대하지 않는다.
 - [설치본 실패·검색 전후·로컬 모델 진단·보존 메타데이터](windows-pr7-large-qa-20260910.json).
 
+## 고정 커밋 전체 실제 모델 평가 — 74b9925
+
+검색 구현 `d977f28`와 문서 기록을 포함한 `74b99250fd3104b78c8d30508f508f7d5a39ce59`의
+clean tree에서 별도 평가 DB·in-memory keyring을 사용했다. 시작·종료 Git과 모델
+digest를 기존 fail-closed 검사로 고정했으며 평가 기준·데이터셋은 바꾸지 않았다.
+
+```powershell
+# apps/api
+.\.venv\Scripts\python.exe -X utf8 scripts/evaluate_local_qa.py --model qwen3:8b --repeat 3 --fail-on-gate --output-dir artifacts/qa-evaluation/d977f28-retrieval-context
+```
+
+- **13케이스 × 3회 = 39/39 통과**, exit 0, `default_recommended`.
+  평가 기준상 위해 노출·안전 중요 실패·변동 0건, p50 1.850초 / p95 19.682초.
+  생성 시각 19:41:20 UTC. 검색 → 스트리밍 → 검증 → 저장 전체 서비스 경로 평가다.
+- 모델 digest:
+  `sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41`.
+- [전체 평가 JSON](qa-evaluation-20260910-retrieval.json).
+  실행 원본 SHA-256: `872db6bd46aa03e749fab7db31a1d647bdf1c303b28b4ae3706af9ac81c31171`.
+  저장소 사본은 LF 정규화 후 내용 일치를 확인했다.
+- **합성 평가 통과는 위 실제 431MB 문서의 답변 보류나 이전 오답을 해소하지 않는다.**
+  설치본 교체·대형 문서 의미 정확성 검증이 남아 전체 출시 판정은 HOLD다.
+
 ## 보존 및 다음 작업
 
 검증 전후 기존 documents/pages/blocks/settings와 이전 Q&A 3개 테이블의
 행 수·내용 해시가 같다. 기존 문서 잡·요약 상태 집계도 같고 active Q&A/FK 위반은 0이다.
 새 합성 질문 10회와 대형 문서 질문 2회만 설치본에 남았다. 백업은 유지했다.
 
-1. 고정 커밋의 전체 실제 모델 평가를 다시 수행하고, 새 CI 결과와 구분해 기록한다.
+1. 새 CI 결과와 installer를 확인한다. 위 고정 커밋 평가는 CI·GUI 검증과 구분한다.
 2. 분절된 문장의 claim/sourceChunkIds 연결 실패를 별도 재현한다. 검증 기준을
    완화하지 않고 출처를 보존하는 입력·인용 구성 개선을 작은 변경으로 검토한다.
 3. 새 설치본에서 대형 문서 질문·출처 이동·보류 결과를 다시 확인한다.
