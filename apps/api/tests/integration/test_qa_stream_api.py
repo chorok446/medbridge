@@ -1,6 +1,7 @@
 """Q&A 스트리밍 API 통합 테스트 — 프로토콜·출처·취소·복구·revision·동의·동시성."""
 
 import json
+import re
 import threading
 import uuid
 from datetime import UTC, datetime
@@ -110,6 +111,55 @@ class TestHappyPath:
 
 
 class TestSourceSafety:
+    @pytest.mark.parametrize("hint", ["answered", "insufficient_evidence"])
+    async def test_native_literal_quote_labels_reach_stream_and_saved_claims(
+        self, client, monkeypatch, hint
+    ):
+        from app.services.qa import stream_service
+        from app.services.qa.streaming import OpenAICompatibleStreamingQaProvider
+
+        await enable_deterministic()
+        doc_id, tid = await setup_doc(client)
+        source = "심장은 온몸에 혈액을 보내는 근육 기관이다."
+
+        def model_lines(_url, payload, _key):
+            prompt = payload["messages"][1]["content"]
+            cid = re.search(r"\[chunkId ([^\]]+)\]", prompt)[1]
+            claims = [{"type": "claim", "text": source, "sourceChunkIds": [cid]}] * 12
+            # 원문 인용이 있어도 문서 밖 설명을 고쳐주거나 지원 주장으로 만들면 안 된다.
+            claims.insert(0, {"type": "claim", "text": f"산소를 운반하는 체액이다 (원문: {source})",
+                              "sourceChunkIds": [cid]})
+            claims.append({"type": "final", "answerStatus": hint})
+            content = "\n".join(json.dumps(c, ensure_ascii=False) for c in claims)
+            return iter([json.dumps({"message": {"content": content}, "done": True})])
+
+        provider = OpenAICompatibleStreamingQaProvider(
+            endpoint="http://127.0.0.1:11434/v1", model_name="qwen3:8b",
+            api_key="", is_local=True, line_source=model_lines,
+        )
+        monkeypatch.setattr(stream_service, "get_qa_streaming_provider",
+                            lambda db: _fake_async(provider))
+        question = "문단 1부터 문단 12까지 순서대로 원문을 인용해 주세요."
+        events = await collect(client, doc_id, tid, question=question)
+        message = events[-1]["message"]
+        expected = [f"문단 {i}. {source}" for i in range(1, 13)] if hint == "answered" else []
+        assert message["status"] == ("completed" if hint == "answered" else hint)
+        assert [c["text"] for c in message["claims"]] == expected
+        assert "산소" not in message["content"]
+        if hint == "answered":
+            emitted = [e for e in events if e["type"] == "claim"]
+            assert [e["text"] for e in emitted] == expected
+            assert [e["claimIndex"] for e in emitted] == list(range(12))
+            assert all(c["sourceRefs"] for c in message["claims"])
+        async with get_session_factory()() as session:
+            saved = await session.get(QaMessage, uuid.UUID(message["id"]))
+            rows = (await session.execute(
+                select(QaClaim).where(QaClaim.message_id == saved.id).order_by(QaClaim.claim_index)
+            )).scalars().all()
+            assert [r.claim_text for r in rows] == expected
+            assert saved.content == message["content"]
+            assert saved.draft_content is None
+
     async def test_duplicate_claims_do_not_repeat_stream_draft_or_saved_answer(
         self, client, monkeypatch
     ):

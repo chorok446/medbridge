@@ -22,6 +22,7 @@ from app.services.qa.prompt_contract import (
     VERBATIM_QUOTE_RULE,
 )
 from app.services.qa.provider import DEFAULT_LEVEL, LEVEL_HINTS, QaRequest
+from app.services.qa.quote_labels import restore_quote_labels
 from app.services.qa.settings import (
     MAX_CLAIMS,
     STREAM_OLLAMA_MAX_ATTEMPTS,
@@ -292,7 +293,8 @@ class OpenAICompatibleStreamingQaProvider:
                     discarded_event_count=discarded_event_count,
                     discarded_claim_count=discarded_claim_count,
                 )
-            yield from attempt_events
+            # 정상 시도만 복원한다. 출처·수치·극성 검증은 이후 서비스에서 그대로 수행한다.
+            yield from restore_quote_labels(request, attempt_events)
             return
 
         raise AssertionError("Ollama stream retry loop exhausted without returning or raising")
