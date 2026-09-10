@@ -356,7 +356,8 @@ def verify(
         status = "not_found"
     elif model_status == "insufficient_evidence":
         status = "insufficient_evidence"
-    elif not supported:
+    elif not supported or (model_flags_conflict and len(supported) < 2):
+        # 상충의 한쪽만 검증됐다면 이를 합의된 답처럼 완료로 확정하지 않는다.
         status = "insufficient_evidence"
     elif len(supported) >= 2 and (
         model_flags_conflict or claims_conflict([c.text for c in supported])

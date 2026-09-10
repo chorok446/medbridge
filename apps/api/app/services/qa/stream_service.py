@@ -670,7 +670,8 @@ def _final_status(supported: list, final_hint: str, *, had_results: bool):
             QaMessageStatus.INSUFFICIENT_EVIDENCE,
             "문서에서 충분한 근거를 찾지 못했어요. 다른 표현으로 다시 물어봐 주세요.",
         )
-    if not supported:
+    if not supported or (final_hint == "conflicting_evidence" and len(supported) < 2):
+        # 상충의 한쪽만 검증됐다면 이를 합의된 답처럼 완료로 확정하지 않는다.
         return (
             QaMessageStatus.INSUFFICIENT_EVIDENCE,
             "문서에서 충분한 근거를 찾지 못했어요. 다른 표현으로 다시 물어봐 주세요.",
