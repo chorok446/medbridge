@@ -10,6 +10,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.request import urlopen
 
 import pytest
 
@@ -74,14 +75,16 @@ class _OllamaHandler(BaseHTTPRequestHandler):
         time.sleep(0.02)
 
     def _ndjson(self, lines):
+        encoded = [line.encode("utf-8") for line in lines]
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson")
+        # 유한 모의 응답의 끝을 TCP 종료로 추측하지 않는다. Windows RST가
+        # 마지막 read1에서 정상 NDJSON 수신까지 실패로 바꾸는 경계를 제거한다.
+        self.send_header("Content-Length", str(sum(len(line) for line in encoded)))
         self.end_headers()
-        for line in lines:
-            self.wfile.write(line.encode("utf-8"))
+        for line in encoded:
+            self.wfile.write(line)
             self.wfile.flush()
-        # _json과 같은 Windows 종료 경계를 둔다. 다중 write 직후 닫으면
-        # 표준 urllib에서도 응답 대신 WinError 10054가 간헐적으로 관측된다.
         time.sleep(0.02)
 
 
@@ -391,6 +394,15 @@ class TestConnectionTest:
 
 
 class TestPull:
+    def test_mock_ndjson_has_byte_length_and_repeatable_eof(self, ollama):
+        lines = ['{"status":"다운로드"}\n', '{"status":"success"}\n']
+        ollama["pull_lines"] = lines
+        expected = "".join(lines).encode("utf-8")
+        for _ in range(20):
+            with urlopen(st.OLLAMA_BASE + "/api/pull", data=b"{}", timeout=3) as response:
+                assert response.headers["Content-Length"] == str(len(expected))
+                assert b"".join(iter(lambda: response.read1(7), b"")) == expected
+
     def test_yields_events_and_skips_nonjson(self, ollama):
         ollama["pull_lines"] = [
             '{"status":"pulling manifest"}\n',
