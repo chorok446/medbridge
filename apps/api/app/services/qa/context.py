@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.search import DocumentChunk
 from app.services.qa.provider import QaContextChunk
-from app.services.qa.query import keyword_query
+from app.services.qa.query import classification_requested, keyword_query
 from app.services.qa.settings import (
     CHUNK_TEXT_MAX_CHARS,
     CONTEXT_MAX_CHARS,
@@ -120,6 +120,12 @@ async def retrieve(db: AsyncSession, document_id: uuid.UUID, question: str) -> R
             if row.id == anchor.id or pages.intersection(_source_pages(row))
         )
 
+    if classification_requested(question) and "분류" not in terms:
+        # 정확한 주제 제목에 속한 분류 구간만 우선한다. '분류'를 전역 OR 검색에
+        # 넣으면 다른 질환의 표가 섞이므로 원래 주제 검색과 별도로 다룬다.
+        focused = await _classification_context(db, document_id, anchors, terms)
+        expanded_rows = focused + expanded_rows
+
     chunks: list[QaContextChunk] = []
     lookup: dict[str, QaChunkRef] = {}
     seen_hashes: set[str] = set()
@@ -164,6 +170,35 @@ async def retrieve(db: AsyncSession, document_id: uuid.UUID, question: str) -> R
         searched_ids=list(lookup.keys()),
         chunk_hash_pairs=hash_pairs,
     )
+
+
+async def _classification_context(
+    db: AsyncSession, document_id: uuid.UUID, anchors: list[DocumentChunk], terms: set[str]
+) -> list[DocumentChunk]:
+    focused: list[DocumentChunk] = []
+    for anchor in anchors:
+        pages = _source_pages(anchor)
+        if (anchor.section_title or "").strip().casefold() not in terms or len(pages) != 1:
+            continue  # 여러 쪽에 재사용된 제목으로 연속된 장 범위를 추측하지 않는다.
+        page = next(iter(pages))
+        candidates = (
+            await db.execute(
+                select(DocumentChunk).where(
+                    DocumentChunk.document_id == document_id,
+                    DocumentChunk.generation_id == anchor.generation_id,
+                    DocumentChunk.chunk_index.between(
+                        anchor.chunk_index - 3, anchor.chunk_index + 64
+                    ),
+                ).order_by(DocumentChunk.chunk_index, DocumentChunk.id).limit(68)
+            )
+        ).scalars().all()
+        # 표가 다음 쪽으로 이어질 수 있다. 실제 source_ref와 읽기 순서를 함께 제한한다.
+        nearby = [row for row in candidates if {page, page + 1}.intersection(_source_pages(row))]
+        seeds = [row for row in nearby if "분류" in (row.normalized_text or "")][:4]
+        for seed in seeds:
+            focused.extend(row for row in nearby
+                           if seed.chunk_index - 12 <= row.chunk_index <= seed.chunk_index + 8)
+    return focused
 
 
 def _source_pages(row: DocumentChunk) -> set[int]:
