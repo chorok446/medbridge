@@ -35,6 +35,12 @@ logger = get_logger(__name__)
 _OLLAMA_TRANSIENT_STREAM_ERRORS = frozenset({"connect_failed", "server_error"})
 _OLLAMA_RETRYABLE_BAD_RESPONSE_REASONS = frozenset({"stream_missing_terminal"})
 _RETRY_CANCEL_POLL_SEC = 0.05
+_SOURCE_RETRY_RULE = (
+    "\n- 직전 출력은 모든 claim에 sourceChunkIds 필드가 없거나 빈 형식이었다. "
+    "같은 질문에 다시 답하되 각 claim에 실제 사용한 문서 청크의 chunkId를 "
+    "sourceChunkIds 문자열 배열로 반드시 넣어라. text 안의 출처 표기는 대체할 수 없다. "
+    "청크로 뒷받침할 수 없으면 claim 없이 insufficient_evidence로 끝내라."
+)
 
 
 class CancelToken(Protocol):
@@ -150,7 +156,7 @@ class OpenAICompatibleStreamingQaProvider:
         return is_ollama_native_endpoint(self._endpoint, self.is_local)
 
     def stream_answer(self, request: QaRequest, cancel_token: CancelToken) -> Iterator[dict]:
-        payload = {
+        payload: dict = {
             "model": self.model_name,
             "stream": True,
             "temperature": 0.1,
@@ -217,6 +223,7 @@ class OpenAICompatibleStreamingQaProvider:
         deadline_at = time.monotonic() + STREAM_TOTAL_DEADLINE_SEC
         discarded_event_count = 0
         discarded_claim_count = 0
+        source_retried = False
         for attempt_index in range(STREAM_OLLAMA_MAX_ATTEMPTS):
             if cancel_token.is_cancelled():
                 return
@@ -286,7 +293,24 @@ class OpenAICompatibleStreamingQaProvider:
                 return
             if time.monotonic() >= deadline_at:
                 raise SummaryNetworkError("timeout")
-            if attempt_index:
+            missing_sources = _missing_claim_sources(attempt_events)
+            if (missing_sources and not source_retried
+                    and attempt_index + 1 < STREAM_OLLAMA_MAX_ATTEMPTS):
+                # 전부 출처 필드가 빠진 응답만 한 번 재요청한다. 잘못된 ID를 고치거나
+                # 이전 모델 산문을 근거로 되먹이지 않는다. 네트워크 재시도 예산도 공유한다.
+                source_retried = True
+                discarded_event_count += len(attempt_events)
+                discarded_claim_count += sum(e.get("type") == "claim" for e in attempt_events)
+                payload = {**payload, "messages": [
+                    {**m, "content": m["content"] + _SOURCE_RETRY_RULE}
+                    if m["role"] == "system" else m for m in payload["messages"]
+                ]}
+                logger.info("qa_ollama_source_retry", attempt=attempt_index + 1,
+                            discarded_claim_count=discarded_claim_count)
+                continue
+            if missing_sources:
+                logger.info("qa_ollama_source_retry_exhausted", attempts=attempt_index + 1)
+            if attempt_index and not missing_sources:
                 logger.info(
                     "qa_ollama_stream_recovered",
                     attempts=attempt_index + 1,
@@ -397,6 +421,18 @@ class OpenAICompatibleStreamingQaProvider:
                 return
         if uses_ollama_native and not transport_terminal:
             raise SummaryNetworkError("bad_response", "stream_missing_terminal")
+
+
+def _missing_claim_sources(events: list[dict]) -> bool:
+    if any(e.get("type") == "final" and e.get("answerStatus") in
+           ("not_found", "insufficient_evidence") for e in events):
+        return False  # 모델이 보류한 답변을 재요청해 완료로 승격하지 않는다.
+    claims = [e for e in events if e.get("type") == "claim"]
+    return bool(claims) and all(
+        not isinstance(ids := c.get("sourceChunkIds"), list) or not ids
+        or any(not isinstance(cid, str) or not cid.strip() for cid in ids)
+        for c in claims
+    )
 
 
 def _ollama_retry_delay(retry_index: int) -> float:
