@@ -373,26 +373,25 @@ class OpenAICompatibleStreamingQaProvider:
             content_buf += delta
             while "\n" in content_buf:
                 sem_line, content_buf = content_buf.split("\n", 1)
-                event = _parse_semantic(sem_line)
-                if event is None:
-                    continue
-                if event["type"] == "claim":
-                    claim_count += 1
-                    if claim_count > MAX_CLAIMS:
+                for event in _parse_semantic_events(sem_line):
+                    if event["type"] == "claim":
+                        claim_count += 1
+                        if claim_count > MAX_CLAIMS:
+                            return
+                    yield event
+                    if event["type"] == "final":
                         return
-                yield event
-                if event["type"] == "final":
-                    return
             # Ollama native 스트림은 done=true 프레임 자체가 정상 종료 계약이다. 해당
             # 프레임의 마지막 content를 먼저 처리한 뒤 transport EOF를 추가로 읽지 않는다.
             if native_done:
                 transport_terminal = True
                 break
         # 마지막 미완결 줄에 완성된 이벤트가 있으면 낸다(claim 상한은 여기에도 적용)
-        tail = _parse_semantic(content_buf)
-        if tail is not None:
-            if tail["type"] == "claim" and claim_count + 1 > MAX_CLAIMS:
-                return
+        for tail in _parse_semantic_events(content_buf):
+            if tail["type"] == "claim":
+                claim_count += 1
+                if claim_count > MAX_CLAIMS:
+                    return
             yield tail
             if tail["type"] == "final":
                 return
@@ -432,18 +431,29 @@ def _extract_delta(frame: dict) -> str:
         return ""
 
 
-def _parse_semantic(line: str) -> dict | None:
-    """모델이 낸 NDJSON 의미 줄을 파싱한다. type이 claim/final인 dict만 통과."""
+def _parse_semantic_events(line: str) -> list[dict]:
+    """완전한 claim/final 객체만 읽는다. 줄바꿈 누락은 허용하되 JSON은 수리하지 않는다.
+
+    한 줄 전체가 유효해야 반환한다. 자유 텍스트·배열·잘린 꼬리를 버리고 정상 접두부만
+    구제하지 않으며, 문자열 안의 괄호를 경계로 오인하지 않도록 JSON decoder를 사용한다.
+    """
     s = line.strip()
-    if not s:
-        return None
-    try:
-        obj = json.loads(s)
-    except ValueError:
-        return None
-    if not isinstance(obj, dict) or obj.get("type") not in ("claim", "final"):
-        return None
-    return obj
+    decoder = json.JSONDecoder()
+    events: list[dict] = []
+    offset = 0
+    while offset < len(s):
+        if len(events) >= MAX_CLAIMS + 1:
+            return []
+        try:
+            obj, offset = decoder.raw_decode(s, offset)
+        except ValueError:
+            return []
+        if not isinstance(obj, dict) or obj.get("type") not in ("claim", "final"):
+            return []
+        events.append(obj)
+        while offset < len(s) and s[offset] in " \t\r\n":
+            offset += 1
+    return events
 
 
 def build_qa_streaming_provider(config) -> QaStreamingProvider:
