@@ -4,18 +4,23 @@ import copy
 import uuid
 
 import pymupdf
+import pytest
 from sqlalchemy import func, select
 
 from app.db.session import get_session_factory
 from app.models.qa import QaMessage
 from app.models.search import DocumentChunk
+from app.qa_eval.source_bundle_selection import select_source_bundles
 from app.qa_eval.source_outline import build_source_outlines
 from app.services.qa.context import retrieve
+from app.services.qa.provider import QaRequest
 from tests.integration.test_qa_api import upload_chunked
+from tests.unit.test_qa_evidence_selection import _client
 from tests.unit.test_qa_source_outline import assert_lossless
 
 
-async def test_outline_preserves_uploaded_grade_rows_without_saving_answers(client):
+@pytest.mark.parametrize("select_bundle", [False, True])
+async def test_outline_preserves_uploaded_grade_rows_without_saving_answers(client, select_bundle):
     labels = ["I", "II", "III", "IV"]
     rows = [f"{label}\n장치의 전압 기준은 {24 * (i + 1)}V이다.\n단, 외부 전원이 필요하다."
             for i, label in enumerate(labels)]
@@ -33,6 +38,14 @@ async def test_outline_preserves_uploaded_grade_rows_without_saving_answers(clie
                   for c in stored}
         result = await retrieve(db, doc_id, "장치의 분류")
         outlines = build_source_outlines(result.chunks, result.lookup)
+        if select_bundle:
+            selected = select_source_bundles(
+                QaRequest("장치의 분류", result.chunks), result.lookup,
+                groups=[[c.chunk_id for c in result.chunks]],
+                http_client=_client({"status": "selected", "decisions": {"0": True}}, []),
+            )
+            assert selected.outlines == outlines
+            outlines = selected.outlines
         structured = [o for o in outlines if o.layout == "labelled_sequence"]
         assert len(structured) == 1
         outline = structured[0]
