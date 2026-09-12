@@ -21,7 +21,7 @@ from sqlalchemy.sql.selectable import Exists
 
 from app.db.session import get_session_factory
 from app.models.document import Document, DocumentJob
-from app.models.enums import JobStatus, JobType, OcrRunStatus, ProcessingStatus
+from app.models.enums import BlockType, JobStatus, JobType, OcrRunStatus, ProcessingStatus
 from app.models.extraction import DocumentBlock, DocumentPage, DocumentTable
 from app.models.search import (
     DocumentChunk,
@@ -357,8 +357,17 @@ class _ChunkDraftStream:
                 )
                 continue
 
-            if _looks_like_section_title(block_text):
+            section_boundary = (
+                block.block_type == BlockType.TEXT
+                and ref.source_method == "digital"
+                and (block.metadata_json or {}).get("section_boundary") is True
+            )
+            if section_boundary or _looks_like_section_title(block_text):
                 self._flush_current(completed)
+                if section_boundary and self.merge_candidate is not None:
+                    # 제목이 같아도 검증된 절 경계를 짧은 청크 병합으로 지우지 않는다.
+                    completed.append(self.merge_candidate)
+                    self.merge_candidate = None
                 self.current_section = block_text
                 self.current = ChunkDraft(
                     section_title=self.current_section,

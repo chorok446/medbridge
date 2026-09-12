@@ -32,6 +32,7 @@ class OrderResult:
     order: list[int]  # block_index를 읽기 순서대로 나열
     confidence: float
     two_column: bool
+    section_heading_indices: frozenset[int] = frozenset()
 
 
 def compute_reading_order(
@@ -117,7 +118,9 @@ def compute_reading_order(
     confidence = (
         READING_ORDER_CONFIDENCE_TWO_COL if straddlers == 0 else READING_ORDER_CONFIDENCE_FALLBACK
     )
-    boundaries = _heading_boundaries(text_blocks, content_x0, content_width, tolerance, footnote_y)
+    boundaries, sections = _heading_boundaries(
+        text_blocks, content_x0, content_width, tolerance, footnote_y
+    )
     if boundaries:
         # 검증된 제목의 위쪽을 경계로 안정 정렬한다. 기존 구간 내부의
         # 좌→우 열 순서는 보존하며, 선행 본문을 제목 위 구간으로 되돌린다.
@@ -128,13 +131,16 @@ def compute_reading_order(
         if regrouped != ordered:
             confidence = min(confidence, READING_ORDER_CONFIDENCE_FALLBACK)
             ordered = regrouped
-    return OrderResult(order=_with_nontext(ordered, blocks), confidence=confidence, two_column=True)
+    return OrderResult(
+        order=_with_nontext(ordered, blocks), confidence=confidence, two_column=True,
+        section_heading_indices=sections,
+    )
 
 
 def _heading_boundaries(
     blocks: list[BlockRec], content_x0: float, content_width: float,
     tolerance: float, footnote_y: float,
-) -> list[float]:
+) -> tuple[list[float], frozenset[int]]:
     """좌측 번호 제목 + 인접 전폭 본문으로 확인되는 경계만 사용한다.
 
     표 구조나 행·열 관계를 추론하지 않는다. 독립 열 또는 경계를 가로지르는
@@ -143,17 +149,20 @@ def _heading_boundaries(
     body = [b for b in blocks if b.bbox[1] < footnote_y]
     full_width = content_width * FULL_WIDTH_BLOCK_RATIO
     boundaries = []
+    sections: set[int] = set()
     for caption in body:
         x0, top, x1, bottom = caption.bbox
         label = caption.text.strip()
         if (
             x0 > content_x0 + tolerance or x1 - x0 >= full_width
             or len(label) > _CAPTION_MAX_CHARS or len(label.splitlines()) > 2
-            or not (
-                _NUMBERED_TABLE_CAPTION.match(label)
-                or _is_standalone_section(caption, body, full_width)
-            )
         ):
+            continue
+        is_caption = bool(_NUMBERED_TABLE_CAPTION.match(label))
+        is_section = not is_caption and _is_standalone_section(
+            caption, body, full_width
+        )
+        if not is_caption and not is_section:
             continue
         if not any(
             b.bbox[2] - b.bbox[0] >= full_width
@@ -170,7 +179,9 @@ def _heading_boundaries(
         ):
             continue
         boundaries.append(top)
-    return sorted(set(boundaries))
+        if is_section:
+            sections.add(caption.block_index)
+    return sorted(set(boundaries)), frozenset(sections)
 
 
 def _is_standalone_section(heading: BlockRec, body: list[BlockRec], full_width: float) -> bool:

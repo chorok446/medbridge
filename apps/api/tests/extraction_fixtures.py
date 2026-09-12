@@ -2,10 +2,36 @@
 
 import pymupdf
 
+from app.services.extraction.engine import BlockRec, PageData
+
 PAGE_W, PAGE_H = 595, 842  # A4 (pt)
 
 
 KOR = {"fontname": "korea"}
+
+
+def numbered_section_page(page_number: int = 1) -> PageData:
+    """두 줄 절 제목 앞의 2단 표 형태를 재현하는 비의료 합성 추출 결과."""
+    entries = [
+        ((30, 100, 320, 112), "Previous table header."),
+        ((35, 125, 130, 140), "Previous left A."),
+        ((235, 125, 315, 140), "Previous right A."),
+        ((35, 155, 130, 178), "Previous left B."),
+        ((180, 155, 315, 182), "Previous right B."),
+        ((32, 205, 135, 215), "2. \n장비 등급"),
+        ((40, 230, 310, 242), "A. Equipment with the basic parts."),
+        ((40, 247, 310, 259), "B. Equipment with additional parts."),
+    ]
+    blocks = [
+        BlockRec(bbox=bbox, text=text, block_index=index, block_type="text")
+        for index, (bbox, text) in enumerate(entries)
+    ]
+    return PageData(
+        page_number=page_number, width=350, height=540, rotation=0,
+        raw_text="\n".join(block.text for block in blocks), blocks=blocks,
+        words=[], tables=[], image_bboxes=[], image_area_ratio=0,
+        full_page_image=False, has_images=False, text_area_ratio=0.3,
+    )
 
 
 def _new_doc() -> pymupdf.Document:

@@ -237,7 +237,14 @@ def _prepare_page_rows(document_id: uuid.UUID, page: PageData) -> _PreparedPage:
                 is_table=block.block_index in table_blocks,
                 is_caption=block.block_index in captions,
                 confidence=scan.confidence,
-                metadata_json={"two_column": order.two_column},
+                metadata_json={
+                    "two_column": order.two_column,
+                    **({"section_boundary": True} if (
+                        block.block_index in order.section_heading_indices
+                        and block.block_index not in table_blocks
+                        and block.block_index not in captions
+                    ) else {}),
+                },
             )
         )
         for line in block.lines:
