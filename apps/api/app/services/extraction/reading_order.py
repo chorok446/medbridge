@@ -4,6 +4,8 @@
 완벽한 문단 복원을 가정하지 않으며, 불확실하면 confidence를 낮춘다.
 """
 
+import re
+from bisect import bisect_right
 from dataclasses import dataclass
 
 from app.services.extraction.engine import BlockRec
@@ -15,6 +17,12 @@ from app.services.extraction.thresholds import (
     READING_ORDER_CONFIDENCE_TWO_COL,
     TWO_COLUMN_MIN_BLOCKS,
 )
+
+_NUMBERED_TABLE_CAPTION = re.compile(
+    r"^(?:표\s*|table\s+)\d+(?:[.-]\d+)*[.,:]?\s+\S", re.IGNORECASE
+)
+_CAPTION_MAX_CHARS = 96
+_CAPTION_ROW_GAP = 40.0  # 화면 좌표계의 PDF point 단위
 
 
 @dataclass
@@ -107,7 +115,57 @@ def compute_reading_order(
     confidence = (
         READING_ORDER_CONFIDENCE_TWO_COL if straddlers == 0 else READING_ORDER_CONFIDENCE_FALLBACK
     )
+    boundaries = _caption_boundaries(text_blocks, content_x0, content_width, tolerance, footnote_y)
+    if boundaries:
+        # 검증된 캡션의 위쪽을 경계로 안정 정렬한다. 기존 구간 내부의
+        # 좌→우 열 순서는 보존하며, 이전 표의 오른쪽 열만 위 구간으로 되돌린다.
+        regrouped = sorted(
+            ordered,
+            key=lambda b: (b.bbox[1] >= footnote_y, bisect_right(boundaries, b.bbox[1])),
+        )
+        if regrouped != ordered:
+            confidence = min(confidence, READING_ORDER_CONFIDENCE_FALLBACK)
+            ordered = regrouped
     return OrderResult(order=_with_nontext(ordered, blocks), confidence=confidence, two_column=True)
+
+
+def _caption_boundaries(
+    blocks: list[BlockRec], content_x0: float, content_width: float,
+    tolerance: float, footnote_y: float,
+) -> list[float]:
+    """좌측 번호 캡션 + 인접 전폭 행으로 확인되는 경계만 사용한다.
+
+    표 구조나 행·열 관계를 추론하지 않는다. 독립 열 또는 경계를 가로지르는
+    본문이 있으면 기존 순서를 유지한다. 이미지 bbox는 텍스트 흐름을 나누지 않는다.
+    """
+    body = [b for b in blocks if b.bbox[1] < footnote_y]
+    full_width = content_width * FULL_WIDTH_BLOCK_RATIO
+    boundaries = []
+    for caption in body:
+        x0, top, x1, bottom = caption.bbox
+        label = caption.text.strip()
+        if (
+            x0 > content_x0 + tolerance or x1 - x0 >= full_width
+            or len(label) > _CAPTION_MAX_CHARS or len(label.splitlines()) > 2
+            or not _NUMBERED_TABLE_CAPTION.match(label)
+        ):
+            continue
+        if not any(
+            b.bbox[2] - b.bbox[0] >= full_width
+            and bottom <= b.bbox[1] <= bottom + _CAPTION_ROW_GAP
+            for b in body
+        ):
+            continue
+        if any(
+            b is not caption and (
+                b.bbox[1] < top < b.bbox[3]
+                or (top <= b.bbox[1] < bottom and b.bbox[0] >= x1)
+            )
+            for b in body
+        ):
+            continue
+        boundaries.append(top)
+    return sorted(set(boundaries))
 
 
 def _with_nontext(ordered_text: list[BlockRec], all_blocks: list[BlockRec]) -> list[int]:
