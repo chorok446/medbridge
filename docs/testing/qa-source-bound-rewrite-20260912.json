@@ -1,0 +1,382 @@
+{
+  "date": "2026-09-12",
+  "scope": "evaluation_only_not_connected_to_app",
+  "evaluation_code": "37d55ab52f4abc79672e6676e82d92d3b58ac18c",
+  "product_code": "9cc6414352a658492766aa103151dc3f27783509",
+  "tests": {
+    "new_unit_tests": 61,
+    "related_passed": 156,
+    "full_passed": 1644,
+    "full_skipped": 4,
+    "full_seconds": 119.05,
+    "ruff_passed": true,
+    "mypy_sources_passed": 132
+  },
+  "model": "qwen3:8b",
+  "model_digest": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+  "total_model_calls": 23,
+  "automatic_retries": 0,
+  "database_writes": 0,
+  "selection": {
+    "retrieved_chunks_per_question": 32,
+    "manually_targeted_chunks_per_question": 4,
+    "expected_source_blocks": 19,
+    "covered_source_blocks": 19,
+    "history_turns": 0,
+    "full_answer_evaluation": false
+  },
+  "initial": {
+    "phase": "complete",
+    "calls": 11,
+    "model_digest_unchanged": true,
+    "database_writes": 0,
+    "result": [
+      {
+        "case": "synthetic_voltage",
+        "source_chars": 34,
+        "seconds": 4.201,
+        "model_status": "rewritten",
+        "candidates": 1,
+        "rejections": {},
+        "source_binding_and_snapshot_preserved": true,
+        "loaded_digest_verified": true,
+        "expected_numeric_tokens": 2,
+        "retained_numeric_tokens": 2,
+        "unexpected_numeric_tokens": 0
+      },
+      {
+        "case": "synthetic_power",
+        "source_chars": 33,
+        "seconds": 0.933,
+        "model_status": "rewritten",
+        "candidates": 1,
+        "rejections": {},
+        "source_binding_and_snapshot_preserved": true,
+        "loaded_digest_verified": true,
+        "expected_numeric_tokens": 2,
+        "retained_numeric_tokens": 2,
+        "unexpected_numeric_tokens": 0
+      },
+      {
+        "case": "synthetic_condition",
+        "source_chars": 47,
+        "seconds": 1.081,
+        "model_status": "rewritten",
+        "candidates": 1,
+        "rejections": {},
+        "source_binding_and_snapshot_preserved": true,
+        "loaded_digest_verified": true,
+        "expected_numeric_tokens": 0,
+        "retained_numeric_tokens": 0,
+        "unexpected_numeric_tokens": 0
+      },
+      {
+        "case": "long_source_1",
+        "source_chars": 280,
+        "seconds": 1.996,
+        "model_status": "rewritten",
+        "candidates": 1,
+        "rejections": {},
+        "source_binding_and_snapshot_preserved": true,
+        "loaded_digest_verified": true,
+        "markers": {
+          "HFrEF": 1,
+          "HFpEF": 0,
+          "NYHA": 0
+        }
+      },
+      {
+        "case": "long_source_2",
+        "source_chars": 327,
+        "seconds": 3.265,
+        "model_status": "rewritten",
+        "candidates": 1,
+        "rejections": {},
+        "source_binding_and_snapshot_preserved": true,
+        "loaded_digest_verified": true,
+        "markers": {
+          "HFrEF": 1,
+          "HFpEF": 1,
+          "NYHA": 0
+        }
+      },
+      {
+        "case": "long_source_3",
+        "source_chars": 516,
+        "seconds": 3.278,
+        "model_status": "rewritten",
+        "candidates": 1,
+        "rejections": {},
+        "source_binding_and_snapshot_preserved": true,
+        "loaded_digest_verified": true,
+        "markers": {
+          "HFrEF": 0,
+          "HFpEF": 0,
+          "NYHA": 0
+        }
+      },
+      {
+        "case": "long_source_4",
+        "source_chars": 283,
+        "seconds": 2.212,
+        "model_status": "rewritten",
+        "candidates": 1,
+        "rejections": {},
+        "source_binding_and_snapshot_preserved": true,
+        "loaded_digest_verified": true,
+        "markers": {
+          "HFrEF": 0,
+          "HFpEF": 0,
+          "NYHA": 1
+        }
+      },
+      {
+        "case": "short_source_1",
+        "source_chars": 280,
+        "seconds": 1.918,
+        "model_status": "rewritten",
+        "candidates": 1,
+        "rejections": {},
+        "source_binding_and_snapshot_preserved": true,
+        "loaded_digest_verified": true,
+        "markers": {
+          "HFrEF": 1,
+          "HFpEF": 0,
+          "NYHA": 0
+        }
+      },
+      {
+        "case": "short_source_2",
+        "source_chars": 327,
+        "seconds": 2.412,
+        "model_status": "rewritten",
+        "candidates": 1,
+        "rejections": {},
+        "source_binding_and_snapshot_preserved": true,
+        "loaded_digest_verified": true,
+        "markers": {
+          "HFrEF": 1,
+          "HFpEF": 0,
+          "NYHA": 0
+        }
+      },
+      {
+        "case": "short_source_3",
+        "source_chars": 516,
+        "seconds": 1.99,
+        "model_status": "rewritten",
+        "candidates": 1,
+        "rejections": {},
+        "source_binding_and_snapshot_preserved": true,
+        "loaded_digest_verified": true,
+        "markers": {
+          "HFrEF": 0,
+          "HFpEF": 0,
+          "NYHA": 0
+        }
+      },
+      {
+        "case": "short_source_4",
+        "source_chars": 283,
+        "seconds": 2.87,
+        "model_status": "rewritten",
+        "candidates": 0,
+        "rejections": {
+          "number_not_in_source": 1
+        },
+        "source_binding_and_snapshot_preserved": true,
+        "loaded_digest_verified": true,
+        "markers": {
+          "HFrEF": 0,
+          "HFpEF": 0,
+          "NYHA": 0
+        }
+      }
+    ]
+  },
+  "revised": {
+    "phase": "complete",
+    "calls": 11,
+    "model_digest_unchanged": true,
+    "database_writes": 0,
+    "result": [
+      {
+        "case": "synthetic_voltage",
+        "source_chars": 34,
+        "seconds": 1.362,
+        "model_status": "rewritten",
+        "candidates": 1,
+        "rejections": {},
+        "source_binding_and_snapshot_preserved": true,
+        "loaded_digest_verified": true,
+        "expected_numeric_tokens": 2,
+        "retained_numeric_tokens": 2,
+        "unexpected_numeric_tokens": 0
+      },
+      {
+        "case": "synthetic_power",
+        "source_chars": 33,
+        "seconds": 0.944,
+        "model_status": "rewritten",
+        "candidates": 1,
+        "rejections": {},
+        "source_binding_and_snapshot_preserved": true,
+        "loaded_digest_verified": true,
+        "expected_numeric_tokens": 2,
+        "retained_numeric_tokens": 2,
+        "unexpected_numeric_tokens": 0
+      },
+      {
+        "case": "synthetic_condition",
+        "source_chars": 47,
+        "seconds": 1.123,
+        "model_status": "rewritten",
+        "candidates": 1,
+        "rejections": {},
+        "source_binding_and_snapshot_preserved": true,
+        "loaded_digest_verified": true,
+        "expected_numeric_tokens": 0,
+        "retained_numeric_tokens": 0,
+        "unexpected_numeric_tokens": 0
+      },
+      {
+        "case": "long_source_1",
+        "source_chars": 280,
+        "seconds": 2.115,
+        "model_status": "rewritten",
+        "candidates": 1,
+        "rejections": {},
+        "source_binding_and_snapshot_preserved": true,
+        "loaded_digest_verified": true,
+        "markers": {
+          "HFrEF": 1,
+          "HFpEF": 0,
+          "NYHA": 0
+        }
+      },
+      {
+        "case": "long_source_2",
+        "source_chars": 327,
+        "seconds": 3.297,
+        "model_status": "rewritten",
+        "candidates": 1,
+        "rejections": {},
+        "source_binding_and_snapshot_preserved": true,
+        "loaded_digest_verified": true,
+        "markers": {
+          "HFrEF": 1,
+          "HFpEF": 1,
+          "NYHA": 0
+        }
+      },
+      {
+        "case": "long_source_3",
+        "source_chars": 516,
+        "seconds": 2.278,
+        "model_status": "rewritten",
+        "candidates": 1,
+        "rejections": {},
+        "source_binding_and_snapshot_preserved": true,
+        "loaded_digest_verified": true,
+        "markers": {
+          "HFrEF": 0,
+          "HFpEF": 0,
+          "NYHA": 0
+        }
+      },
+      {
+        "case": "long_source_4",
+        "source_chars": 283,
+        "seconds": 4.677,
+        "model_status": "rewritten",
+        "candidates": 1,
+        "rejections": {},
+        "source_binding_and_snapshot_preserved": true,
+        "loaded_digest_verified": true,
+        "markers": {
+          "HFrEF": 0,
+          "HFpEF": 0,
+          "NYHA": 1
+        }
+      },
+      {
+        "case": "short_source_1",
+        "source_chars": 280,
+        "seconds": 1.642,
+        "model_status": "rewritten",
+        "candidates": 1,
+        "rejections": {},
+        "source_binding_and_snapshot_preserved": true,
+        "loaded_digest_verified": true,
+        "markers": {
+          "HFrEF": 1,
+          "HFpEF": 0,
+          "NYHA": 0
+        }
+      },
+      {
+        "case": "short_source_2",
+        "source_chars": 327,
+        "seconds": 3.245,
+        "model_status": "rewritten",
+        "candidates": 1,
+        "rejections": {},
+        "source_binding_and_snapshot_preserved": true,
+        "loaded_digest_verified": true,
+        "markers": {
+          "HFrEF": 1,
+          "HFpEF": 1,
+          "NYHA": 0
+        }
+      },
+      {
+        "case": "short_source_3",
+        "source_chars": 516,
+        "seconds": 2.296,
+        "model_status": "rewritten",
+        "candidates": 1,
+        "rejections": {},
+        "source_binding_and_snapshot_preserved": true,
+        "loaded_digest_verified": true,
+        "markers": {
+          "HFrEF": 0,
+          "HFpEF": 0,
+          "NYHA": 0
+        }
+      },
+      {
+        "case": "short_source_4",
+        "source_chars": 283,
+        "seconds": 2.89,
+        "model_status": "rewritten",
+        "candidates": 0,
+        "rejections": {
+          "number_not_in_source": 1
+        },
+        "source_binding_and_snapshot_preserved": true,
+        "loaded_digest_verified": true,
+        "markers": {
+          "HFrEF": 0,
+          "HFpEF": 0,
+          "NYHA": 0
+        }
+      }
+    ]
+  },
+  "diagnostic_replay": {
+    "model_calls": 1,
+    "candidates": 0,
+    "rejection": "number_not_in_source",
+    "missing_numeric_token_occurrences": 1,
+    "missing_tokens_with_roman_equivalent_in_source": 1,
+    "missing_tokens_next_to_grade_label": 1,
+    "model_digest_unchanged": true
+  },
+  "limitations": [
+    "manual_source_selection",
+    "no_semantic_completeness_review",
+    "numeric_relationship_guard_is_not_entailment",
+    "short_question_numeric_rejection_unresolved",
+    "no_app_or_installer_changes"
+  ]
+}
