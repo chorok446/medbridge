@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { ErrorBox } from "@/components/error-box";
 import { DocumentQa } from "@/components/document-qa";
 import { ExtractionReview } from "@/components/extraction-review";
@@ -26,7 +27,11 @@ function DocumentDetail() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [notice, setNotice] = useState<string | null>(null);
-  const [mainTab, setMainTab] = useState<"preview" | "extraction" | "summary" | "qa">("preview");
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  // null = 아직 사용자가 고르지 않음. 기본 탭은 문서 상태를 보고 정한다(아래 effectiveTab).
+  const [mainTab, setMainTab] = useState<"preview" | "extraction" | "summary" | "qa" | null>(null);
+  // 문서를 처음 본 시점의 기본 탭. 폴링으로 상태가 바뀌어도 여기서 고정된다.
+  const [defaultTab, setDefaultTab] = useState<"preview" | "qa" | null>(null);
 
   const fileUrlQuery = useQuery({
     queryKey: ["file-url", id],
@@ -82,6 +87,24 @@ function DocumentDetail() {
 
   const doc = docQuery.data;
   const processing = isActive(doc.processingStatus);
+  // 읽을 준비가 끝난 문서는 "무엇을 물어볼까"가 먼저 보이게 한다. 아직 처리 중이면
+  // 질문할 대상이 없으므로 문서 보기로 연다.
+  //
+  // 처음 본 문서 상태로 한 번만 정하고 그 뒤로는 바꾸지 않는다. 매 렌더 재계산하면
+  // 2초 폴링으로 추출이 끝나는 순간 사용자가 읽던 PDF가 아무 조작 없이 질문 패널로
+  // 교체된다 — 보던 페이지와 스크롤을 잃는다.
+  if (defaultTab === null) {
+    // 렌더 중 파생 상태 확정 — React가 지원하는 패턴이다(즉시 재렌더, 커밋 없음).
+    setDefaultTab(hasExtraction(doc.processingStatus) ? "qa" : "preview");
+  }
+  const effectiveTab =
+    mainTab ?? defaultTab ?? (hasExtraction(doc.processingStatus) ? "qa" : "preview");
+  // 탭이 없을 때는 아래 내용도 tabpanel이 아니다 — 짝 없는 tabpanel은 스크린리더에
+  // 어느 탭에 속하는지 알 수 없는 영역으로 남는다.
+  const tabsShown =
+    hasExtraction(doc.processingStatus) ||
+    doc.processingStatus === "extracting" ||
+    doc.processingStatus === "extraction_failed";
 
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-8">
@@ -104,13 +127,7 @@ function DocumentDetail() {
           <button
             type="button"
             disabled={deleteMutation.isPending}
-            onClick={() => {
-              if (
-                window.confirm("이 학습자료를 삭제할까요? 파일과 학습 기록이 함께 삭제됩니다.")
-              ) {
-                deleteMutation.mutate();
-              }
-            }}
+            onClick={() => setConfirmDelete(true)}
             className="rounded border border-red-200 px-4 py-2 text-sm text-red-700 hover:bg-red-50 disabled:opacity-50"
           >
             삭제
@@ -162,9 +179,7 @@ function DocumentDetail() {
         </div>
       )}
 
-      {(hasExtraction(doc.processingStatus) ||
-        doc.processingStatus === "extracting" ||
-        doc.processingStatus === "extraction_failed") && (
+      {tabsShown && (
         <div role="tablist" className="mb-4 flex gap-1 border-b border-slate-200 text-sm">
           {(
             [
@@ -177,10 +192,14 @@ function DocumentDetail() {
             <button
               key={t.key}
               role="tab"
-              aria-selected={mainTab === t.key}
+              // 탭과 내용을 id로 잇는다 — 없으면 스크린리더가 탭 아래 내용이
+              // 무엇에 속하는지 알 수 없어, 탭을 옮겨도 내용이 바뀐 줄 모른다.
+              id={`doc-tab-${t.key}`}
+              aria-controls="doc-tabpanel"
+              aria-selected={effectiveTab === t.key}
               onClick={() => setMainTab(t.key)}
               className={`rounded-t px-4 py-2 ${
-                mainTab === t.key
+                effectiveTab === t.key
                   ? "border border-b-0 border-slate-200 bg-white font-semibold text-blue-700"
                   : "text-slate-500 hover:text-slate-800"
               }`}
@@ -191,11 +210,16 @@ function DocumentDetail() {
         </div>
       )}
 
-      {mainTab === "extraction" && fileUrlQuery.data ? (
+      <div
+        {...(tabsShown
+          ? { role: "tabpanel", id: "doc-tabpanel", "aria-labelledby": `doc-tab-${effectiveTab}` }
+          : {})}
+      >
+      {effectiveTab === "extraction" && fileUrlQuery.data ? (
         <ExtractionReview doc={doc} fileUrl={fileUrlQuery.data} />
-      ) : mainTab === "summary" && fileUrlQuery.data ? (
-        <SummaryView doc={doc} fileUrl={fileUrlQuery.data} />
-      ) : mainTab === "qa" && fileUrlQuery.data ? (
+      ) : effectiveTab === "summary" && fileUrlQuery.data ? (
+        <SummaryView key={doc.id} doc={doc} fileUrl={fileUrlQuery.data} />
+      ) : effectiveTab === "qa" && fileUrlQuery.data ? (
         <DocumentQa doc={doc} fileUrl={fileUrlQuery.data} />
       ) : (
       <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
@@ -269,6 +293,19 @@ function DocumentDetail() {
         </aside>
       </div>
       )}
+      </div>
+
+      <ConfirmDialog
+        open={confirmDelete}
+        title="이 학습자료를 삭제할까요?"
+        description="파일과 학습 기록이 함께 삭제되며 되돌릴 수 없습니다."
+        confirmLabel="삭제"
+        onConfirm={() => {
+          deleteMutation.mutate();
+          setConfirmDelete(false);
+        }}
+        onCancel={() => setConfirmDelete(false)}
+      />
     </div>
   );
 }

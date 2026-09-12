@@ -203,9 +203,7 @@ async def _sleep_before_retry(delay: float) -> None:
     await asyncio.sleep(delay)
 
 
-async def _rollback_after_failure(
-    db: AsyncSession, *, original: Exception, attempt: int
-) -> None:
+async def _rollback_after_failure(db: AsyncSession, *, original: Exception, attempt: int) -> None:
     try:
         await db.rollback()
     except Exception as rollback_exc:
@@ -313,9 +311,7 @@ async def activate(
 
     # 로컬은 비밀이 없다 — keyring에 placeholder를 저장하지 않는다.
     # 기존에 외부 키가 남아 있어도 로컬 provider는 키를 쓰지 않는다(available: is_local).
-    await _persist_activation_with_retry(
-        db, model, overwrite_external=overwrite_external
-    )
+    await _persist_activation_with_retry(db, model, overwrite_external=overwrite_external)
     try:
         return await get_settings_view(db)
     except Exception as exc:

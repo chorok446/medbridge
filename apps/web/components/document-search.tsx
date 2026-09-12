@@ -54,6 +54,8 @@ export function DocumentSearch({ documentId, onNavigate }: Props) {
   }
 
   const chunkCount = statusQuery.data?.chunkCount ?? 0;
+  const suppressedPages = statusQuery.data?.suppressedPages ?? 0;
+  const lowConfidenceOnly = statusQuery.data?.failureCode === "CHUNK_LOW_CONFIDENCE_ONLY";
   const embeddingAvailable = statusQuery.data?.embeddingAvailable ?? false;
   const results: SearchResultItem[] = searchQuery.data ?? [];
   const usedKeywordOnlyFallback = submitted?.mode === "hybrid" && !embeddingAvailable;
@@ -75,12 +77,25 @@ export function DocumentSearch({ documentId, onNavigate }: Props) {
 
       {!statusQuery.isLoading && !statusQuery.isError && chunkCount === 0 && (
         <div className="rounded bg-slate-50 px-3 py-3 text-slate-700">
-          <p>이 문서는 아직 검색 준비가 되지 않았어요.</p>
+          {lowConfidenceOnly ? (
+            /* 같은 버튼을 다시 권하면 안 된다 — 같은 코드가 같은 0개를 만든다.
+               사용자가 실제로 할 수 있는 일은 스캔 품질을 올려 다시 읽는 것뿐이다. */
+            <p>
+              글자를 읽어내긴 했지만 인식 품질이 너무 낮아 검색에 쓸 수 없었어요. 더 선명한
+              스캔본으로 다시 올리거나, 문자 인식을 다시 실행해 주세요.
+            </p>
+          ) : (
+            <p>이 문서는 아직 검색 준비가 되지 않았어요.</p>
+          )}
           <button
             type="button"
             onClick={() => rebuildMutation.mutate()}
-            disabled={rebuildMutation.isPending || isActiveJobStatus(statusQuery.data?.jobStatus)}
-            className="mt-2 rounded bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+            disabled={
+              rebuildMutation.isPending ||
+              isActiveJobStatus(statusQuery.data?.jobStatus) ||
+              lowConfidenceOnly
+            }
+            className="mt-2 rounded-md bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
           >
             문서 검색 준비하기
           </button>
@@ -112,12 +127,15 @@ export function DocumentSearch({ documentId, onNavigate }: Props) {
           />
           <button
             type="submit"
-            className="rounded bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700"
+            className="rounded-md bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700"
           >
             검색
           </button>
         </div>
-        <div className="flex gap-3 text-xs text-slate-600">
+        {/* fieldset으로 묶어야 스크린리더가 "2개 중 1개"라고 알린다. div로 두면
+            낱개 라디오로 읽혀, 학습 수준 등 다른 화면의 같은 컨트롤과 다르게 들린다. */}
+        <fieldset className="flex gap-3 text-xs text-slate-600">
+          <legend className="sr-only">검색 방식</legend>
           <label className="flex items-center gap-1.5">
             <input
               type="radio"
@@ -136,13 +154,24 @@ export function DocumentSearch({ documentId, onNavigate }: Props) {
             />
             의미 검색 포함
           </label>
-        </div>
+        </fieldset>
         {blankQueryNotice && (
           <p role="alert" className="text-xs text-red-700">
             검색어를 입력해 주세요.
           </p>
         )}
       </form>
+
+      {/* 일부만 빠진 문서는 failureCode로 드러나지 않는다 — 청크가 남아 있으면
+          "준비 완료"로 보이고, 사용자는 문서의 상당 부분이 검색·질문·요약에서
+          보이지 않는데 그 사실을 알 길이 없다. */}
+      {suppressedPages > 0 && chunkCount > 0 && (
+        <p className="rounded bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
+          이 자료의 {suppressedPages}쪽은 글자 인식 품질이 낮아 검색에서 빠졌어요. 그
+          쪽 내용은 검색·질문·요약에 나오지 않습니다. 더 선명한 스캔본으로 다시 올리면
+          찾을 수 있어요.
+        </p>
+      )}
 
       {usedKeywordOnlyFallback && (
         <p className="rounded bg-slate-50 px-3 py-2 text-xs text-slate-600">

@@ -86,9 +86,7 @@ async def search(
             model_name=embedding_provider.model_name,
             dimension=embedding_provider.dimension,
         )
-        raw_vector = {
-            c.chunk_id: cosine_similarity(query_vector, c.vector) for c in candidates
-        }
+        raw_vector = {c.chunk_id: cosine_similarity(query_vector, c.vector) for c in candidates}
         # 코사인은 -1..1 — 키워드 점수(0..1)와 같은 축으로 맞춘다
         vector_scores = {k: (v + 1.0) / 2.0 for k, v in raw_vector.items()}
 
@@ -118,9 +116,7 @@ async def search(
     chunk_rows = {
         row.id: row
         for row in (
-            await session.execute(
-                select(DocumentChunk).where(DocumentChunk.id.in_(all_ids))
-            )
+            await session.execute(select(DocumentChunk).where(DocumentChunk.id.in_(all_ids)))
         ).scalars()
     }
 

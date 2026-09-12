@@ -1,9 +1,13 @@
 """요약 모델 설정 + keyring — API 키는 응답·DB에 노출되지 않는다."""
 
+import asyncio
+import threading
+import uuid
+
 from sqlalchemy import select
 
 from app.db.session import get_session_factory
-from app.models.summary import SummarySettings
+from app.models.summary import SETTINGS_SINGLETON_ID, SummarySettings
 from app.services.summary import secrets
 
 
@@ -78,6 +82,92 @@ class TestSummarySettings:
         res = await client.post("/api/settings/summary/test")
         assert res.status_code == 200
         assert res.json()["data"]["ok"] is True
+
+    async def test_local_connection_does_not_forward_stale_external_key(self, monkeypatch):
+        from app.services.summary import settings_service
+
+        captured = None
+
+        class ProbeProvider:
+            available = True
+
+            def summarize_group(self, _request):
+                return None
+
+        def build(config, *, timeout):
+            nonlocal captured
+            captured = config
+            return ProbeProvider()
+
+        monkeypatch.setattr(settings_service, "build_summary_provider", build)
+        secrets.set_api_key("stale-external-key")
+
+        def stale_key_must_not_be_read():
+            raise AssertionError("local connection probe must not read external credentials")
+
+        monkeypatch.setattr(secrets, "get_api_key_with_identity", stale_key_must_not_be_read)
+        async with get_session_factory()() as s:
+            s.add(
+                SummarySettings(
+                    enabled=True,
+                    provider_type="openai_compatible",
+                    endpoint="http://127.0.0.1:11434/v1",
+                    model_name="qwen3:8b",
+                    is_local=True,
+                )
+            )
+            await s.commit()
+
+            ok, _message = await settings_service.test_connection(s)
+
+        assert ok is True
+        assert captured is not None
+        assert captured.api_key is None
+        assert captured.provider_identity_digest is None
+
+    async def test_connection_provider_call_does_not_occupy_keyring_executor(
+        self, monkeypatch
+    ):
+        """느린 provider probe 중에도 credential 작업은 직렬 executor에서 진행된다."""
+        from app.services.summary import settings_service
+
+        started = threading.Event()
+        release = threading.Event()
+
+        class BlockingProvider:
+            available = True
+
+            def summarize_group(self, _request):
+                started.set()
+                if not release.wait(timeout=2):
+                    raise TimeoutError("test provider was not released")
+
+        monkeypatch.setattr(
+            settings_service,
+            "build_summary_provider",
+            lambda _config, *, timeout: BlockingProvider(),
+        )
+        async with get_session_factory()() as s:
+            s.add(SummarySettings(enabled=True, provider_type="deterministic"))
+            await s.commit()
+
+            probe = asyncio.create_task(settings_service.test_connection(s))
+            try:
+                assert await asyncio.to_thread(started.wait, 2)
+                # provider 호출이 keyring 전용 단일 worker를 점유했다면 이 작업은
+                # probe가 끝날 때까지 시작할 수 없어 짧은 timeout을 넘긴다.
+                marker = await asyncio.wait_for(
+                    secrets.run_in_keyring_thread(lambda: "credential-worker-free"),
+                    timeout=1.0,
+                )
+                assert marker == "credential-worker-free"
+            finally:
+                release.set()
+
+            assert await probe == (
+                True,
+                "연결에 성공했습니다. 실제 요약 품질은 문서에 따라 다를 수 있어요.",
+            )
 
 
 class TestEndpointValidationViaApi:
@@ -199,3 +289,78 @@ class TestSettingsAtomicity:
         # DB에 설정이 커밋되지 않아야 한다(부분 저장 방지)
         get = await client.get("/api/settings/summary")
         assert get.json()["data"]["enabled"] is False
+
+
+class TestDuplicateSettingsRows:
+    """설정 테이블은 '단일 행'인데 그걸 강제하는 제약이 없었다.
+
+    설정 저장과 로컬 AI 활성화가 각각 'SELECT → 없으면 INSERT'를 하므로 두 요청이
+    겹치면 행이 2개가 된다. 그때부터 load_settings_row가 예외를 던지는데, 요약·질문·
+    설정 조회 어느 쪽도 그 예외를 처리하지 않아 전부 500이 되고 UI만으로는 복구할
+    방법이 없다 — 설정을 다시 저장하려 해도 같은 헬퍼를 타기 때문이다.
+    """
+
+    async def _insert_duplicates(self) -> None:
+        """싱글턴 PK가 생기기 **전에** 중복이 만들어진 설치본을 재현한다.
+
+        id를 명시하는 이유: 이제 기본값이 고정 id라 ORM 경로로는 중복을 만들 수 없다.
+        고쳐야 할 대상은 이미 그 상태로 굳어 버린 기존 DB다.
+        """
+        async with get_session_factory()() as s:
+            s.add(
+                SummarySettings(
+                    id=uuid.uuid4(), enabled=False, provider_type="disabled"
+                )
+            )
+            s.add(
+                SummarySettings(
+                    id=uuid.uuid4(), enabled=True, provider_type="openai_compatible"
+                )
+            )
+            await s.commit()
+
+    async def test_new_row_uses_a_singleton_id(self, client):
+        """두 번째 INSERT가 조용히 성공하지 못하게 한다 — PK가 막아야 한다."""
+        await client.put("/api/settings/summary", json={"enabled": False})
+        async with get_session_factory()() as s:
+            rows = (await s.execute(select(SummarySettings))).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].id == SETTINGS_SINGLETON_ID
+
+    async def test_saving_settings_recovers_from_duplicates(self, client):
+        """저장은 사용자가 원하는 상태를 명시하는 행위다 — 여기서 중복을 정리한다.
+
+        읽기 경로는 계속 임의로 고르지 않는다. 사용자가 직접 값을 주는 이 지점만이
+        추측 없이 하나로 접을 수 있는 자리다.
+        """
+        await self._insert_duplicates()
+
+        res = await client.put(
+            "/api/settings/summary",
+            json={"enabled": True, "providerType": "openai_compatible",
+                  "endpoint": "http://127.0.0.1:11434/v1", "modelName": "m", "isLocal": True},
+        )
+        assert res.status_code == 200, res.text
+
+        async with get_session_factory()() as s:
+            rows = (await s.execute(select(SummarySettings))).scalars().all()
+        assert len(rows) == 1, "중복이 남아 있으면 다음 요청이 다시 500이 된다"
+        assert rows[0].model_name == "m"
+
+    async def test_reads_report_a_recoverable_error_not_a_bare_500(self, client):
+        """무슨 일인지, 무엇을 하면 되는지 말해야 한다."""
+        await self._insert_duplicates()
+
+        # 설정 행을 실제로 읽는 경로들. (/api/local-ai/status는 DB를 보지 않고 로컬
+        # 프로세스만 확인하므로 중복과 무관하게 정상 응답한다 — 대상이 아니다.)
+        for method, path in (
+            ("get", "/api/settings/summary"),
+            ("post", "/api/settings/summary/test"),
+        ):
+            res = await getattr(client, method)(path)
+            assert res.status_code == 409, f"{path} → {res.status_code}"
+            body = res.json()["error"]
+            assert body["code"] == "DUPLICATE_SETTINGS"
+            assert "설정" in body["message"]
+            # 무엇을 하면 되는지 말해야 한다 — 코드만으로는 사용자가 알 수 없다.
+            assert "다시 저장" in body["message"]

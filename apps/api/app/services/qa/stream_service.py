@@ -14,7 +14,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import cast
 
-from sqlalchemy import CursorResult, select, update
+from sqlalchemy import CursorResult, delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,6 +23,7 @@ from app.core.logging import get_logger
 from app.models.document import Document
 from app.models.enums import (
     QA_ACTIVE_STATUSES,
+    QA_RETRYABLE_STATUSES,
     QaClaimVerification,
     QaMessageRole,
     QaMessageStatus,
@@ -34,7 +35,11 @@ from app.services.qa import context as qa_context
 from app.services.qa import stream_protocol as sp
 from app.services.qa.factory import get_qa_streaming_provider
 from app.services.qa.provider import QaRequest
-from app.services.qa.schema import claims_conflict, classify_claim_event
+from app.services.qa.schema import (
+    claims_conflict,
+    classify_claim_event,
+    sanitize_followups,
+)
 from app.services.qa.service import (
     _fresh_document,
     _fresh_user,
@@ -43,9 +48,11 @@ from app.services.qa.service import (
     _recent_history,
     _validate_question,
     compute_chunk_hash,
+    get_retry_messages,
+    require_available_provider,
 )
 from app.services.qa.settings import REVISION_RECHECK_EVERY_CLAIMS, STREAM_POLL_INTERVAL_SEC
-from app.services.summary.service import ensure_external_consent, provider_is_external
+from app.services.summary.service import provider_is_external
 
 logger = get_logger(__name__)
 
@@ -66,22 +73,15 @@ async def prepare_stream(
     q = _validate_question(question)
 
     provider = await get_qa_streaming_provider(db)
-    if not provider.available:
-        raise AppError(
-            ErrorCode.INTERNAL_ERROR,
-            "질문 기능을 사용하려면 앱 설정에서 요약 모델을 연결해 주세요.",
-            status_code=501,
-        )
-    if provider_is_external(provider):
-        ensure_external_consent(user, doc)
+    require_available_provider(provider, user, doc)
 
     from sqlalchemy import func
 
     chunk_count = (
         await db.execute(
-            select(func.count()).select_from(qa_context.DocumentChunk).where(
-                qa_context.DocumentChunk.document_id == doc.id
-            )
+            select(func.count())
+            .select_from(qa_context.DocumentChunk)
+            .where(qa_context.DocumentChunk.document_id == doc.id)
         )
     ).scalar_one()
     if chunk_count == 0 or doc.chunk_revision != doc.content_revision:
@@ -133,9 +133,67 @@ async def prepare_stream(
     return user_msg, assistant_msg, request_id
 
 
-async def request_cancel(
-    db: AsyncSession, thread: QaThread, message_id: uuid.UUID
-) -> QaMessage:
+async def prepare_retry_stream(
+    db: AsyncSession, doc: Document, user: User, thread: QaThread
+) -> tuple[QaMessage, QaMessage, str]:
+    """마지막 실패/변경/중단 답변을 기존 질문으로 다시 스트리밍할 준비를 한다."""
+    user_msg, assistant_msg = await get_retry_messages(db, thread)
+
+    provider = await get_qa_streaming_provider(db)
+    require_available_provider(provider, user, doc)
+
+    from sqlalchemy import func
+
+    chunk_count = (
+        await db.execute(
+            select(func.count())
+            .select_from(qa_context.DocumentChunk)
+            .where(qa_context.DocumentChunk.document_id == doc.id)
+        )
+    ).scalar_one()
+    if chunk_count == 0 or doc.chunk_revision != doc.content_revision:
+        raise AppError(
+            ErrorCode.INVALID_STATE,
+            "먼저 문서 검색 준비(청크 생성)를 완료해 주세요.",
+            status_code=409,
+        )
+
+    request_id = uuid.uuid4().hex
+    now = datetime.now(UTC)
+    # 방어적으로 이전 claim을 지운다. 정상 실패/중단 경로에는 없지만, 오래된 버전이나
+    # 비정상 종료에서 남았더라도 새 답변의 claim_index 유니크 제약과 섞이지 않게 한다.
+    await db.execute(delete(QaClaim).where(QaClaim.message_id == assistant_msg.id))
+    assistant_msg.status = QaMessageStatus.STREAMING
+    assistant_msg.content = ""
+    assistant_msg.error_code = None
+    assistant_msg.document_revision = doc.content_revision
+    assistant_msg.chunk_revision = doc.chunk_revision
+    assistant_msg.provider_name = provider.provider_name
+    assistant_msg.model_name = provider.model_name
+    assistant_msg.retrieval_mode = None
+    assistant_msg.followups_json = None
+    assistant_msg.draft_content = None
+    assistant_msg.stream_request_id = request_id
+    assistant_msg.stream_started_at = now
+    assistant_msg.stream_updated_at = now
+    assistant_msg.cancel_requested_at = None
+    assistant_msg.interrupted_at = None
+    assistant_msg.last_stream_seq = 0
+    assistant_msg.completed_at = None
+    try:
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise AppError(
+            ErrorCode.INVALID_STATE,
+            "이 대화에서 답변을 만드는 중입니다. 잠시 후 다시 시도해 주세요.",
+            status_code=409,
+        ) from exc
+    await db.refresh(assistant_msg)
+    return user_msg, assistant_msg, request_id
+
+
+async def request_cancel(db: AsyncSession, thread: QaThread, message_id: uuid.UUID) -> QaMessage:
     """진행 중 스트림에 취소를 요청한다(멱등). DB 플래그 + 인메모리 event."""
     msg = await db.get(QaMessage, message_id)
     if msg is None or msg.thread_id != thread.id or msg.role != QaMessageRole.ASSISTANT:
@@ -167,13 +225,17 @@ async def recover_interrupted_streams() -> int:
     factory = get_session_factory()
     async with factory() as s:
         rows = (
-            await s.execute(
-                select(QaMessage).where(
-                    QaMessage.role == QaMessageRole.ASSISTANT,
-                    QaMessage.status.in_(QA_ACTIVE_STATUSES),
+            (
+                await s.execute(
+                    select(QaMessage).where(
+                        QaMessage.role == QaMessageRole.ASSISTANT,
+                        QaMessage.status.in_(QA_ACTIVE_STATUSES),
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         for msg in rows:
             msg.status = QaMessageStatus.INTERRUPTED
             msg.error_code = "APP_RESTARTED"
@@ -184,9 +246,15 @@ async def recover_interrupted_streams() -> int:
 
 
 async def _apply_terminal(
-    s: AsyncSession, assistant_id: uuid.UUID, status: QaMessageStatus, *,
-    content: str | None = None, error_code: str | None = None,
-    claims: list | None = None, clear_draft: bool = True,
+    s: AsyncSession,
+    assistant_id: uuid.UUID,
+    status: QaMessageStatus,
+    *,
+    content: str | None = None,
+    error_code: str | None = None,
+    claims: list | None = None,
+    followups: list[str] | None = None,
+    clear_draft: bool = True,
 ) -> bool:
     """주어진 세션에서 활성 상태일 때만 terminal로 원자적 전환하고 (선택) claim 저장.
 
@@ -200,6 +268,8 @@ async def _apply_terminal(
         values["content"] = content
     if error_code is not None:
         values["error_code"] = error_code
+    if followups is not None:
+        values["followups_json"] = list(followups) or None
     if clear_draft:
         values["draft_content"] = None
     if status == QaMessageStatus.INTERRUPTED:
@@ -232,15 +302,25 @@ async def _apply_terminal(
 
 
 async def _set_terminal(
-    factory, assistant_id: uuid.UUID, status: QaMessageStatus, *,
-    content: str | None = None, error_code: str | None = None,
-    claims: list | None = None, clear_draft: bool = True,
+    factory,
+    assistant_id: uuid.UUID,
+    status: QaMessageStatus,
+    *,
+    content: str | None = None,
+    error_code: str | None = None,
+    claims: list | None = None,
+    clear_draft: bool = True,
 ) -> bool:
     """활성 상태일 때만 terminal로 원자적 CAS 전환. 반환: 이 호출이 이겼는지."""
     async with factory() as s:
         won = await _apply_terminal(
-            s, assistant_id, status, content=content, error_code=error_code,
-            claims=claims, clear_draft=clear_draft,
+            s,
+            assistant_id,
+            status,
+            content=content,
+            error_code=error_code,
+            claims=claims,
+            clear_draft=clear_draft,
         )
         if won:
             await s.commit()
@@ -253,17 +333,22 @@ async def _message_dto(factory, assistant_id: uuid.UUID) -> dict:
     async with factory() as s:
         msg = await s.get(QaMessage, assistant_id)
         claims = (
-            await s.execute(
-                select(QaClaim).where(QaClaim.message_id == assistant_id).order_by(
-                    QaClaim.claim_index
+            (
+                await s.execute(
+                    select(QaClaim)
+                    .where(QaClaim.message_id == assistant_id)
+                    .order_by(QaClaim.claim_index)
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
     return {
         "id": str(assistant_id),
         "role": "assistant",
         "content": msg.content if msg else "",
         "status": msg.status.value if msg else "failed",
+        "canRetry": bool(msg and msg.status in QA_RETRYABLE_STATUSES),
         "claims": [
             {
                 "text": c.claim_text,
@@ -291,6 +376,7 @@ async def run_stream(
     start_chunk_rev: int | None,
     request,
     *,
+    learner_level: str = "nursing_student",
     diag: dict | None = None,
 ):
     """NDJSON 이벤트 dict를 순차 yield하는 async 제너레이터. 항상 assistant를 terminal로 확정.
@@ -304,6 +390,7 @@ async def run_stream(
     cancel_event = cancel_registry.register(str(assistant_id))
     token = _CancelToken(cancel_event)
     supported: list = []
+    seen_claims: set[tuple[str, frozenset[str]]] = set()
     if diag is not None:
         diag.setdefault("emitted_claims", 0)
         diag.setdefault("rejected_claims", 0)
@@ -346,13 +433,21 @@ async def run_stream(
 
         if not retrieval.chunks:
             if (await _revision_or_consent_broken()) == "revision_changed":
-                await _set_terminal(factory, assistant_id, QaMessageStatus.REVISION_CHANGED,
-                                    content="문서 내용이 변경되어 답변을 다시 만들어야 합니다.",
-                                    error_code="REVISION_CHANGED")
+                await _set_terminal(
+                    factory,
+                    assistant_id,
+                    QaMessageStatus.REVISION_CHANGED,
+                    content="문서 내용이 변경되어 답변을 다시 만들어야 합니다.",
+                    error_code="REVISION_CHANGED",
+                )
                 yield sp.interrupted("REVISION_CHANGED")
                 return
-            await _set_terminal(factory, assistant_id, QaMessageStatus.NOT_FOUND,
-                                content="이 자료에서는 확인할 수 없습니다.")
+            await _set_terminal(
+                factory,
+                assistant_id,
+                QaMessageStatus.NOT_FOUND,
+                content="이 자료에서는 확인할 수 없습니다.",
+            )
             yield sp.completed(await _message_dto(factory, assistant_id))
             return
 
@@ -368,6 +463,7 @@ async def run_stream(
             question=user_content,
             chunks=retrieval.chunks,
             history=await _recent_history_safe(factory, thread_id, assistant_id),
+            learner_level=learner_level,
         )
 
         # 공급자 스트리밍을 스레드에서 실행하고 큐로 넘긴다(네트워크 I/O 격리·취소 가능)
@@ -391,13 +487,12 @@ async def run_stream(
         hb = 0
         since_recheck = 0
         stream_final_hint = ""
+        stream_followups: list[str] = []
         hb_every = max(1, int(sp.HEARTBEAT_INTERVAL_SEC / STREAM_POLL_INTERVAL_SEC))
         while True:
             # 짧은 폴링으로 취소·연결 끊김을 빠르게 감지하고, heartbeat는 별도 주기로 낸다
             try:
-                kind, val = await asyncio.wait_for(
-                    queue.get(), timeout=STREAM_POLL_INTERVAL_SEC
-                )
+                kind, val = await asyncio.wait_for(queue.get(), timeout=STREAM_POLL_INTERVAL_SEC)
             except TimeoutError:
                 if await request.is_disconnected() or cancel_event.is_set():
                     cancel_event.set()
@@ -417,8 +512,11 @@ async def run_stream(
             if cancel_event.is_set() or await request.is_disconnected():
                 cancel_event.set()
                 st = await _finish_cancel_or_interrupt(factory, assistant_id)
-                yield (sp.cancelled(str(assistant_id))
-                       if st == QaMessageStatus.CANCELLED else sp.interrupted("CONNECTION_LOST"))
+                yield (
+                    sp.cancelled(str(assistant_id))
+                    if st == QaMessageStatus.CANCELLED
+                    else sp.interrupted("CONNECTION_LOST")
+                )
                 return
 
             if kind == "done":
@@ -426,8 +524,11 @@ async def run_stream(
             if kind == "error":
                 cancel_event.set()
                 await _set_terminal(
-                    factory, assistant_id, QaMessageStatus.FAILED,
-                    content="답변을 만들지 못했어요.", error_code="QA_STREAM_FAILED",
+                    factory,
+                    assistant_id,
+                    QaMessageStatus.FAILED,
+                    content="답변을 만들지 못했어요.",
+                    error_code="QA_STREAM_FAILED",
                 )
                 yield sp.error_event("QA_STREAM_FAILED", "답변을 만들지 못했어요.")
                 return
@@ -435,6 +536,7 @@ async def run_stream(
             event = val
             if event.get("type") == "final":
                 stream_final_hint = str(event.get("answerStatus") or "")
+                stream_followups = sanitize_followups(event.get("followUpSuggestions"))
                 if diag is not None:
                     diag["final_hint"] = stream_final_hint
                 cancel_event.set()  # 공급자 스트림 종료
@@ -456,7 +558,7 @@ async def run_stream(
                     return
 
             vc, reject_reason = classify_claim_event(
-                event, retrieval.lookup, claim_index=claim_index
+                event, retrieval.lookup, claim_index=claim_index, question=user_content
             )
             if vc is None:
                 if diag is not None:
@@ -464,6 +566,13 @@ async def run_stream(
                     if reject_reason:
                         diag["rejection_reasons"].append(reject_reason)
                 continue  # unsupported → 사용자에게 노출하지 않음
+            # 검증을 통과한 같은 문장·같은 출처 집합만 한 번 내보낸다.
+            # 서로 다른 문단 표기나 추가 출처는 버리지 않고, 거부된 복사본이
+            # 나중의 정상 주장을 가리지 않도록 검증 뒤에 중복을 판단한다.
+            claim_key = (vc.text, frozenset(vc.source_chunk_ids))
+            if claim_key in seen_claims:
+                continue
+            seen_claims.add(claim_key)
             supported.append(vc)
             seq += 1
             yield sp.claim_event(
@@ -477,10 +586,17 @@ async def run_stream(
         cancel_event.set()
         if await _cancel_requested(factory, assistant_id) or await request.is_disconnected():
             st = await _finish_cancel_or_interrupt(factory, assistant_id)
-            yield (sp.cancelled(str(assistant_id))
-                   if st == QaMessageStatus.CANCELLED else sp.interrupted("CONNECTION_LOST"))
+            yield (
+                sp.cancelled(str(assistant_id))
+                if st == QaMessageStatus.CANCELLED
+                else sp.interrupted("CONNECTION_LOST")
+            )
             return
         status, content = _final_status(supported, stream_final_hint, had_results=True)
+        if status in (QaMessageStatus.NOT_FOUND, QaMessageStatus.INSUFFICIENT_EVIDENCE):
+            # 관련 설명이 검증됐어도 질문의 답이 있다는 뜻은 아니다. 보류 결론이면
+            # 앞서 생성된 draft 주장과 후속 질문을 최종 답변에 저장하지 않는다.
+            supported.clear()
         if status == QaMessageStatus.CONFLICTING_EVIDENCE:
             for c in supported:
                 c.verification_status = QaClaimVerification.CONFLICTING
@@ -491,11 +607,17 @@ async def run_stream(
             broken = await _check_broken(s)
             if broken:
                 st_status, st_content, st_code = (
-                    (QaMessageStatus.CONSENT_REVOKED,
-                     "외부 전송 설정이 변경되어 답변을 중단했습니다.", "CONSENT_REVOKED")
+                    (
+                        QaMessageStatus.CONSENT_REVOKED,
+                        "외부 전송 설정이 변경되어 답변을 중단했습니다.",
+                        "CONSENT_REVOKED",
+                    )
                     if broken == "consent_revoked"
-                    else (QaMessageStatus.REVISION_CHANGED,
-                          "문서 내용이 변경되어 답변을 다시 만들어야 합니다.", "REVISION_CHANGED")
+                    else (
+                        QaMessageStatus.REVISION_CHANGED,
+                        "문서 내용이 변경되어 답변을 다시 만들어야 합니다.",
+                        "REVISION_CHANGED",
+                    )
                 )
                 await _apply_terminal(
                     s, assistant_id, st_status, content=st_content, error_code=st_code
@@ -504,7 +626,13 @@ async def run_stream(
                 yield sp.interrupted(broken.upper())
                 return
             won = await _apply_terminal(
-                s, assistant_id, status, content=content, claims=supported
+                s,
+                assistant_id,
+                status,
+                content=content,
+                claims=supported,
+                # 근거를 못 찾았다고 말한 답변 밑에 모델이 지어낸 다음 질문을 붙이지 않는다.
+                followups=stream_followups if supported else [],
             )
             if won:
                 await s.commit()
@@ -513,30 +641,37 @@ async def run_stream(
         if not won:
             # 취소/완료 경쟁에서 졌다 — 이미 확정된 terminal 상태를 그대로 반영
             dto = await _message_dto(factory, assistant_id)
-            yield (sp.cancelled(str(assistant_id)) if dto["status"] == "cancelled"
-                   else sp.completed(dto))
+            yield (
+                sp.cancelled(str(assistant_id))
+                if dto["status"] == "cancelled"
+                else sp.completed(dto)
+            )
             return
         yield sp.completed(await _message_dto(factory, assistant_id))
     finally:
         # 정상 종료·예외·클라이언트 연결 종료(aclose)로 제너레이터가 어떻게 끝나든
-        # (1) worker를 멈추고 (2) 아직 활성이면 반드시 terminal(INTERRUPTED)로 확정한다.
-        # _set_terminal은 이미 확정된 경우 no-op이라 정상 완료/취소 경로엔 영향이 없다.
+        # (1) worker를 멈추고 (2) 아직 활성이면 저장된 취소 요청을 반영해 확정한다.
+        # GUI는 취소 POST 후 연결을 닫으므로 폴링보다 이 정리가 먼저 실행될 수 있다.
+        # 취소 요청이 없을 때만 INTERRUPTED이며 이미 확정된 상태는 CAS로 보존한다.
         # aclose가 GeneratorExit을 던져도 정리가 잘리지 않도록 shield로 감싼다.
         cancel_event.set()
         with contextlib.suppress(Exception):
-            await asyncio.shield(
-                _set_terminal(
-                    factory, assistant_id, QaMessageStatus.INTERRUPTED,
-                    content="연결이 끊겨 답변이 중단되었습니다.", error_code="CONNECTION_LOST",
-                )
-            )
+            await asyncio.shield(_finish_cancel_or_interrupt(factory, assistant_id))
         cancel_registry.discard(str(assistant_id))
 
 
 def _final_status(supported: list, final_hint: str, *, had_results: bool):
-    if not supported:
-        if not had_results:
-            return QaMessageStatus.NOT_FOUND, "이 자료에서는 확인할 수 없습니다."
+    # 답할 수 있다는 힌트로 출처 검증을 우회하지 않지만, 답할 수 없다는 결론은
+    # 관련 청크/주장이 있다는 이유만으로 답변 완료로 승격하지 않는다.
+    if not had_results or final_hint == "not_found":
+        return QaMessageStatus.NOT_FOUND, "이 자료에서는 확인할 수 없습니다."
+    if final_hint == "insufficient_evidence":
+        return (
+            QaMessageStatus.INSUFFICIENT_EVIDENCE,
+            "문서에서 충분한 근거를 찾지 못했어요. 다른 표현으로 다시 물어봐 주세요.",
+        )
+    if not supported or (final_hint == "conflicting_evidence" and len(supported) < 2):
+        # 상충의 한쪽만 검증됐다면 이를 합의된 답처럼 완료로 확정하지 않는다.
         return (
             QaMessageStatus.INSUFFICIENT_EVIDENCE,
             "문서에서 충분한 근거를 찾지 못했어요. 다른 표현으로 다시 물어봐 주세요.",
@@ -546,20 +681,37 @@ def _final_status(supported: list, final_hint: str, *, had_results: bool):
     if len(supported) >= 2 and (
         final_hint == "conflicting_evidence" or claims_conflict([c.text for c in supported])
     ):
-        return QaMessageStatus.CONFLICTING_EVIDENCE, "\n".join(c.text for c in supported)
-    return QaMessageStatus.COMPLETED, "\n".join(c.text for c in supported)
+        return QaMessageStatus.CONFLICTING_EVIDENCE, _cited_body(supported)
+    return QaMessageStatus.COMPLETED, _cited_body(supported)
+
+
+def _cited_body(supported: list) -> str:
+    """검증된 주장들을 인용 마커가 박힌 본문으로 조립한다.
+
+    비스트림 경로는 모델이 산문 안에 마커를 넣고 서버가 검사하지만, 여기서는 본문 자체를
+    서버가 만든다 — 그러니 마커도 서버가 붙인다. 모델 협조가 필요 없고 모든 마커가 반드시
+    해석되므로, 잘못된 근거를 가리키는 번호가 생길 수 없다.
+
+    번호는 claim_index다. classify_claim_event가 채택한 주장에만 0부터 순서대로 매기므로
+    저장되는 claims 배열의 위치와 정확히 일치한다 — 프론트가 그 위치로 출처를 찾는다.
+    """
+    return "\n".join(f"{c.text}[c{c.claim_index}]" for c in supported)
 
 
 async def _finish_broken(factory, assistant_id: uuid.UUID, broken: str) -> None:
     if broken == "consent_revoked":
         await _set_terminal(
-            factory, assistant_id, QaMessageStatus.CONSENT_REVOKED,
+            factory,
+            assistant_id,
+            QaMessageStatus.CONSENT_REVOKED,
             content="외부 전송 설정이 변경되어 답변을 중단했습니다.",
             error_code="CONSENT_REVOKED",
         )
     else:
         await _set_terminal(
-            factory, assistant_id, QaMessageStatus.REVISION_CHANGED,
+            factory,
+            assistant_id,
+            QaMessageStatus.REVISION_CHANGED,
             content="문서 내용이 변경되어 답변을 다시 만들어야 합니다.",
             error_code="REVISION_CHANGED",
         )
@@ -568,12 +720,21 @@ async def _finish_broken(factory, assistant_id: uuid.UUID, broken: str) -> None:
 async def _finish_cancel_or_interrupt(factory, assistant_id: uuid.UUID) -> QaMessageStatus:
     """취소 요청이면 cancelled, 아니면(연결 끊김) interrupted로 확정. 확정된 상태 반환."""
     if await _cancel_requested(factory, assistant_id):
-        await _set_terminal(factory, assistant_id, QaMessageStatus.CANCELLED,
-                            content="답변 생성을 취소했습니다.", error_code="CANCELLED")
+        await _set_terminal(
+            factory,
+            assistant_id,
+            QaMessageStatus.CANCELLED,
+            content="답변 생성을 취소했습니다.",
+            error_code="CANCELLED",
+        )
         return QaMessageStatus.CANCELLED
-    await _set_terminal(factory, assistant_id, QaMessageStatus.INTERRUPTED,
-                        content="연결이 끊겨 답변이 중단되었습니다.",
-                        error_code="CONNECTION_LOST")
+    await _set_terminal(
+        factory,
+        assistant_id,
+        QaMessageStatus.INTERRUPTED,
+        content="연결이 끊겨 답변이 중단되었습니다.",
+        error_code="CONNECTION_LOST",
+    )
     return QaMessageStatus.INTERRUPTED
 
 
@@ -597,9 +758,7 @@ async def _recent_history_safe(factory, thread_id: uuid.UUID, assistant_id: uuid
         # 현재 (user, assistant) 쌍은 seq(U), seq(U+1)로 삽입된다. before_seq=U로 두어
         # 지금 답변 중인 질문이 문맥에 중복으로 들어가지 않게 한다.
         aseq = (
-            await s.execute(
-                select(QaMessage.sequence_number).where(QaMessage.id == assistant_id)
-            )
+            await s.execute(select(QaMessage.sequence_number).where(QaMessage.id == assistant_id))
         ).scalar_one_or_none()
         before = aseq - 1 if aseq is not None else None
         return await _recent_history(s, thread_id, before_seq=before)

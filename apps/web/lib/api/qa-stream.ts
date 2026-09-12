@@ -14,7 +14,12 @@ export async function streamQuestion(
   documentId: string,
   threadId: string,
   question: string,
-  opts: { signal: AbortSignal; onEvent: (event: QaStreamEvent) => void },
+  opts: {
+    signal: AbortSignal;
+    onEvent: (event: QaStreamEvent) => void;
+    /** 답변 깊이. 서버가 저장하지 않으므로 요청마다 함께 보낸다. */
+    learnerLevel?: string;
+  },
 ): Promise<void> {
   const { base, token } = await getApiConfig();
   const res = await fetch(
@@ -26,12 +31,46 @@ export async function streamQuestion(
         "Content-Type": "application/json",
         ...(token ? { "X-MedBridge-Token": token } : {}),
       },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify(
+        opts.learnerLevel ? { question, learnerLevel: opts.learnerLevel } : { question },
+      ),
     },
   );
 
   if (!res.ok || !res.body) {
     // 스트림 시작 전 거부(501/403/409 등)는 JSON 에러 본문으로 온다.
+    const body: unknown = await res.json().catch(() => null);
+    throw apiErrorFromResponse(res, body);
+  }
+
+  await consumeNdjson<QaStreamEvent>(res.body, opts.onEvent);
+}
+
+/** 기존 user/assistant 행을 재사용해 마지막 실패·변경·중단 답변을 다시 스트리밍한다. */
+export async function streamRetry(
+  documentId: string,
+  threadId: string,
+  opts: {
+    signal: AbortSignal;
+    onEvent: (event: QaStreamEvent) => void;
+    learnerLevel?: string;
+  },
+): Promise<void> {
+  const { base, token } = await getApiConfig();
+  const res = await fetch(
+    `${base}/api/documents/${documentId}/qa/threads/${threadId}/retry/stream`,
+    {
+      method: "POST",
+      signal: opts.signal,
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { "X-MedBridge-Token": token } : {}),
+      },
+      body: JSON.stringify(opts.learnerLevel ? { learnerLevel: opts.learnerLevel } : {}),
+    },
+  );
+
+  if (!res.ok || !res.body) {
     const body: unknown = await res.json().catch(() => null);
     throw apiErrorFromResponse(res, body);
   }

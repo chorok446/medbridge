@@ -3,8 +3,6 @@
 별도의 API 키 저장소·endpoint 설정을 만들지 않는다.
 """
 
-import asyncio
-
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -15,11 +13,19 @@ from app.services.qa.provider import (
     build_qa_provider,
 )
 from app.services.summary import secrets
-from app.services.summary.factory import ResolvedProviderConfig, load_settings_row
+from app.services.summary.factory import (
+    DuplicateSummarySettingsError,
+    ResolvedProviderConfig,
+    duplicate_settings_error,
+    load_settings_row,
+)
 
 
 async def _resolved_config(session: AsyncSession) -> ResolvedProviderConfig | None:
-    row = await load_settings_row(session)
+    try:
+        row = await load_settings_row(session)
+    except DuplicateSummarySettingsError as exc:
+        raise duplicate_settings_error() from exc
     if row is None or not row.enabled:
         return None
     return ResolvedProviderConfig(
@@ -29,7 +35,12 @@ async def _resolved_config(session: AsyncSession) -> ResolvedProviderConfig | No
         model_name=row.model_name,
         is_local=row.is_local,
         # keyring 읽기는 OS 자격증명 저장소를 치는 동기 I/O — 이벤트 루프를 막지 않게 위임.
-        api_key=await asyncio.to_thread(secrets.get_api_key),
+        # 외부 설정에서 남은 credential을 로컬 Q&A endpoint로 보내지 않는다.
+        api_key=(
+            None
+            if row.is_local
+            else await secrets.run_in_keyring_thread(secrets.get_api_key)
+        ),
     )
 
 

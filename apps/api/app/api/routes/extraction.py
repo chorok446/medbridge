@@ -3,6 +3,7 @@
 import uuid
 
 from fastapi import APIRouter, Depends, Query
+from pydantic import AliasChoices, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -75,14 +76,18 @@ class TableOut(CamelModel):
     y1: float
     row_count: int
     column_count: int
+    # 행 우선 셀 격자(첫 행이 머리글, 빈 칸은 null). 화면이 진짜 <table>로 그리려면
+    # 이게 필요하다 — markdown_text만 주면 화면은 `| 파이프 |` 원문을 그대로 내보이게
+    # 되고, 그건 DESIGN.md가 이름을 들어 금지한 것이다.
+    cells: list[list[str | None]] = Field(
+        default_factory=list, validation_alias=AliasChoices("cells", "cells_json")
+    )
     markdown_text: str
     confidence: float
     extraction_status: str
 
 
-async def _get_page(
-    db: AsyncSession, document_id: uuid.UUID, page_number: int
-) -> DocumentPage:
+async def _get_page(db: AsyncSession, document_id: uuid.UUID, page_number: int) -> DocumentPage:
     page = (
         await db.execute(
             select(DocumentPage).where(
@@ -207,9 +212,7 @@ async def page_detail(
     return wrap(PageDetailOut.model_validate(page))
 
 
-@router.get(
-    "/{document_id}/pages/{page_number}/blocks", response_model=Envelope[list[BlockOut]]
-)
+@router.get("/{document_id}/pages/{page_number}/blocks", response_model=Envelope[list[BlockOut]])
 async def page_blocks(
     document_id: uuid.UUID,
     page_number: int,

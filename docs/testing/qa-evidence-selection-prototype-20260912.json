@@ -1,0 +1,600 @@
+{
+  "baselineCommit": "ec6d54843e9c5f503b6488ad81daf7a58c955238",
+  "runtimeChanged": false,
+  "scope": "Offline evaluation-only evidence-selection prototype; not an answer or release approval",
+  "model": "qwen3:8b",
+  "modelDigest": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+  "document": {
+    "alias": "large-1",
+    "bytes": 431634439,
+    "pages": 1060
+  },
+  "contextChunks": 32,
+  "contextDigest": "16301ee094f90145a6db2f22e12bc65e765bc08d432120d914e8595284976fa8",
+  "questionHistory": {
+    "classification_long": 6,
+    "classification_short": 7
+  },
+  "liveCalls": 22,
+  "experiments": [
+    {
+      "name": "sparse_source_ids",
+      "runtimeAdopted": false,
+      "coverageSolved": false,
+      "result": {
+        "status": "selected",
+        "selectedSlots": [
+          7
+        ],
+        "selectedChars": 280,
+        "selectedMarkers": {
+          "HFrEF": 1,
+          "HFpEF": 0,
+          "NYHA": 0,
+          "classification": 1
+        },
+        "inputTruncatedCount": 0,
+        "sourceIdentityExact": true,
+        "existingGuardSupported": 1,
+        "sameDigest": true,
+        "runs": [
+          {
+            "query": "classification_long",
+            "repeat": 1,
+            "historyTurns": 6,
+            "seconds": 2.2967388000006395
+          },
+          {
+            "query": "classification_short",
+            "repeat": 1,
+            "historyTurns": 7,
+            "seconds": 1.9251274999996895
+          },
+          {
+            "query": "classification_long",
+            "repeat": 2,
+            "historyTurns": 6,
+            "seconds": 0.9368082000000868
+          },
+          {
+            "query": "classification_short",
+            "repeat": 2,
+            "historyTurns": 7,
+            "seconds": 0.9138502000005246
+          },
+          {
+            "query": "classification_long",
+            "repeat": 3,
+            "historyTurns": 6,
+            "seconds": 0.9000120999999126
+          },
+          {
+            "query": "classification_short",
+            "repeat": 3,
+            "historyTurns": 7,
+            "seconds": 0.9332545000006576
+          }
+        ],
+        "outputEncodingNote": "Initial tool output misdecoded the Korean marker label only; label mapped from the fixed helper key to classification. Numeric values and ASCII fields preserved.",
+        "adopted": false
+      }
+    },
+    {
+      "name": "decision_array",
+      "runtimeAdopted": false,
+      "coverageSolved": false,
+      "runs": [
+        {
+          "query": "classification_long",
+          "repeat": 1,
+          "status": "selection_error",
+          "error": "invalid_output_sources",
+          "seconds": 1.2673029999996288,
+          "sameDigest": true
+        },
+        {
+          "query": "classification_short",
+          "repeat": 1,
+          "status": "selection_error",
+          "error": "invalid_output_sources",
+          "seconds": 2.4627393000000666,
+          "sameDigest": true
+        },
+        {
+          "query": "classification_long",
+          "repeat": 2,
+          "status": "selection_error",
+          "error": "invalid_output_sources",
+          "seconds": 0.44930070000009437,
+          "sameDigest": true
+        },
+        {
+          "query": "classification_short",
+          "repeat": 2,
+          "status": "selection_error",
+          "error": "invalid_output_sources",
+          "seconds": 0.4481130000003759,
+          "sameDigest": true
+        },
+        {
+          "query": "classification_long",
+          "repeat": 3,
+          "status": "selection_error",
+          "error": "invalid_output_sources",
+          "seconds": 0.454828599999928,
+          "sameDigest": true
+        },
+        {
+          "query": "classification_short",
+          "repeat": 3,
+          "status": "selection_error",
+          "error": "invalid_output_sources",
+          "seconds": 0.45072590000017954,
+          "sameDigest": true
+        }
+      ],
+      "trace": [
+        {
+          "expected": 32,
+          "received": 1,
+          "indices": [
+            7
+          ],
+          "included": 1
+        },
+        {
+          "expected": 32,
+          "received": 1,
+          "indices": [
+            7
+          ],
+          "included": 1
+        }
+      ],
+      "traceCalls": 2
+    },
+    {
+      "name": "required_decision_map",
+      "runtimeAdopted": false,
+      "keptForOfflineEvaluation": true,
+      "coverageSolved": false,
+      "runs": [
+        {
+          "query": "classification_long",
+          "repeat": 1,
+          "status": "selected",
+          "selectedSlots": [
+            7
+          ],
+          "selectedChars": 280,
+          "selectedMarkers": {
+            "HFrEF": 1,
+            "HFpEF": 0,
+            "NYHA": 0,
+            "classification": 1
+          },
+          "inputTruncatedCount": 0,
+          "sourceIdentityExact": true,
+          "independentExcerptChecks": [
+            {
+              "slot": 7,
+              "reason": null,
+              "unchangedByExistingGuard": true
+            }
+          ],
+          "seconds": 3.3963039999998728,
+          "sameDigest": true
+        },
+        {
+          "query": "classification_short",
+          "repeat": 1,
+          "status": "selected",
+          "selectedSlots": [
+            2,
+            7
+          ],
+          "selectedChars": 290,
+          "selectedMarkers": {
+            "HFrEF": 1,
+            "HFpEF": 0,
+            "NYHA": 0,
+            "classification": 2
+          },
+          "inputTruncatedCount": 0,
+          "sourceIdentityExact": true,
+          "independentExcerptChecks": [
+            {
+              "slot": 2,
+              "reason": null,
+              "unchangedByExistingGuard": true
+            },
+            {
+              "slot": 7,
+              "reason": null,
+              "unchangedByExistingGuard": true
+            }
+          ],
+          "seconds": 3.222935900000266,
+          "sameDigest": true
+        },
+        {
+          "query": "classification_long",
+          "repeat": 2,
+          "status": "selected",
+          "selectedSlots": [
+            7
+          ],
+          "selectedChars": 280,
+          "selectedMarkers": {
+            "HFrEF": 1,
+            "HFpEF": 0,
+            "NYHA": 0,
+            "classification": 1
+          },
+          "inputTruncatedCount": 0,
+          "sourceIdentityExact": true,
+          "independentExcerptChecks": [
+            {
+              "slot": 7,
+              "reason": null,
+              "unchangedByExistingGuard": true
+            }
+          ],
+          "seconds": 2.6171221999993577,
+          "sameDigest": true
+        },
+        {
+          "query": "classification_short",
+          "repeat": 2,
+          "status": "selected",
+          "selectedSlots": [
+            2,
+            7
+          ],
+          "selectedChars": 290,
+          "selectedMarkers": {
+            "HFrEF": 1,
+            "HFpEF": 0,
+            "NYHA": 0,
+            "classification": 2
+          },
+          "inputTruncatedCount": 0,
+          "sourceIdentityExact": true,
+          "independentExcerptChecks": [
+            {
+              "slot": 2,
+              "reason": null,
+              "unchangedByExistingGuard": true
+            },
+            {
+              "slot": 7,
+              "reason": null,
+              "unchangedByExistingGuard": true
+            }
+          ],
+          "seconds": 2.5872919000003094,
+          "sameDigest": true
+        },
+        {
+          "query": "classification_long",
+          "repeat": 3,
+          "status": "selected",
+          "selectedSlots": [
+            7
+          ],
+          "selectedChars": 280,
+          "selectedMarkers": {
+            "HFrEF": 1,
+            "HFpEF": 0,
+            "NYHA": 0,
+            "classification": 1
+          },
+          "inputTruncatedCount": 0,
+          "sourceIdentityExact": true,
+          "independentExcerptChecks": [
+            {
+              "slot": 7,
+              "reason": null,
+              "unchangedByExistingGuard": true
+            }
+          ],
+          "seconds": 2.253767700000026,
+          "sameDigest": true
+        },
+        {
+          "query": "classification_short",
+          "repeat": 3,
+          "status": "selected",
+          "selectedSlots": [
+            2,
+            7
+          ],
+          "selectedChars": 290,
+          "selectedMarkers": {
+            "HFrEF": 1,
+            "HFpEF": 0,
+            "NYHA": 0,
+            "classification": 2
+          },
+          "inputTruncatedCount": 0,
+          "sourceIdentityExact": true,
+          "independentExcerptChecks": [
+            {
+              "slot": 2,
+              "reason": null,
+              "unchangedByExistingGuard": true
+            },
+            {
+              "slot": 7,
+              "reason": null,
+              "unchangedByExistingGuard": true
+            }
+          ],
+          "seconds": 1.8567089999996824,
+          "sameDigest": true
+        }
+      ],
+      "canonicalModuleChecks": [
+        {
+          "query": "classification_long",
+          "repeat": 1,
+          "status": "selected",
+          "selectedSlots": [
+            7
+          ],
+          "selectedChars": 280,
+          "selectedMarkers": {
+            "HFrEF": 1,
+            "HFpEF": 0,
+            "NYHA": 0,
+            "classification": 1
+          },
+          "inputTruncatedCount": 0,
+          "sourceIdentityExact": true,
+          "independentExcerptChecks": [
+            {
+              "slot": 7,
+              "reason": null,
+              "unchangedByExistingGuard": true
+            }
+          ],
+          "seconds": 1.7618781999999555,
+          "sameDigest": true
+        },
+        {
+          "query": "classification_short",
+          "repeat": 1,
+          "status": "selected",
+          "selectedSlots": [
+            2,
+            7
+          ],
+          "selectedChars": 290,
+          "selectedMarkers": {
+            "HFrEF": 1,
+            "HFpEF": 0,
+            "NYHA": 0,
+            "classification": 2
+          },
+          "inputTruncatedCount": 0,
+          "sourceIdentityExact": true,
+          "independentExcerptChecks": [
+            {
+              "slot": 2,
+              "reason": null,
+              "unchangedByExistingGuard": true
+            },
+            {
+              "slot": 7,
+              "reason": null,
+              "unchangedByExistingGuard": true
+            }
+          ],
+          "seconds": 1.619582100000116,
+          "sameDigest": true
+        }
+      ]
+    }
+  ],
+  "preservation": {
+    "before": {
+      "quick_check": "ok",
+      "foreign_key_violations": 0,
+      "unchanged_tables": {
+        "documents": {
+          "rows": 12,
+          "sha256": "c3a70a020aa70b9318ad45063d61edbe52be8d9f82716ea1c3e4cc7386541022",
+          "matches_backup": true
+        },
+        "document_pages": {
+          "rows": 4339,
+          "sha256": "042fba7ec097311e0edc63e11f09154df7bf919511d1ed6bcda72cb490cc06c7",
+          "matches_backup": true
+        },
+        "document_blocks": {
+          "rows": 364819,
+          "sha256": "a5f391b6db39fe6ab4a1147b6bb63212c79e14ee4e9660940fee95811132372b",
+          "matches_backup": true
+        },
+        "summary_settings": {
+          "rows": 1,
+          "sha256": "81ff5a90db10b3a83102e2ff05e5a1443c01f1bd8b5c12404cb3ea180e2b2421",
+          "matches_backup": true
+        }
+      },
+      "original_qa_rows": {
+        "qa_threads": {
+          "rows": 19,
+          "unchanged": 19
+        },
+        "qa_messages": {
+          "rows": 90,
+          "unchanged": 90
+        },
+        "qa_claims": {
+          "rows": 201,
+          "unchanged": 201
+        }
+      },
+      "current_qa_fingerprints": {
+        "qa_threads": {
+          "rows": 21,
+          "sha256": "bb7a8178cbae49b19e6559b5c87232033604e2458d252400af0087cbce3ab8fe"
+        },
+        "qa_messages": {
+          "rows": 104,
+          "sha256": "1965cf819fe026d67c2362af619b8a4520203b6bc9166750059d8efaf59125eb"
+        },
+        "qa_claims": {
+          "rows": 205,
+          "sha256": "d5c57261d6e83c61586a838281ff2208c4d890572cd41454630701a947686b18"
+        }
+      },
+      "pre_test_qa_preservation": {
+        "qa_threads": {
+          "rows": 20,
+          "sha256": "d76ad8b047938dc285e6816f812788ed424418780f5dc0741b9fd86fd79de2aa",
+          "matches_before_test": true
+        },
+        "qa_messages": {
+          "rows": 94,
+          "sha256": "d4528e99cac61c2b8e1677e9db2f0238ebff18ed000e070fec96de6b74534875",
+          "matches_before_test": true
+        },
+        "qa_claims": {
+          "rows": 202,
+          "sha256": "2be50a058977cc20dbdedba7b4120588ae0e2759b2b2ab59a0ccdc01c84b1539",
+          "matches_before_test": true
+        }
+      },
+      "active_qa": 0
+    },
+    "after": {
+      "quick_check": "ok",
+      "foreign_key_violations": 0,
+      "unchanged_tables": {
+        "documents": {
+          "rows": 12,
+          "sha256": "c3a70a020aa70b9318ad45063d61edbe52be8d9f82716ea1c3e4cc7386541022",
+          "matches_backup": true
+        },
+        "document_pages": {
+          "rows": 4339,
+          "sha256": "042fba7ec097311e0edc63e11f09154df7bf919511d1ed6bcda72cb490cc06c7",
+          "matches_backup": true
+        },
+        "document_blocks": {
+          "rows": 364819,
+          "sha256": "a5f391b6db39fe6ab4a1147b6bb63212c79e14ee4e9660940fee95811132372b",
+          "matches_backup": true
+        },
+        "summary_settings": {
+          "rows": 1,
+          "sha256": "81ff5a90db10b3a83102e2ff05e5a1443c01f1bd8b5c12404cb3ea180e2b2421",
+          "matches_backup": true
+        }
+      },
+      "original_qa_rows": {
+        "qa_threads": {
+          "rows": 19,
+          "unchanged": 19
+        },
+        "qa_messages": {
+          "rows": 90,
+          "unchanged": 90
+        },
+        "qa_claims": {
+          "rows": 201,
+          "unchanged": 201
+        }
+      },
+      "current_qa_fingerprints": {
+        "qa_threads": {
+          "rows": 21,
+          "sha256": "bb7a8178cbae49b19e6559b5c87232033604e2458d252400af0087cbce3ab8fe"
+        },
+        "qa_messages": {
+          "rows": 104,
+          "sha256": "1965cf819fe026d67c2362af619b8a4520203b6bc9166750059d8efaf59125eb"
+        },
+        "qa_claims": {
+          "rows": 205,
+          "sha256": "d5c57261d6e83c61586a838281ff2208c4d890572cd41454630701a947686b18"
+        }
+      },
+      "pre_test_qa_preservation": {
+        "qa_threads": {
+          "rows": 20,
+          "sha256": "d76ad8b047938dc285e6816f812788ed424418780f5dc0741b9fd86fd79de2aa",
+          "matches_before_test": true
+        },
+        "qa_messages": {
+          "rows": 94,
+          "sha256": "d4528e99cac61c2b8e1677e9db2f0238ebff18ed000e070fec96de6b74534875",
+          "matches_before_test": true
+        },
+        "qa_claims": {
+          "rows": 202,
+          "sha256": "2be50a058977cc20dbdedba7b4120588ae0e2759b2b2ab59a0ccdc01c84b1539",
+          "matches_before_test": true
+        }
+      },
+      "active_qa": 0
+    },
+    "equal": true
+  },
+  "limitations": [
+    "Selected evidence is not a supported or complete final answer.",
+    "No answer-generation stage, GUI, installer or 39-run release evaluation in this turn.",
+    "No new semantic/citation guard was weakened or removed.",
+    "Heading and table continuation association is still unresolved.",
+    "Initial full-suite setup hit Windows temp-folder PermissionError; isolated-suite retry used approved escalation."
+  ],
+  "validation": {
+    "newTests": 57,
+    "focusedTestsWithExistingNumericGuard": 65,
+    "api": {
+      "passed": 1468,
+      "skipped": 4,
+      "seconds": 108.77,
+      "existingWarnings": 1
+    },
+    "ruff": "passed",
+    "mypy": {
+      "passed": true,
+      "sourceFiles": 131
+    },
+    "missingDecisionDefaultFalseControl": {
+      "failed": 2,
+      "passed": 17,
+      "deselected": 38,
+      "note": "Both failures exercise omitted decision coverage."
+    }
+  },
+  "prototypeCommit": "a08b07763d7ef88d4d554eb368c092d693886d5c",
+  "inputCheck": {
+    "contextDigest": "16301ee094f90145a6db2f22e12bc65e765bc08d432120d914e8595284976fa8",
+    "contextMarkers": {
+      "HFrEF": [
+        7,
+        8
+      ],
+      "HFpEF": [
+        8
+      ],
+      "NYHA": [
+        18
+      ],
+      "classification": [
+        2,
+        7,
+        8,
+        28
+      ]
+    },
+    "overClaimLimitSlots": [
+      8
+    ],
+    "additionalGenerationCalls": 0
+  }
+}

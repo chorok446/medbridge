@@ -42,6 +42,11 @@ class SummaryRun(Base):
     document_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("documents.id", ondelete="CASCADE"), index=True
     )
+    # 재기동 복구는 "최신 잡"을 추측하지 않고 이 실행을 만든 정확한 잡만 다시 큐에
+    # 넣는다. 기존 DB 행은 대응 관계를 증명할 수 없으므로 nullable이며 복구하지 않는다.
+    job_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("document_jobs.id", ondelete="SET NULL"), nullable=True, unique=True
+    )
     status: Mapped[SummaryRunStatus] = mapped_column(
         _str_enum(SummaryRunStatus, "summary_run_status"), default=SummaryRunStatus.QUEUED
     )
@@ -53,12 +58,29 @@ class SummaryRun(Base):
     source_chunk_hash: Mapped[str] = mapped_column(String(64))
     learner_level: Mapped[str] = mapped_column(String(30))
     language: Mapped[str] = mapped_column(String(10), default="ko")
+    include_sections: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    include_prerequisites: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="1"
+    )
+    # endpoint 원문/API key는 저장하지 않는다. 모델 digest와 설치별 credential HMAC을
+    # 포함한 비밀 없는 SHA-256 지문만 보존해 재기동 시 설정 일치를 fail-closed로 확인한다.
+    provider_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # 모델 digest 등 재기동 뒤 동일성을 증명할 identity가 모두 해석된 실행만 True다.
+    provider_identity_resumable: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0"
+    )
+    # 앱 크래시/강제 종료가 provider 실패 횟수를 소모하지 않도록 별도 복구 횟수를 둔다.
+    # 반복 크래시 무한 루프는 이 영속 카운터의 상한으로 차단한다.
+    resume_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     # 계층 요약 진행률 — 계획된 노드 수와 완료(재사용 포함) 노드 수. 0이면 아직 계획 전.
     planned_nodes: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     completed_nodes: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # 같은 error_code 안에서 어느 계약이 깨졌는지 가리키는 분류값(원문 없음).
+    # 사용자에게 보여주지 않는다 — 오류 보고서 진단용이다.
+    failure_reason: Mapped[str | None] = mapped_column(String(50), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow, server_default=func.now()
     )
@@ -67,12 +89,21 @@ class SummaryRun(Base):
     )
 
 
+# 설정 행의 고정 id. "단일 행"을 주석이 아니라 PK로 강제한다 — 임의 UUID를 쓰면
+# 설정 저장과 로컬 AI 활성화가 각각 'SELECT → 없으면 INSERT'를 하다 겹칠 때 행이 조용히
+# 2개가 되고, 그 순간부터 요약·질문·설정이 전부 500이 된다. 같은 id면 두 번째 INSERT가
+# PK 위반으로 즉시 실패하므로 중복이 만들어지지 않는다.
+SETTINGS_SINGLETON_ID = uuid.UUID("00000000-0000-0000-0000-00005e771495")
+
+
 class SummarySettings(Base):
     """요약 모델 설정 — 단일 행. API 키는 여기 저장하지 않고 OS keyring에 둔다."""
 
     __tablename__ = "summary_settings"
 
-    id: Mapped[uuid.UUID] = mapped_column(Uuid(), primary_key=True, default=uuid.uuid4)
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(), primary_key=True, default=lambda: SETTINGS_SINGLETON_ID
+    )
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     provider_type: Mapped[str] = mapped_column(String(30), default="disabled")
     endpoint: Mapped[str | None] = mapped_column(String(500), nullable=True)

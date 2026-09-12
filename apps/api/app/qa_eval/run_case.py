@@ -25,6 +25,10 @@ from app.services.local_ai import settings as local_st
 from app.services.qa import stream_service
 
 
+class RuntimeIdentityError(RuntimeError):
+    """평가가 요청한 고정 local Ollama runtime과 실제 provider가 다름."""
+
+
 @dataclass
 class ClaimView:
     text: str
@@ -99,14 +103,47 @@ async def _set_provider(factory, *, provider_mode: str, model: str | None) -> No
         rows = (await s.execute(select(SummarySettings))).scalars().all()
         for row in rows:
             await s.delete(row)
+        # 지우기를 먼저 내보낸다. 설정 행은 고정 id(SETTINGS_SINGLETON_ID)를 쓰므로,
+        # 같은 flush에 삭제와 삽입이 함께 들어가면 SQLAlchemy가 INSERT를 먼저 보내
+        # PK 충돌이 난다.
+        await s.flush()
         if provider_mode == "deterministic":
             s.add(SummarySettings(enabled=True, provider_type="deterministic"))
         else:  # local Ollama
-            s.add(SummarySettings(
-                enabled=True, provider_type="openai_compatible", is_local=True,
-                endpoint=local_st.OLLAMA_OPENAI_BASE, model_name=model,
-            ))
+            s.add(
+                SummarySettings(
+                    enabled=True,
+                    provider_type="openai_compatible",
+                    is_local=True,
+                    endpoint=local_st.OLLAMA_OPENAI_BASE,
+                    model_name=model,
+                )
+            )
         await s.commit()
+
+
+async def materialize_and_verify_local_runtime(factory, *, model: str):
+    """DB 설정을 쓴 뒤 실제 Q&A factory 결과가 고정 Ollama인지 확인한다."""
+    from app.services.qa.factory import get_qa_streaming_provider
+    from app.services.qa.streaming import OpenAICompatibleStreamingQaProvider
+
+    await _set_provider(factory, provider_mode="local", model=model)
+    async with factory() as session:
+        provider = await get_qa_streaming_provider(session)
+    valid = (
+        isinstance(provider, OpenAICompatibleStreamingQaProvider)
+        and provider.provider_name == "openai_compatible"
+        and provider.model_name == model
+        and provider.is_local is True
+        and provider.available is True
+        and provider._endpoint == local_st.OLLAMA_OPENAI_BASE
+        and provider._uses_ollama_native()
+    )
+    if not valid:
+        raise RuntimeIdentityError(
+            "출시 평가 provider가 local Ollama qwen3:8b 고정 runtime과 일치하지 않습니다."
+        )
+    return provider
 
 
 async def run_case(
@@ -128,8 +165,10 @@ async def run_case(
     # 독립 검증용 문서 사실 수집
     async with factory() as s:
         blocks = (
-            await s.execute(select(DocumentBlock).where(DocumentBlock.document_id == doc_id))
-        ).scalars().all()
+            (await s.execute(select(DocumentBlock).where(DocumentBlock.document_id == doc_id)))
+            .scalars()
+            .all()
+        )
         owned_block_ids = {str(b.id) for b in blocks}
         doc_text = "\n".join(b.text for b in blocks)
         thread_user = await get_or_create_profile(s)
@@ -139,8 +178,12 @@ async def run_case(
         tid = thread.id
 
     run = CaseRun(
-        case_id=case.case_id, category=case.category, status="none", terminal_type="none",
-        owned_block_ids=owned_block_ids, doc_text=doc_text,
+        case_id=case.case_id,
+        category=case.category,
+        status="none",
+        terminal_type="none",
+        owned_block_ids=owned_block_ids,
+        doc_text=doc_text,
     )
 
     # prepare_stream — 스트림 시작 전 거부(모델 미연결·동의·동시성)는 결과로 기록

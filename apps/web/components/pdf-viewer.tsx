@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import type { PDFDocumentLoadingTask, PDFDocumentProxy, RenderTask } from "pdfjs-dist";
 import type { Rect } from "@/types/extraction";
 
 /**
@@ -30,7 +31,13 @@ interface RenderedPage {
   baseHeight: number;
 }
 
-function rotateRect(rect: Rect, rotate: 0 | 90 | 180 | 270, w: number, h: number): Rect {
+/** 사각형을 페이지 크기 기준으로 회전한다. w·h는 **회전 전** 페이지 크기(pt).
+ *
+ * 하이라이트 위치와 원문 클릭 역변환이 둘 다 이 함수를 지난다. 여기가 틀리면
+ * "표 제목을 눌러 원문 확인"이 엉뚱한 자리를 가리키고, 사용자는 근거를 못 찾는다.
+ * 컴포넌트를 거쳐서는 pdfjs 캔버스 렌더가 필요해 이 수학을 볼 수 없어 따로 연다.
+ */
+export function rotateRect(rect: Rect, rotate: 0 | 90 | 180 | 270, w: number, h: number): Rect {
   const { x0, y0, x1, y1 } = rect;
   switch (rotate) {
     case 90:
@@ -58,17 +65,51 @@ export function PdfViewer({
   const [userRotate, setUserRotate] = useState<0 | 90 | 180 | 270>(0);
   const [rendered, setRendered] = useState<RenderedPage | null>(null);
   const [error, setError] = useState(false);
+  const [doc, setDoc] = useState<PDFDocumentProxy | null>(null);
 
+  // 문서 로드는 fileUrl에만 묶는다 — 페이지·배율·회전 변경마다 수백 MB짜리 문서를
+  // 다시 열면 이전 문서가 해제되지 않아 웹뷰 메모리가 페이지 넘김마다 누적된다.
   useEffect(() => {
     let cancelled = false;
-    async function render() {
+    let task: PDFDocumentLoadingTask | null = null;
+    async function load() {
       try {
         const pdfjs = await import("pdfjs-dist");
         pdfjs.GlobalWorkerOptions.workerSrc = new URL(
           "pdfjs-dist/build/pdf.worker.min.mjs",
           import.meta.url,
         ).toString();
-        const doc = await pdfjs.getDocument({ url: fileUrl }).promise;
+        if (cancelled) return;
+        task = pdfjs.getDocument({
+          url: fileUrl,
+          // 글꼴이 내장되지 않은 한글 PDF도 오프라인에서 그릴 수 있도록 번들 리소스를 쓴다.
+          cMapUrl: new URL("/pdfjs/cmaps/", window.location.href).href,
+          cMapPacked: true,
+          standardFontDataUrl: new URL("/pdfjs/standard_fonts/", window.location.href).href,
+          wasmUrl: new URL("/pdfjs/wasm/", window.location.href).href,
+        });
+        const d = await task.promise;
+        if (!cancelled) setDoc(d);
+      } catch {
+        if (!cancelled) setError(true);
+      }
+    }
+    void load();
+    return () => {
+      cancelled = true;
+      setDoc(null);
+      // 진행 중 로드 중단 + 문서·워커 해제까지 한 번에 담당한다.
+      void task?.destroy().catch(() => undefined);
+    };
+  }, [fileUrl]);
+
+  useEffect(() => {
+    if (!doc) return;
+    let cancelled = false;
+    let renderTask: RenderTask | null = null;
+    async function render() {
+      try {
+        if (!doc) return;
         const pdfPage = await doc.getPage(page);
         // 기본 회전(페이지 자체 회전) + 사용자 추가 회전
         const viewport = pdfPage.getViewport({
@@ -82,7 +123,8 @@ export function PdfViewer({
         if (!ctx) return;
         canvas.width = viewport.width;
         canvas.height = viewport.height;
-        await pdfPage.render({ canvas, canvasContext: ctx, viewport }).promise;
+        renderTask = pdfPage.render({ canvas, canvasContext: ctx, viewport });
+        await renderTask.promise;
         if (!cancelled) {
           setRendered({
             width: viewport.width,
@@ -99,8 +141,10 @@ export function PdfViewer({
     void render();
     return () => {
       cancelled = true;
+      // 같은 캔버스에 렌더가 겹치면 pdf.js가 예외를 던진다 — 이전 렌더를 명시적으로 끊는다.
+      renderTask?.cancel();
     };
-  }, [fileUrl, page, scale, userRotate]);
+  }, [doc, page, scale, userRotate]);
 
   const toScreen = (rect: Rect): Rect | null => {
     if (!rendered) return null;
@@ -169,7 +213,11 @@ export function PdfViewer({
           </p>
         ) : (
           <div
-            className="relative mx-auto w-fit shadow"
+            // 그림자 대신 1px 테두리로 종이의 가장자리를 낸다. DESIGN.md는 깊이를
+            // (1) 바탕 위 흰 종이의 명도 차, (2) 1px 테두리 두 가지로만 낸다고
+            // 못박았고 "box-shadow 값은 코드베이스에 존재하지 않는다"고 적혀 있다.
+            // 회색 바탕(bg-slate-100) 위 흰 캔버스라 (1)은 이미 성립한다.
+            className="relative mx-auto w-fit border border-slate-300"
             onPointerDown={(e) => {
               if (!rendered || !onPagePointerDown) return;
               const el = e.currentTarget.getBoundingClientRect();
@@ -185,7 +233,15 @@ export function PdfViewer({
               onPagePointerDown(inv.x0, inv.y0);
             }}
           >
-            <canvas ref={canvasRef} className="block" />
+            {/* 캔버스는 픽셀 그림이라 보조기술에 아무 정보도 주지 않는다. 최소한
+                "지금 몇 쪽 원문이 보이는지"는 알려야 옆 패널의 인용·구역 목록과
+                맞춰볼 수 있다. 본문 글자는 오른쪽 패널이 따로 제공한다. */}
+            <canvas
+              ref={canvasRef}
+              role="img"
+              aria-label={`${page}쪽 원문`}
+              className="block"
+            />
             {rendered &&
               highlights.map((h, i) => {
                 const s = toScreen(h);
@@ -194,7 +250,9 @@ export function PdfViewer({
                   <div
                     key={`${flashKey}-${i}`}
                     data-testid="pdf-highlight"
-                    className="pointer-events-none absolute animate-pulse rounded-sm border-2 border-amber-500 bg-amber-300/30"
+                    // 깜빡임을 끄면 테두리와 틴트는 남는다 — 위치를 알리는 일은
+                    // 움직임이 아니라 색이 하므로, 동작을 줄여도 정보는 잃지 않는다.
+                    className="pointer-events-none absolute animate-pulse rounded-sm border-2 border-amber-500 bg-amber-300/30 motion-reduce:animate-none"
                     style={{
                       left: s.x0,
                       top: s.y0,

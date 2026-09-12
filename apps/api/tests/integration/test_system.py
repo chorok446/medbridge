@@ -2,13 +2,15 @@
 
 import json
 import os
+from contextlib import closing
 
 import pytest
 
 from app.core.paths import get_path_provider
 from app.services.system import runtime
+from app.services.system.backups import BACKUP_KEEP
 from tests.conftest import make_pdf
-from tests.integration.conftest import drain_jobs
+from tests.integration.conftest import drain_jobs, head_revision
 
 
 def upload_kwargs(data: bytes, filename: str = "test.pdf"):
@@ -45,12 +47,50 @@ class TestPrepareUpdate:
         after = set(p.name for p in backups.glob("pre-update-*.db"))
         assert backup_file in after - before
 
+    async def test_backup_is_a_usable_database(self, client):
+        """되돌릴 수 있어야 백업이다 — 열리고, 온전하고, 내용이 들어 있어야 한다.
+
+        파일을 그냥 읽어 복사하면 수 GB DB를 뜨는 수십 초 동안 들어온 쓰기 때문에
+        앞부분과 뒷부분이 서로 다른 시점이 되어 'database disk image is malformed'로
+        열리지 않는다. 되돌릴 목적으로 만든 사본이 되돌릴 수 없는 파일이 되는 것이
+        최악이라, 결과물이 실제로 쓸 수 있는 DB인지 확인한다.
+        """
+        import sqlite3
+
+        res = await client.post("/api/system/prepare-update")
+        backup = get_path_provider().backups_dir / res.json()["data"]["backupFile"]
+
+        with closing(sqlite3.connect(backup)) as conn:
+            assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+            tables = {
+                row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            }
+        # 스키마가 통째로 실려야 한다 — 빈 껍데기로는 되돌릴 수 없다.
+        assert "documents" in tables, sorted(tables)
+        assert "alembic_version" in tables, sorted(tables)
+
+    async def test_prunes_old_backups(self, client):
+        """백업 생성 경로가 오래된 사본을 정리한다.
+
+        정리 코드가 없어 실기기에서 백업 6개가 11.5GB까지 쌓였다(같은 기기의 실제
+        PDF는 0.99GB였다). 헬퍼만 검증하면 배선이 빠져도 테스트가 통과한다.
+        """
+        backups = get_path_provider().backups_dir
+        backups.mkdir(parents=True, exist_ok=True)
+        for stamp in ("20200101-000000", "20200102-000000", "20200103-000000"):
+            (backups / f"pre-update-0.1.0-{stamp}.db").write_bytes(b"old")
+
+        await client.post("/api/system/prepare-update")
+
+        left = sorted(p.name for p in backups.glob("pre-update-*.db"))
+        assert len(left) == BACKUP_KEEP, f"정리되지 않았다: {left}"
+        # 방금 만든 백업은 반드시 남는다
+        assert not any(name.startswith("pre-update-0.1.0-20200101") for name in left)
+
 
 class TestErrorReport:
     async def test_report_shape_and_no_filenames(self, client):
-        await client.post(
-            "/api/documents", **upload_kwargs(make_pdf(), "환자기록_비밀문서.pdf")
-        )
+        await client.post("/api/documents", **upload_kwargs(make_pdf(), "환자기록_비밀문서.pdf"))
         await drain_jobs()
         # 사용자 자유 입력 신고는 zip 포함 대상 로그(sidecar.log)에 남지 않아야 한다
         await client.post(
@@ -62,11 +102,39 @@ class TestErrorReport:
         report = res.json()["data"]
         assert "김민준" not in json.dumps(report, ensure_ascii=False)
         assert report["sidecarVersion"]
-        assert report["migrationRevision"] == "0010"
+        assert report["migrationRevision"] == head_revision()
         assert "documentStatusCounts" in report
         # 원본 파일명·PDF 내용은 보고서에 포함되지 않는다
         raw = json.dumps(report, ensure_ascii=False)
         assert "환자기록_비밀문서" not in raw
+
+    async def test_log_tail_reads_utf8(self, client):
+        """로그 꼬리를 UTF-8로 읽는다.
+
+        인코딩을 지정하지 않으면 Windows가 로케일(CP949)로 읽어 한글 오류 메시지가
+        전부 깨진 채 보고서에 들어간다 — 실기기 보고서에서 확인된 증상이다.
+        """
+        log_file = get_path_provider().logs_dir / "sidecar.log"
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        korean = "ConnectionResetError: 현재 연결은 원격 호스트에 의해 강제로 끊겼습니다"
+        with log_file.open("a", encoding="utf-8") as fh:
+            fh.write(korean + "\n")
+
+        report = (await client.get("/api/system/error-report")).json()["data"]
+        assert korean in report["logTail"]
+
+    async def test_log_tail_redacts_local_paths_and_document_names(self, client):
+        log_file = get_path_provider().logs_dir / "sidecar.log"
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        private_path = r"C:\Users\real-name\AppData\Local\Temp\환자기록.pdf"
+        with log_file.open("a", encoding="utf-8") as fh:
+            fh.write(f"render failed: {private_path}\n")
+
+        report = (await client.get("/api/system/error-report")).json()["data"]
+        raw = json.dumps(report["logTail"], ensure_ascii=False)
+        assert "real-name" not in raw
+        assert "환자기록.pdf" not in raw
+        assert "<home>" in raw
 
 
 class TestSingleInstance:
@@ -122,6 +190,39 @@ class TestQuiescence:
         assert res.status_code == 200
         runtime.set_updating(False)
 
+    async def test_timeout_is_bounded_and_never_calls_unbounded_drain(self, monkeypatch):
+        """끝나지 않는 대형 요약이 있어도 advertised timeout 안에 반환한다."""
+        import asyncio
+
+        class NeverIdleRunner:
+            drain_called = False
+
+            def has_pending(self):
+                return True
+
+            async def drain(self):
+                self.drain_called = True
+                await asyncio.Event().wait()
+
+        runner = NeverIdleRunner()
+        monkeypatch.setattr("app.services.tasks.runner.get_task_runner", lambda: runner)
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        with pytest.raises(runtime.QuiescenceTimeout):
+            await runtime.wait_for_quiescence(timeout_seconds=0.02)
+        assert loop.time() - started < 0.5
+        assert runner.drain_called is False
+
+    async def test_prepare_timeout_reopens_work_gate(self, client, monkeypatch):
+        async def timeout():
+            raise runtime.QuiescenceTimeout
+
+        monkeypatch.setattr(runtime, "wait_for_quiescence", timeout)
+        res = await client.post("/api/system/prepare-update")
+        assert res.status_code == 409
+        assert res.json()["error"]["retryable"] is True
+        assert runtime.is_updating() is False
+
 
 class TestVersionConsistency:
     def test_check_versions_script_passes(self):
@@ -134,5 +235,7 @@ class TestVersionConsistency:
             cwd=repo_root,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         assert result.returncode == 0, result.stdout + result.stderr

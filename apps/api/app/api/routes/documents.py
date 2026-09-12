@@ -1,6 +1,7 @@
 import uuid
+from urllib.parse import unquote
 
-from fastapi import APIRouter, Depends, File, Form, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,6 +26,18 @@ from app.utils.responses import wrap
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
 
+def _decode_upload_header(value: str, *, field: str, max_length: int = 500) -> str:
+    try:
+        decoded = unquote(value, errors="strict")
+    except UnicodeError as exc:
+        raise AppError(
+            ErrorCode.VALIDATION_FAILED, f"잘못된 {field}입니다.", status_code=400
+        ) from exc
+    if not decoded or len(decoded) > max_length or any(ord(char) < 32 for char in decoded):
+        raise AppError(ErrorCode.VALIDATION_FAILED, f"잘못된 {field}입니다.", status_code=400)
+    return decoded
+
+
 @router.post("", response_model=Envelope[DocumentCreated], status_code=201)
 async def upload_document(
     file: UploadFile = File(...),
@@ -33,6 +46,48 @@ async def upload_document(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     doc, duplicate = await service.create_document(db, user, file, title, correlation_id_var.get())
+    return wrap(
+        DocumentCreated(
+            id=doc.id,
+            title=doc.title,
+            processing_status=doc.processing_status.value,
+            processing_stage=doc.processing_stage.value,
+            processing_progress=doc.processing_progress,
+            duplicate=duplicate,
+        )
+    )
+
+
+@router.post("/stream", response_model=Envelope[DocumentCreated], status_code=201)
+async def upload_document_stream(
+    request: Request,
+    encoded_filename: str = Header(alias="X-MedBridge-Filename"),
+    declared_size: int | None = Header(default=None, alias="X-MedBridge-File-Size", ge=0),
+    encoded_title: str | None = Header(default=None, alias="X-MedBridge-Title"),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """GUI 대형 PDF 경로: multipart spooling 없이 ASGI body를 곧바로 staging한다."""
+    media_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if media_type != "application/pdf":
+        raise AppError(
+            ErrorCode.INVALID_FILE_TYPE, "PDF 파일만 업로드할 수 있습니다.", status_code=415
+        )
+    filename = _decode_upload_header(encoded_filename, field="파일 이름")
+    title = (
+        _decode_upload_header(encoded_title, field="문서 제목")
+        if encoded_title is not None
+        else None
+    )
+    doc, duplicate = await service.create_document_stream(
+        db,
+        user,
+        request.stream(),
+        filename,
+        title,
+        correlation_id_var.get(),
+        declared_size=declared_size,
+    )
     return wrap(
         DocumentCreated(
             id=doc.id,

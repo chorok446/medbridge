@@ -2,10 +2,36 @@
 
 import pymupdf
 
+from app.services.extraction.engine import BlockRec, PageData
+
 PAGE_W, PAGE_H = 595, 842  # A4 (pt)
 
 
 KOR = {"fontname": "korea"}
+
+
+def numbered_section_page(page_number: int = 1) -> PageData:
+    """두 줄 절 제목 앞의 2단 표 형태를 재현하는 비의료 합성 추출 결과."""
+    entries = [
+        ((30, 100, 320, 112), "Previous table header."),
+        ((35, 125, 130, 140), "Previous left A."),
+        ((235, 125, 315, 140), "Previous right A."),
+        ((35, 155, 130, 178), "Previous left B."),
+        ((180, 155, 315, 182), "Previous right B."),
+        ((32, 205, 135, 215), "2. \n장비 등급"),
+        ((40, 230, 310, 242), "A. Equipment with the basic parts."),
+        ((40, 247, 310, 259), "B. Equipment with additional parts."),
+    ]
+    blocks = [
+        BlockRec(bbox=bbox, text=text, block_index=index, block_type="text")
+        for index, (bbox, text) in enumerate(entries)
+    ]
+    return PageData(
+        page_number=page_number, width=350, height=540, rotation=0,
+        raw_text="\n".join(block.text for block in blocks), blocks=blocks,
+        words=[], tables=[], image_bboxes=[], image_area_ratio=0,
+        full_page_image=False, has_images=False, text_area_ratio=0.3,
+    )
 
 
 def _new_doc() -> pymupdf.Document:
@@ -127,6 +153,19 @@ def image_with_caption() -> bytes:
     return _to_bytes(doc)
 
 
+def scanned_page_with_short_caption() -> bytes:
+    """거의 전면인 이미지 + 짧은 캡션 한 줄 — OCR이 필요하면서 디지털 텍스트도 있는 쪽.
+
+    이런 쪽에서 OCR 결과가 이미 있는 디지털 텍스트와 통째로 겹치면 새로 저장할 단어는
+    0개가 된다. 실기기에서 `words=0, ocr_completed`로 남던 바로 그 경우다.
+    """
+    doc = _new_doc()
+    page = doc.new_page(width=PAGE_W, height=PAGE_H)
+    page.insert_text((72, 60), "그림 1. 심장", fontsize=12, **KOR)
+    page.insert_image(pymupdf.Rect(0, 100, PAGE_W, PAGE_H), stream=_tiny_png())
+    return _to_bytes(doc)
+
+
 def sparse_text() -> bytes:
     doc = _new_doc()
     page = doc.new_page(width=PAGE_W, height=PAGE_H)
@@ -199,8 +238,9 @@ def mixed_digital_and_scanned() -> bytes:
     return _to_bytes(a)
 
 
-def blank_image_page() -> bytes:
+def blank_image_page(pages: int = 1) -> bytes:
     """빈(내용 없는) 전면 이미지 페이지."""
     doc = _new_doc()
-    doc.new_page(width=PAGE_W, height=PAGE_H)
+    for _ in range(pages):
+        doc.new_page(width=PAGE_W, height=PAGE_H)
     return _rasterize(_to_bytes(doc))

@@ -12,7 +12,7 @@ export type RamAdvice = "recommended" | "selectable" | "warn" | "unknown";
 
 export interface LocalModel {
   model: string; // 내부명 — 상세 보기 전용
-  tier: "light" | "balanced" | "quality";
+  tier: "light" | "balanced" | "quality" | "advanced";
   label: string;
   description: string;
   approxBytes: number;

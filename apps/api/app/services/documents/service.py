@@ -2,7 +2,10 @@
 
 import asyncio
 import base64
+import hashlib
 import uuid
+from collections.abc import AsyncIterable, AsyncIterator
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from fastapi import UploadFile
@@ -23,27 +26,79 @@ logger = get_logger(__name__)
 
 _CHUNK = 1024 * 1024
 
-# 대용량(최대 800MB) 업로드는 메모리에 통째로 올라간다. 동시 업로드를 직렬화해 최대
-# 상주 메모리를 한 파일 크기로 묶는다(개인용 단일 사용자 앱이라 직렬화가 UX에 무해).
-# ponytail: 전역 세마포어(1), 스트리밍 저장이 필요할 만큼 커지면 그때 교체.
+# 같은 사용자가 동일 파일을 동시에 올릴 때 중복 조회와 문서 생성을 한 임계 구역으로
+# 묶고, 단일 사용자 앱에서 여러 대형 업로드가 디스크를 동시에 포화시키지 않게 한다.
 _upload_gate = asyncio.Semaphore(1)
 
 
-async def _read_limited(file: UploadFile, max_bytes: int) -> bytearray:
-    """크기 제한을 넘는 순간 즉시 중단한다. 전체를 읽은 뒤 검사하지 않는다.
+@dataclass(frozen=True)
+class _StagedUploadResult:
+    staged: storage.StagedUpload
+    file_size: int
+    sha256: str
 
-    list+join(피크 ~2배)을 피하려고 단일 bytearray로 누적한다.
+
+async def _stage_upload(file: UploadFile, max_bytes: int) -> _StagedUploadResult:
+    """기존 multipart ``UploadFile``을 bounded staging 경로로 복사한다."""
+
+    async def chunks() -> AsyncIterator[bytes]:
+        while chunk := await file.read(_CHUNK):
+            yield chunk
+
+    return await _stage_chunks(chunks(), max_bytes)
+
+
+async def _stage_chunks(chunks: AsyncIterable[bytes], max_bytes: int) -> _StagedUploadResult:
+    """ASGI body chunk를 bounded 크기로 앱 데이터 staging 파일에 기록한다.
+
+    크기·PDF signature·SHA-256은 읽는 동안 계산하며 파일 전체를 Python heap에
+    보관하지 않는다. 어떤 실패나 task 취소에서도 staging 파일을 즉시 정리한다.
     """
-    buf = bytearray()
-    while chunk := await file.read(_CHUNK):
-        if len(buf) + len(chunk) > max_bytes:
-            raise AppError(
-                ErrorCode.FILE_TOO_LARGE,
-                f"파일이 최대 크기({max_bytes // (1024 * 1024)}MB)를 초과했습니다.",
-                status_code=413,
-            )
-        buf.extend(chunk)
-    return buf
+    staged = await run_in_threadpool(storage.create_staged_upload)
+    digest = hashlib.sha256()
+    head = bytearray()
+    file_size = 0
+    try:
+        async for incoming in chunks:
+            # ASGI server가 큰 body chunk를 주더라도 디스크 write와 일시 참조 크기는
+            # 1MiB로 제한한다. bytes slice 하나만 살아 있으므로 파일 크기에 비례하지 않는다.
+            for offset in range(0, len(incoming), _CHUNK):
+                chunk = incoming[offset : offset + _CHUNK]
+                if not chunk:
+                    continue
+                next_size = file_size + len(chunk)
+                if next_size > max_bytes:
+                    raise AppError(
+                        ErrorCode.FILE_TOO_LARGE,
+                        f"파일이 최대 크기({max_bytes // (1024 * 1024)}MB)를 초과했습니다.",
+                        status_code=413,
+                    )
+
+                if len(head) < 8:
+                    head.extend(chunk[: 8 - len(head)])
+                    # PDF가 아니면 나머지 수백 MB를 받기 전에 거부한다.
+                    if len(head) >= len(validation.PDF_SIGNATURE):
+                        validation.check_pdf_signature(head)
+
+                digest.update(chunk)
+                await run_in_threadpool(staged.write, chunk)
+                file_size = next_size
+
+        validation.check_size(file_size, max_bytes)
+        validation.check_pdf_signature(head)
+        await run_in_threadpool(staged.seal)
+        return _StagedUploadResult(
+            staged=staged,
+            file_size=file_size,
+            sha256=digest.hexdigest(),
+        )
+    except BaseException:
+        # CancelledError도 포함해 종료·업데이트 시 사용자 파일 조각을 남기지 않는다.
+        try:
+            storage.discard_staged_upload(staged)
+        except Exception:
+            logger.warning("staged_upload_cleanup_failed")
+        raise
 
 
 async def _find_duplicate(db: AsyncSession, user_id: uuid.UUID, sha256: str) -> Document | None:
@@ -63,19 +118,6 @@ async def _find_duplicate(db: AsyncSession, user_id: uuid.UUID, sha256: str) -> 
         .limit(1)
     )
     return (await db.execute(stmt)).scalar_one_or_none()
-
-
-def _reject_if_updating() -> None:
-    """업데이트 준비 중에는 새 문서 작업을 시작하지 않는다."""
-    from app.services.system import runtime
-
-    if runtime.is_updating():
-        raise AppError(
-            ErrorCode.INTERNAL_ERROR,
-            "업데이트를 준비하는 중입니다. 잠시 후 다시 시도해 주세요.",
-            status_code=503,
-            retryable=True,
-        )
 
 
 def _enqueue_validate(document_id: uuid.UUID, correlation_id: str) -> None:
@@ -100,105 +142,172 @@ async def create_document(
     """
     from app.services.system import runtime
 
-    _reject_if_updating()
-    # 대용량 업로드 메모리를 묶기 위해 읽기·저장 구간을 직렬화한다
+    runtime.reject_if_updating()
+    # 대형 파일의 staging I/O와 동일 해시 중복 판정을 한 번에 하나씩 처리한다.
     async with _upload_gate:
+        # 게이트 대기(await) 중 업데이트 준비가 시작됐을 수 있다 — 카운터 등록과 같은
+        # 틱에서 재검사하지 않으면 wait_for_quiescence가 이 업로드를 못 보고 통과해
+        # 백업에 없는 문서가 업데이트 도중 생긴다.
+        runtime.reject_if_updating()
         with runtime.operation():  # 업데이트 정지 지점 계산용 (검사 직후 같은 틱에 등록)
-            return await _create_document_inner(db, user, file, title, correlation_id)
+            return await _create_document_inner(
+                db,
+                user,
+                await _stage_upload(file, get_settings().max_upload_bytes),
+                file.filename or "document.pdf",
+                title,
+                correlation_id,
+            )
+
+
+async def create_document_stream(
+    db: AsyncSession,
+    user: User,
+    chunks: AsyncIterable[bytes],
+    original_filename: str,
+    title: str | None,
+    correlation_id: str,
+    *,
+    declared_size: int | None = None,
+) -> tuple[Document, bool]:
+    """raw ``application/pdf`` body를 framework 임시파일 없이 직접 staging한다."""
+    from app.services.system import runtime
+
+    runtime.reject_if_updating()
+    settings = get_settings()
+    if declared_size is not None and declared_size > settings.max_upload_bytes:
+        raise AppError(
+            ErrorCode.FILE_TOO_LARGE,
+            f"파일이 최대 크기({settings.max_upload_bytes // (1024 * 1024)}MB)를 초과했습니다.",
+            status_code=413,
+        )
+    async with _upload_gate:
+        runtime.reject_if_updating()
+        with runtime.operation():
+            upload = await _stage_chunks(chunks, settings.max_upload_bytes)
+            if declared_size is not None and upload.file_size != declared_size:
+                storage.discard_staged_upload(upload.staged)
+                raise AppError(
+                    ErrorCode.VALIDATION_FAILED,
+                    "전송된 파일 크기가 선택한 파일과 일치하지 않습니다. 다시 시도해 주세요.",
+                    status_code=400,
+                )
+            return await _create_document_inner(
+                db, user, upload, original_filename, title, correlation_id
+            )
 
 
 async def _create_document_inner(
     db: AsyncSession,
     user: User,
-    file: UploadFile,
+    upload: _StagedUploadResult,
+    original_filename: str,
     title: str | None,
     correlation_id: str,
 ) -> tuple[Document, bool]:
-    settings = get_settings()
-    data = await _read_limited(file, settings.max_upload_bytes)
-    validation.check_size(len(data), settings.max_upload_bytes)
-    validation.check_pdf_signature(data[:8])
-    sha256 = validation.compute_sha256(data)
-
-    existing = await _find_duplicate(db, user.id, sha256)
-    if existing is not None:
-        return existing, True
-
-    original_filename = file.filename or "document.pdf"
-    doc = Document(
-        user_id=user.id,
-        title=title or original_filename,
-        original_filename=original_filename,
-        sha256=sha256,
-        file_size=len(data),
-        processing_status=ProcessingStatus.CREATED,
-        processing_stage=ProcessingStage.UPLOAD,
-        processing_progress=0,
-    )
-    db.add(doc)
-    await db.flush()  # id 확보
-
-    key = storage.object_key(doc.id)
-    transition(doc, ProcessingStatus.UPLOADING)
-    await db.commit()
-
     try:
-        await run_in_threadpool(storage.put_original, key, data)
-    except AppError:
-        doc.storage_key = None
-        transition(doc, ProcessingStatus.FAILED)
-        doc.failure_code = ErrorCode.STORAGE_UPLOAD_FAILED
-        doc.failure_message = "파일 저장에 실패했습니다. 재시도해 주세요."
-        await db.commit()
-        raise
+        existing = await _find_duplicate(db, user.id, upload.sha256)
+        if existing is not None:
+            return existing, True
 
-    # storage_key·상태 전이·작업 생성을 단일 커밋으로 묶어 중간 상태가 남지 않게 한다
-    job = DocumentJob(
-        document_id=doc.id,
-        job_type=JobType.VALIDATE_FILE,
-        status=JobStatus.QUEUED,
-        correlation_id=correlation_id,
-    )
-    try:
-        doc.storage_key = key
-        transition(doc, ProcessingStatus.UPLOADED)
-        transition(doc, ProcessingStatus.QUEUED)
-        doc.processing_stage = ProcessingStage.FILE_VALIDATION
-        db.add(job)
+        doc = Document(
+            user_id=user.id,
+            title=title or original_filename,
+            original_filename=original_filename,
+            sha256=upload.sha256,
+            file_size=upload.file_size,
+            processing_status=ProcessingStatus.CREATED,
+            processing_stage=ProcessingStage.UPLOAD,
+            processing_progress=0,
+        )
+        db.add(doc)
+        await db.flush()  # id 확보
+
+        key = storage.object_key(doc.id)
+        transition(doc, ProcessingStatus.UPLOADING)
         await db.commit()
-    except Exception:
-        # DB 갱신 실패 보상: 저장한 파일 제거 + 문서를 실패로 확정 (재업로드 가능하게)
-        await db.rollback()
+
         try:
-            await run_in_threadpool(storage.delete_original, key)
-        except Exception:
-            logger.warning("compensation_delete_failed", document_id=str(doc.id))
+            # DB id가 확정된 뒤 UUID object key로 같은 볼륨 안에서 atomic replace한다.
+            await run_in_threadpool(storage.put_original, key, upload.staged)
+        except BaseException as exc:
+            # 승격 구현이나 파일시스템이 예기치 않게 실패해도 target orphan과
+            # uploading 상태를 남기지 않는다. UUID key라 다른 문서를 지울 수 없다.
+            try:
+                await asyncio.shield(run_in_threadpool(storage.delete_original, key))
+            except Exception:
+                logger.warning("compensation_delete_failed", document_id=str(doc.id))
+            if not isinstance(exc, Exception):
+                raise
+            doc.storage_key = None
+            transition(doc, ProcessingStatus.FAILED)
+            doc.failure_code = ErrorCode.STORAGE_UPLOAD_FAILED
+            doc.failure_message = "파일 저장에 실패했습니다. 재시도해 주세요."
+            await db.commit()
+            if isinstance(exc, AppError):
+                raise
+            raise AppError(
+                ErrorCode.STORAGE_UPLOAD_FAILED,
+                "파일 저장에 실패했습니다. 저장 공간을 확인한 뒤 다시 시도해 주세요.",
+                status_code=502,
+                retryable=True,
+            ) from exc
+
+        # storage_key·상태 전이·작업 생성을 단일 커밋으로 묶어 중간 상태가 남지 않게 한다
+        job = DocumentJob(
+            document_id=doc.id,
+            job_type=JobType.VALIDATE_FILE,
+            status=JobStatus.QUEUED,
+            correlation_id=correlation_id,
+        )
         try:
-            stranded = await db.get(Document, doc.id)  # uploading 상태로 커밋돼 있는 행
-            if stranded is not None:
-                transition(stranded, ProcessingStatus.FAILED)
-                stranded.storage_key = None
-                stranded.failure_code = ErrorCode.INTERNAL_ERROR
-                stranded.failure_message = (
-                    "업로드 처리 중 오류가 발생했습니다. 파일을 다시 업로드해 주세요."
-                )
-                await db.commit()
+            doc.storage_key = key
+            transition(doc, ProcessingStatus.UPLOADED)
+            transition(doc, ProcessingStatus.QUEUED)
+            doc.processing_stage = ProcessingStage.FILE_VALIDATION
+            db.add(job)
+            await db.commit()
+        except BaseException as exc:
+            # DB 갱신 실패 보상: 저장한 파일 제거 + 문서를 실패로 확정 (재업로드 가능하게)
+            try:
+                await asyncio.shield(run_in_threadpool(storage.delete_original, key))
+            except Exception:
+                logger.warning("compensation_delete_failed", document_id=str(doc.id))
+            if not isinstance(exc, Exception):
+                raise
+            await db.rollback()
+            try:
+                stranded = await db.get(Document, doc.id)  # uploading 상태로 커밋돼 있는 행
+                if stranded is not None:
+                    transition(stranded, ProcessingStatus.FAILED)
+                    stranded.storage_key = None
+                    stranded.failure_code = ErrorCode.INTERNAL_ERROR
+                    stranded.failure_message = (
+                        "업로드 처리 중 오류가 발생했습니다. 파일을 다시 업로드해 주세요."
+                    )
+                    await db.commit()
+            except Exception:
+                logger.error("compensation_mark_failed_failed", document_id=str(doc.id))
+            raise
+
+        try:
+            _enqueue_validate(doc.id, correlation_id)
         except Exception:
-            logger.error("compensation_mark_failed_failed", document_id=str(doc.id))
-        raise
+            logger.error("enqueue_failed", document_id=str(doc.id))
+            transition(doc, ProcessingStatus.FAILED)
+            doc.failure_code = ErrorCode.QUEUE_ENQUEUE_FAILED
+            doc.failure_message = "검증 작업 등록에 실패했습니다. 재시도해 주세요."
+            job.status = JobStatus.FAILED
+            job.failure_code = ErrorCode.QUEUE_ENQUEUE_FAILED
+            await db.commit()
 
-    try:
-        _enqueue_validate(doc.id, correlation_id)
-    except Exception:
-        logger.error("enqueue_failed", document_id=str(doc.id))
-        transition(doc, ProcessingStatus.FAILED)
-        doc.failure_code = ErrorCode.QUEUE_ENQUEUE_FAILED
-        doc.failure_message = "검증 작업 등록에 실패했습니다. 재시도해 주세요."
-        job.status = JobStatus.FAILED
-        job.failure_code = ErrorCode.QUEUE_ENQUEUE_FAILED
-        await db.commit()
-
-    return doc, False
+        return doc, False
+    finally:
+        # promote 뒤에는 이미 경로가 없어 noop이고, 중복/DB 실패 때는 실제 파일을 지운다.
+        try:
+            await run_in_threadpool(storage.discard_staged_upload, upload.staged)
+        except Exception:
+            logger.warning("staged_upload_cleanup_failed")
 
 
 async def get_owned_document(
@@ -290,17 +399,39 @@ async def delete_document(db: AsyncSession, user: User, document_id: uuid.UUID) 
             ) from exc
 
     # 파생 추출 데이터 정리 (soft delete라 FK cascade가 돌지 않으므로 명시 삭제;
-    # pages 삭제가 blocks/lines/words/tables로 cascade된다)
+    # pages 삭제가 blocks/lines/tables로 cascade된다)
     from sqlalchemy import delete as sa_delete
     from sqlalchemy import text as sa_text
 
     from app.models.extraction import DocumentPage
-    from app.models.search import DocumentChunk
+    from app.models.search import DocumentChunk, DocumentChunkGeneration
     from app.models.summary import SummaryArtifact, SummaryRun
 
     await db.execute(sa_delete(DocumentPage).where(DocumentPage.document_id == doc.id))
     # document_chunks는 documents.id를 직접 FK로 참조하므로(soft delete 대상 밖) 별도 명시 삭제 필요
-    await db.execute(sa_delete(DocumentChunk).where(DocumentChunk.document_id == doc.id))
+    # 전역 active-generation 필터를 우회해 작성 중/이전 shadow까지 모두 지운다.
+    await db.execute(
+        sa_delete(DocumentChunk)
+        .where(DocumentChunk.document_id == doc.id)
+        .execution_options(include_inactive_chunks=True)
+    )
+    generations = (
+        await db.execute(
+            select(DocumentChunkGeneration).where(
+                DocumentChunkGeneration.document_id == doc.id
+            )
+        )
+    ).scalars()
+    for generation in generations:
+        await db.execute(
+            sa_text("DELETE FROM document_chunks_fts WHERE document_id = :doc_id"),
+            {"doc_id": generation.shadow_document_id},
+        )
+    await db.execute(
+        sa_delete(DocumentChunkGeneration).where(
+            DocumentChunkGeneration.document_id == doc.id
+        )
+    )
     await db.execute(
         sa_text("DELETE FROM document_chunks_fts WHERE document_id = :doc_id"),
         {"doc_id": str(doc.id)},
@@ -308,22 +439,13 @@ async def delete_document(db: AsyncSession, user: User, document_id: uuid.UUID) 
     # 요약 run·artifact도 documents.id를 직접 FK로 참조 — 명시 삭제 필요
     await db.execute(sa_delete(SummaryArtifact).where(SummaryArtifact.document_id == doc.id))
     await db.execute(sa_delete(SummaryRun).where(SummaryRun.document_id == doc.id))
-    # Q&A 스레드·메시지·claim (soft delete라 FK cascade가 안 돎 — 명시 정리)
-    from app.models.qa import QaClaim, QaMessage, QaThread
+    # Q&A 스레드·메시지·claim (soft delete라 FK cascade가 안 돎 — qa 쪽 헬퍼와 공유)
+    from app.services.qa.service import delete_threads_for_document
 
-    thread_ids = (
-        await db.execute(select(QaThread.id).where(QaThread.document_id == doc.id))
-    ).scalars().all()
-    if thread_ids:
-        msg_ids = (
-            await db.execute(select(QaMessage.id).where(QaMessage.thread_id.in_(thread_ids)))
-        ).scalars().all()
-        if msg_ids:
-            await db.execute(sa_delete(QaClaim).where(QaClaim.message_id.in_(msg_ids)))
-        await db.execute(sa_delete(QaMessage).where(QaMessage.thread_id.in_(thread_ids)))
-        await db.execute(sa_delete(QaThread).where(QaThread.document_id == doc.id))
+    await delete_threads_for_document(db, doc.id)
     transition(doc, ProcessingStatus.DELETED)
     doc.deleted_at = datetime.now(UTC)
+    doc.active_chunk_generation_id = None
     doc.storage_key = None
     doc.extraction_completed_at = None
     await db.commit()
@@ -333,7 +455,9 @@ async def delete_document(db: AsyncSession, user: User, document_id: uuid.UUID) 
 async def retry_document(
     db: AsyncSession, user: User, document_id: uuid.UUID, correlation_id: str
 ) -> Document:
-    _reject_if_updating()
+    from app.services.system import runtime
+
+    runtime.reject_if_updating()
     doc = await get_owned_document(db, user, document_id)
     if doc.processing_status != ProcessingStatus.FAILED:
         raise AppError(
@@ -378,9 +502,7 @@ async def rename_document(
     doc = await get_owned_document(db, user, document_id)
     title = title.strip()
     if not title or len(title) > 500:
-        raise AppError(
-            ErrorCode.VALIDATION_FAILED, "제목은 1~500자여야 합니다.", status_code=422
-        )
+        raise AppError(ErrorCode.VALIDATION_FAILED, "제목은 1~500자여야 합니다.", status_code=422)
     doc.title = title
     await db.commit()
     await db.refresh(doc)
@@ -395,4 +517,3 @@ async def list_jobs(db: AsyncSession, user: User, document_id: uuid.UUID) -> lis
         .order_by(DocumentJob.created_at.desc())
     )
     return list((await db.execute(stmt)).scalars())
-

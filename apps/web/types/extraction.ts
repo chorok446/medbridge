@@ -51,6 +51,8 @@ export interface ExtractionTable {
   y1: number;
   rowCount: number;
   columnCount: number;
+  /** 행 우선 셀 격자(첫 행이 머리글, 빈 칸은 null). 화면은 이걸로 진짜 표를 그린다. */
+  cells: (string | null)[][];
   markdownText: string;
   confidence: number;
   extractionStatus: string;

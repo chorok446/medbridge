@@ -15,11 +15,13 @@ export function StartupGate({ children }: { children: React.ReactNode }) {
   const [sidecarState, setSidecarState] = useState<"starting" | "ready" | "failed">("starting");
 
   useEffect(() => {
-    if (!desktop || sidecarState !== "starting") return;
+    if (!desktop) return;
     let cancelled = false;
     const timer = setInterval(async () => {
-      const s = await sidecarStatus().catch(() => "starting" as const);
-      if (!cancelled && s !== "starting") {
+      // 최초 준비 뒤에도 계속 확인한다. sidecar가 대형 OCR/요약 중 종료되면 Rust 감시가
+      // 상태를 failed로 바꾸며, 이 폴링이 메인 화면을 전역 복구 화면으로 전환한다.
+      const s = await sidecarStatus().catch(() => null);
+      if (!cancelled && s !== null) {
         setSidecarState(s);
       }
     }, 700);
@@ -27,7 +29,7 @@ export function StartupGate({ children }: { children: React.ReactNode }) {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [desktop, sidecarState]);
+  }, [desktop]);
 
   if (!desktop || sidecarState === "ready") return <>{children}</>;
 
@@ -44,7 +46,7 @@ export function StartupGate({ children }: { children: React.ReactNode }) {
           <button
             type="button"
             onClick={() => relaunchApp()}
-            className="rounded bg-blue-600 px-5 py-2.5 font-medium text-white hover:bg-blue-700"
+            className="rounded-md bg-blue-600 px-5 py-2.5 font-medium text-white hover:bg-blue-700"
           >
             다시 시작
           </button>
@@ -68,7 +70,9 @@ export function StartupGate({ children }: { children: React.ReactNode }) {
     >
       <span
         aria-hidden
-        className="h-8 w-8 animate-spin rounded-full border-4 border-blue-200 border-t-blue-600"
+        // 회전을 멈춰도 정보를 잃지 않는다 — 진행 중이라는 사실은 옆의 문장이
+        // 말하고, 이 원은 aria-hidden이라 애초에 보조기술에는 없는 요소다.
+        className="h-8 w-8 animate-spin rounded-full border-4 border-blue-200 border-t-blue-600 motion-reduce:animate-none"
       />
       <h1 className="text-lg font-semibold">MedBridge를 준비하고 있습니다.</h1>
       <p className="text-sm text-slate-600">

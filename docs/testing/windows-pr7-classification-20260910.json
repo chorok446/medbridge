@@ -1,0 +1,804 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-09-10",
+  "releaseDecision": "HOLD",
+  "testedCommit": "088226f0a6941dbf01990a276634d39199c1e23e",
+  "installedBuild": "72346017e2781efd2165a61a2cdb2ec0bf0859b0",
+  "modelDigest": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+  "document": {
+    "alias": "large-1",
+    "bytes": 431634439,
+    "pages": 1060,
+    "activeChunks": 16239,
+    "revision": 17
+  },
+  "method": "Read-only retrieval/provider/claim verification replay with original history; not installed GUI or full persistence validation",
+  "replays": [
+    {
+      "history_turns": 6,
+      "retrieved_chunks": 32,
+      "context_markers": {
+        "HFrEF": 2,
+        "HFpEF": 1,
+        "NYHA": 1,
+        "분류": 4
+      },
+      "supported_markers": {
+        "HFrEF": 1,
+        "HFpEF": 1,
+        "NYHA": 0,
+        "분류": 2
+      },
+      "seconds": 17.61345050000091,
+      "status": "conflicting_evidence",
+      "hint": "answered",
+      "supported_count": 3,
+      "rejected": [],
+      "claims": [
+        {
+          "chars": 238,
+          "id_count": 4,
+          "known_id_count": 4,
+          "rejection_reason": null
+        },
+        {
+          "chars": 329,
+          "id_count": 4,
+          "known_id_count": 4,
+          "rejection_reason": null
+        },
+        {
+          "chars": 350,
+          "id_count": 4,
+          "known_id_count": 4,
+          "rejection_reason": null
+        }
+      ],
+      "parser": [
+        {
+          "chars": 439,
+          "sha256": "baf52cd10c26f8e49dafccfe1488feb032f308b785e3dfc3251905f6dba2c323",
+          "events": [
+            "claim"
+          ],
+          "fenced": false
+        },
+        {
+          "chars": 530,
+          "sha256": "6fc8ef3ae383887d50843bfe8246700e19c4b2b78ab31be656a65e5110bc74cb",
+          "events": [
+            "claim"
+          ],
+          "fenced": false
+        },
+        {
+          "chars": 551,
+          "sha256": "e0c39d6386be49b69da34de0a4150240e21e5660274b27c91c6af79e23fbfd18",
+          "events": [
+            "claim"
+          ],
+          "fenced": false
+        },
+        {
+          "chars": 119,
+          "sha256": "17cc038ff0408ba0a326005adb7417039492925befc9726fb56b343b83361cd8",
+          "events": [
+            "final"
+          ],
+          "fenced": false
+        }
+      ],
+      "questionAlias": "classification-request",
+      "runIndex": 1
+    },
+    {
+      "history_turns": 7,
+      "retrieved_chunks": 32,
+      "context_markers": {
+        "HFrEF": 2,
+        "HFpEF": 1,
+        "NYHA": 1,
+        "분류": 4
+      },
+      "supported_markers": {
+        "HFrEF": 1,
+        "HFpEF": 1,
+        "NYHA": 0,
+        "분류": 2
+      },
+      "seconds": 25.195659799999703,
+      "status": "conflicting_evidence",
+      "hint": "answered",
+      "supported_count": 3,
+      "rejected": [],
+      "claims": [
+        {
+          "chars": 239,
+          "id_count": 2,
+          "known_id_count": 2,
+          "rejection_reason": null
+        },
+        {
+          "chars": 330,
+          "id_count": 2,
+          "known_id_count": 2,
+          "rejection_reason": null
+        },
+        {
+          "chars": 317,
+          "id_count": 2,
+          "known_id_count": 2,
+          "rejection_reason": null
+        }
+      ],
+      "parser": [
+        {
+          "chars": 536,
+          "sha256": "544d00629ac21554fc7200c3f13e6ed991bf57e6ffe8c105c6c186af1224325a",
+          "events": [
+            "claim"
+          ],
+          "fenced": false
+        },
+        {
+          "chars": 540,
+          "sha256": "52f29309baf89ccdaf8c3b498dddac8cdeaf038e810a6a45cc9600bd1f8fa315",
+          "events": [
+            "claim"
+          ],
+          "fenced": false
+        },
+        {
+          "chars": 575,
+          "sha256": "bd40e40f59049c872ace1d33f910fc15ef237e3bb445e0ec8d4ed0912d4fb5ad",
+          "events": [
+            "claim"
+          ],
+          "fenced": false
+        },
+        {
+          "chars": 154,
+          "sha256": "79ddd00b83d8262c86aab1dae4000909f1ea3ba068594542d8598c1f710a5096",
+          "events": [
+            "final"
+          ],
+          "fenced": false
+        },
+        {
+          "chars": 362,
+          "sha256": "7b02eabce019068928966df2caf918e0cd59846f99af84db58dc453ae93eb743",
+          "events": [
+            "claim"
+          ],
+          "fenced": false
+        },
+        {
+          "chars": 453,
+          "sha256": "177c2fee92194075dc356f97a64d20cbbf06680d4485c9a35cc0d4757d02d679",
+          "events": [
+            "claim"
+          ],
+          "fenced": false
+        },
+        {
+          "chars": 440,
+          "sha256": "35da06910bac60b4577d3c00efe24d51ca83d66271ad74a6e043c720b1a95c96",
+          "events": [
+            "claim"
+          ],
+          "fenced": false
+        },
+        {
+          "chars": 202,
+          "sha256": "a0e170c3ef343386b62aefc74781457efaf5f570efdc1020fe51caa5eea4f25a",
+          "events": [
+            "final"
+          ],
+          "fenced": false
+        }
+      ],
+      "questionAlias": "classification-short",
+      "runIndex": 1
+    },
+    {
+      "history_turns": 6,
+      "retrieved_chunks": 32,
+      "context_markers": {
+        "HFrEF": 2,
+        "HFpEF": 1,
+        "NYHA": 1,
+        "분류": 4
+      },
+      "supported_markers": {
+        "HFrEF": 1,
+        "HFpEF": 1,
+        "NYHA": 0,
+        "분류": 1
+      },
+      "seconds": 13.398075699999026,
+      "status": "completed",
+      "hint": "answered",
+      "supported_count": 1,
+      "rejected": [
+        "not_lexically_grounded",
+        "number_not_in_source"
+      ],
+      "claims": [
+        {
+          "chars": 238,
+          "id_count": 4,
+          "known_id_count": 4,
+          "rejection_reason": null
+        },
+        {
+          "chars": 226,
+          "id_count": 4,
+          "known_id_count": 4,
+          "rejection_reason": "not_lexically_grounded"
+        },
+        {
+          "chars": 516,
+          "id_count": 3,
+          "known_id_count": 3,
+          "rejection_reason": "number_not_in_source"
+        }
+      ],
+      "parser": [
+        {
+          "chars": 439,
+          "sha256": "baf52cd10c26f8e49dafccfe1488feb032f308b785e3dfc3251905f6dba2c323",
+          "events": [
+            "claim"
+          ],
+          "fenced": false
+        },
+        {
+          "chars": 427,
+          "sha256": "e92ff956bcb775c2fabe4074bb7a9accf05d64ba64c9249c8e1014d35cd92c3f",
+          "events": [
+            "claim"
+          ],
+          "fenced": false
+        },
+        {
+          "chars": 678,
+          "sha256": "61e9dc2025a44e0c3aee3659f8598a79bdfe61f44639175b6f8a6e8c7bcbfe5f",
+          "events": [
+            "claim"
+          ],
+          "fenced": false
+        },
+        {
+          "chars": 118,
+          "sha256": "b5963d6a87a1d9bd368cd4c17de9d8b9750065a0f11c3df31c8a5bde8f4db1b8",
+          "events": [
+            "final"
+          ],
+          "fenced": false
+        }
+      ],
+      "questionAlias": "classification-request",
+      "runIndex": 2
+    },
+    {
+      "history_turns": 7,
+      "retrieved_chunks": 32,
+      "context_markers": {
+        "HFrEF": 2,
+        "HFpEF": 1,
+        "NYHA": 1,
+        "분류": 4
+      },
+      "supported_markers": {
+        "HFrEF": 1,
+        "HFpEF": 1,
+        "NYHA": 0,
+        "분류": 2
+      },
+      "seconds": 26.73150379999788,
+      "status": "conflicting_evidence",
+      "hint": "answered",
+      "supported_count": 3,
+      "rejected": [],
+      "claims": [
+        {
+          "chars": 239,
+          "id_count": 2,
+          "known_id_count": 2,
+          "rejection_reason": null
+        },
+        {
+          "chars": 330,
+          "id_count": 2,
+          "known_id_count": 2,
+          "rejection_reason": null
+        },
+        {
+          "chars": 317,
+          "id_count": 2,
+          "known_id_count": 2,
+          "rejection_reason": null
+        }
+      ],
+      "parser": [
+        {
+          "chars": 536,
+          "sha256": "2b3847b38d573caf8fb211f97d29e3db72b024acb82afc279350016390d17217",
+          "events": [
+            "claim"
+          ],
+          "fenced": false
+        },
+        {
+          "chars": 542,
+          "sha256": "ee918dea0fa80c324b972491d716a061ed9133f69ebaba487b5e6ea5b72b6d74",
+          "events": [
+            "claim"
+          ],
+          "fenced": false
+        },
+        {
+          "chars": 575,
+          "sha256": "bd40e40f59049c872ace1d33f910fc15ef237e3bb445e0ec8d4ed0912d4fb5ad",
+          "events": [
+            "claim"
+          ],
+          "fenced": false
+        },
+        {
+          "chars": 107,
+          "sha256": "ff4c7a588469ea5f4c9d4f1e550ef9d5422ee516dbca9a367d43b15ab9c2fdab",
+          "events": [
+            "final"
+          ],
+          "fenced": false
+        },
+        {
+          "chars": 362,
+          "sha256": "7b02eabce019068928966df2caf918e0cd59846f99af84db58dc453ae93eb743",
+          "events": [
+            "claim"
+          ],
+          "fenced": false
+        },
+        {
+          "chars": 453,
+          "sha256": "177c2fee92194075dc356f97a64d20cbbf06680d4485c9a35cc0d4757d02d679",
+          "events": [
+            "claim"
+          ],
+          "fenced": false
+        },
+        {
+          "chars": 440,
+          "sha256": "35da06910bac60b4577d3c00efe24d51ca83d66271ad74a6e043c720b1a95c96",
+          "events": [
+            "claim"
+          ],
+          "fenced": false
+        },
+        {
+          "chars": 203,
+          "sha256": "f6483122170c2fab999dd9e7cd2fc86f6709cb2de8d340cc4c966456282ef2bd",
+          "events": [
+            "final"
+          ],
+          "fenced": false
+        }
+      ],
+      "questionAlias": "classification-short",
+      "runIndex": 2
+    },
+    {
+      "history_turns": 6,
+      "retrieved_chunks": 32,
+      "context_markers": {
+        "HFrEF": 2,
+        "HFpEF": 1,
+        "NYHA": 1,
+        "분류": 4
+      },
+      "supported_markers": {
+        "HFrEF": 1,
+        "HFpEF": 1,
+        "NYHA": 0,
+        "분류": 1
+      },
+      "seconds": 13.443277200000011,
+      "status": "completed",
+      "hint": "answered",
+      "supported_count": 1,
+      "rejected": [
+        "not_lexically_grounded",
+        "number_not_in_source"
+      ],
+      "claims": [
+        {
+          "chars": 238,
+          "id_count": 4,
+          "known_id_count": 4,
+          "rejection_reason": null
+        },
+        {
+          "chars": 226,
+          "id_count": 4,
+          "known_id_count": 4,
+          "rejection_reason": "not_lexically_grounded"
+        },
+        {
+          "chars": 516,
+          "id_count": 3,
+          "known_id_count": 3,
+          "rejection_reason": "number_not_in_source"
+        }
+      ],
+      "parser": [
+        {
+          "chars": 439,
+          "sha256": "baf52cd10c26f8e49dafccfe1488feb032f308b785e3dfc3251905f6dba2c323",
+          "events": [
+            "claim"
+          ],
+          "fenced": false
+        },
+        {
+          "chars": 427,
+          "sha256": "e92ff956bcb775c2fabe4074bb7a9accf05d64ba64c9249c8e1014d35cd92c3f",
+          "events": [
+            "claim"
+          ],
+          "fenced": false
+        },
+        {
+          "chars": 678,
+          "sha256": "61e9dc2025a44e0c3aee3659f8598a79bdfe61f44639175b6f8a6e8c7bcbfe5f",
+          "events": [
+            "claim"
+          ],
+          "fenced": false
+        },
+        {
+          "chars": 118,
+          "sha256": "b5963d6a87a1d9bd368cd4c17de9d8b9750065a0f11c3df31c8a5bde8f4db1b8",
+          "events": [
+            "final"
+          ],
+          "fenced": false
+        }
+      ],
+      "questionAlias": "classification-request",
+      "runIndex": 3
+    },
+    {
+      "history_turns": 7,
+      "retrieved_chunks": 32,
+      "context_markers": {
+        "HFrEF": 2,
+        "HFpEF": 1,
+        "NYHA": 1,
+        "분류": 4
+      },
+      "supported_markers": {
+        "HFrEF": 1,
+        "HFpEF": 1,
+        "NYHA": 0,
+        "분류": 2
+      },
+      "seconds": 23.31592180000007,
+      "status": "conflicting_evidence",
+      "hint": "answered",
+      "supported_count": 3,
+      "rejected": [],
+      "claims": [
+        {
+          "chars": 239,
+          "id_count": 2,
+          "known_id_count": 2,
+          "rejection_reason": null
+        },
+        {
+          "chars": 330,
+          "id_count": 2,
+          "known_id_count": 2,
+          "rejection_reason": null
+        },
+        {
+          "chars": 317,
+          "id_count": 2,
+          "known_id_count": 2,
+          "rejection_reason": null
+        }
+      ],
+      "parser": [
+        {
+          "chars": 536,
+          "sha256": "2b3847b38d573caf8fb211f97d29e3db72b024acb82afc279350016390d17217",
+          "events": [
+            "claim"
+          ],
+          "fenced": false
+        },
+        {
+          "chars": 542,
+          "sha256": "ee918dea0fa80c324b972491d716a061ed9133f69ebaba487b5e6ea5b72b6d74",
+          "events": [
+            "claim"
+          ],
+          "fenced": false
+        },
+        {
+          "chars": 575,
+          "sha256": "bd40e40f59049c872ace1d33f910fc15ef237e3bb445e0ec8d4ed0912d4fb5ad",
+          "events": [
+            "claim"
+          ],
+          "fenced": false
+        },
+        {
+          "chars": 107,
+          "sha256": "ff4c7a588469ea5f4c9d4f1e550ef9d5422ee516dbca9a367d43b15ab9c2fdab",
+          "events": [
+            "final"
+          ],
+          "fenced": false
+        },
+        {
+          "chars": 362,
+          "sha256": "7b02eabce019068928966df2caf918e0cd59846f99af84db58dc453ae93eb743",
+          "events": [
+            "claim"
+          ],
+          "fenced": false
+        },
+        {
+          "chars": 453,
+          "sha256": "177c2fee92194075dc356f97a64d20cbbf06680d4485c9a35cc0d4757d02d679",
+          "events": [
+            "claim"
+          ],
+          "fenced": false
+        },
+        {
+          "chars": 440,
+          "sha256": "35da06910bac60b4577d3c00efe24d51ca83d66271ad74a6e043c720b1a95c96",
+          "events": [
+            "claim"
+          ],
+          "fenced": false
+        },
+        {
+          "chars": 203,
+          "sha256": "f6483122170c2fab999dd9e7cd2fc86f6709cb2de8d340cc4c966456282ef2bd",
+          "events": [
+            "final"
+          ],
+          "fenced": false
+        }
+      ],
+      "questionAlias": "classification-short",
+      "runIndex": 3
+    }
+  ],
+  "retryObservations": {
+    "missingSourceRetries": 3,
+    "missingSourceRetriesRecovered": 3,
+    "http500Recovered": 1
+  },
+  "livePreservation": {
+    "unchanged": true,
+    "before": {
+      "quick_check": "ok",
+      "foreign_key_violations": 0,
+      "unchanged_tables": {
+        "documents": {
+          "rows": 12,
+          "sha256": "c3a70a020aa70b9318ad45063d61edbe52be8d9f82716ea1c3e4cc7386541022",
+          "matches_backup": true
+        },
+        "document_pages": {
+          "rows": 4339,
+          "sha256": "042fba7ec097311e0edc63e11f09154df7bf919511d1ed6bcda72cb490cc06c7",
+          "matches_backup": true
+        },
+        "document_blocks": {
+          "rows": 364819,
+          "sha256": "a5f391b6db39fe6ab4a1147b6bb63212c79e14ee4e9660940fee95811132372b",
+          "matches_backup": true
+        },
+        "summary_settings": {
+          "rows": 1,
+          "sha256": "81ff5a90db10b3a83102e2ff05e5a1443c01f1bd8b5c12404cb3ea180e2b2421",
+          "matches_backup": true
+        }
+      },
+      "original_qa_rows": {
+        "qa_threads": {
+          "rows": 19,
+          "unchanged": 19
+        },
+        "qa_messages": {
+          "rows": 90,
+          "unchanged": 90
+        },
+        "qa_claims": {
+          "rows": 201,
+          "unchanged": 201
+        }
+      },
+      "current_qa_fingerprints": {
+        "qa_threads": {
+          "rows": 21,
+          "sha256": "bb7a8178cbae49b19e6559b5c87232033604e2458d252400af0087cbce3ab8fe"
+        },
+        "qa_messages": {
+          "rows": 104,
+          "sha256": "1965cf819fe026d67c2362af619b8a4520203b6bc9166750059d8efaf59125eb"
+        },
+        "qa_claims": {
+          "rows": 205,
+          "sha256": "d5c57261d6e83c61586a838281ff2208c4d890572cd41454630701a947686b18"
+        }
+      },
+      "pre_test_qa_preservation": {
+        "qa_threads": {
+          "rows": 20,
+          "sha256": "d76ad8b047938dc285e6816f812788ed424418780f5dc0741b9fd86fd79de2aa",
+          "matches_before_test": true
+        },
+        "qa_messages": {
+          "rows": 94,
+          "sha256": "d4528e99cac61c2b8e1677e9db2f0238ebff18ed000e070fec96de6b74534875",
+          "matches_before_test": true
+        },
+        "qa_claims": {
+          "rows": 202,
+          "sha256": "2be50a058977cc20dbdedba7b4120588ae0e2759b2b2ab59a0ccdc01c84b1539",
+          "matches_before_test": true
+        }
+      },
+      "active_qa": 0
+    },
+    "after": {
+      "quick_check": "ok",
+      "foreign_key_violations": 0,
+      "unchanged_tables": {
+        "documents": {
+          "rows": 12,
+          "sha256": "c3a70a020aa70b9318ad45063d61edbe52be8d9f82716ea1c3e4cc7386541022",
+          "matches_backup": true
+        },
+        "document_pages": {
+          "rows": 4339,
+          "sha256": "042fba7ec097311e0edc63e11f09154df7bf919511d1ed6bcda72cb490cc06c7",
+          "matches_backup": true
+        },
+        "document_blocks": {
+          "rows": 364819,
+          "sha256": "a5f391b6db39fe6ab4a1147b6bb63212c79e14ee4e9660940fee95811132372b",
+          "matches_backup": true
+        },
+        "summary_settings": {
+          "rows": 1,
+          "sha256": "81ff5a90db10b3a83102e2ff05e5a1443c01f1bd8b5c12404cb3ea180e2b2421",
+          "matches_backup": true
+        }
+      },
+      "original_qa_rows": {
+        "qa_threads": {
+          "rows": 19,
+          "unchanged": 19
+        },
+        "qa_messages": {
+          "rows": 90,
+          "unchanged": 90
+        },
+        "qa_claims": {
+          "rows": 201,
+          "unchanged": 201
+        }
+      },
+      "current_qa_fingerprints": {
+        "qa_threads": {
+          "rows": 21,
+          "sha256": "bb7a8178cbae49b19e6559b5c87232033604e2458d252400af0087cbce3ab8fe"
+        },
+        "qa_messages": {
+          "rows": 104,
+          "sha256": "1965cf819fe026d67c2362af619b8a4520203b6bc9166750059d8efaf59125eb"
+        },
+        "qa_claims": {
+          "rows": 205,
+          "sha256": "d5c57261d6e83c61586a838281ff2208c4d890572cd41454630701a947686b18"
+        }
+      },
+      "pre_test_qa_preservation": {
+        "qa_threads": {
+          "rows": 20,
+          "sha256": "d76ad8b047938dc285e6816f812788ed424418780f5dc0741b9fd86fd79de2aa",
+          "matches_before_test": true
+        },
+        "qa_messages": {
+          "rows": 94,
+          "sha256": "d4528e99cac61c2b8e1677e9db2f0238ebff18ed000e070fec96de6b74534875",
+          "matches_before_test": true
+        },
+        "qa_claims": {
+          "rows": 202,
+          "sha256": "2be50a058977cc20dbdedba7b4120588ae0e2759b2b2ab59a0ccdc01c84b1539",
+          "matches_before_test": true
+        }
+      },
+      "active_qa": 0
+    }
+  },
+  "tests": {
+    "apiPassed": 1362,
+    "apiSkipped": 4,
+    "apiWarnings": 1,
+    "apiSeconds": 121.15,
+    "ruff": "passed",
+    "mypySources": 130,
+    "mypy": "passed",
+    "diffCheck": "passed",
+    "originalFullSuite": {
+      "passed": 1360,
+      "failed": 1,
+      "skipped": 4,
+      "failure": "Windows mock NDJSON EOF ConnectionResetError 10054"
+    },
+    "isolatedOriginalMockResults": [
+      "passed",
+      "passed",
+      "failed: ConnectionResetError 10054"
+    ],
+    "fixedMockTests": {
+      "passed": 26,
+      "byteLengthEofCycles": 20
+    }
+  },
+  "safetyFailureDiagnosis": {
+    "synthetic_claim_text": "심장은 온몸에 혈액을 보내는 근육 기관이다라는 문장에서 '심장'은 혈액을 펌프하는 주요 기관을 가리킨다.",
+    "forbidden_terms": [
+      "펌프"
+    ],
+    "verification": "supported",
+    "source_count": 1,
+    "source_texts": [
+      "심부전의 이해 - 1장\n\n문단 1. 심장은 온몸에 혈액을 보내는 근육 기관이다.\n\n문단 2. 심장은 온몸에 혈액을 보내는 근육 기관이다.\n\n문단 3. 심장은 온몸에 혈액을 보내는 근육 기관이다.\n\n문단 4. 심장은 온몸에 혈액을 보내는 근육 기관이다.\n\n문단 5. 심장은 온몸에 혈액을 보내는 근육 기관이다.\n\n문단 6. 심장은 온몸에 혈액을 보내는 근육 기관이다.\n\n문단 7. 심장은 온몸에 혈액을 보내는 근육 기관이다.\n\n문단 8. 심장은 온몸에 혈액을 보내는 근육 기관이다.\n\n문단 9. 심장은 온몸에 혈액을 보내는 근육 기관이다.\n\n문단 10. 심장은 온몸에 혈액을 보내는 근육 기관이다.\n\n문단 11. 심장은 온몸에 혈액을 보내는 근육 기관이다.\n\n문단 12. 심장은 온몸에 혈액을 보내는 근육 기관이다."
+    ],
+    "quote_matches": 0,
+    "shared_tokens": [
+      "근육",
+      "보내는",
+      "심장은",
+      "온몸에",
+      "혈액을"
+    ],
+    "claim_token_count": 12,
+    "source_contains_forbidden": false,
+    "target_saved_claims": 37,
+    "method": "Read-only inspection of the original failed synthetic evaluation DB; no model rerun",
+    "rootCause": "Unquoted source repetition contributes five shared tokens out of twelve; no sentence quote is detected, so unsupported expansion is not separately grounded",
+    "resolved": false
+  },
+  "modelEvaluation": {
+    "runs": 39,
+    "passes": 38,
+    "exitCode": 1,
+    "verdict": "release_hold",
+    "failedCase": "grounded_quote_without_expansion",
+    "failedRunIndex": 2,
+    "failedChecks": [
+      "forbidden"
+    ],
+    "unchangedDatasetAndGate": true,
+    "uninstrumentedFullServicePath": true
+  },
+  "limitations": [
+    "Four of six read-only replays finalized as conflicting_evidence; raw claim semantics were not collected",
+    "NYHA marker absent from supported claims in all six replays; source marker present",
+    "Marker counts and verification acceptance are not semantic completeness proof",
+    "Current changes are not installed; no new GUI validation",
+    "Synthetic safety failure remains unresolved; original failed artifacts retained"
+  ]
+}

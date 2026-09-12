@@ -2,8 +2,8 @@
 
 import { useCallback, useRef, useState } from "react";
 import { ApiError } from "@/lib/api/client";
-import { cancelStream, streamQuestion } from "@/lib/api/qa-stream";
-import type { QaMessage, QaStreamPhase, QaStreamSource } from "@/types/qa";
+import { cancelStream, streamQuestion, streamRetry } from "@/lib/api/qa-stream";
+import type { QaMessage, QaStreamEvent, QaStreamPhase, QaStreamSource } from "@/types/qa";
 
 export interface StreamedClaim {
   claimIndex: number;
@@ -48,8 +48,14 @@ export function useQaStream(documentId: string) {
     setState(IDLE);
   }, []);
 
-  const ask = useCallback(
-    async (threadId: string, question: string) => {
+  const run = useCallback(
+    async (
+      threadId: string,
+      start: (opts: {
+        signal: AbortSignal;
+        onEvent: (event: QaStreamEvent) => void;
+      }) => Promise<void>,
+    ) => {
       abortRef.current?.abort();
       const gen = (genRef.current += 1);
       const controller = new AbortController();
@@ -61,7 +67,7 @@ export function useQaStream(documentId: string) {
       let sawTerminal = false;
 
       try {
-        await streamQuestion(documentId, threadId, question, {
+        await start({
           signal: controller.signal,
           onEvent: (event) => {
             if (!fresh()) return;
@@ -120,21 +126,50 @@ export function useQaStream(documentId: string) {
         setState((s) => ({ ...s, phase: "failed", errorStatus: status }));
       }
     },
-    [documentId],
+    [],
+  );
+
+  const ask = useCallback(
+    async (threadId: string, question: string, learnerLevel?: string) => {
+      await run(threadId, (opts) =>
+        streamQuestion(documentId, threadId, question, { ...opts, learnerLevel }),
+      );
+    },
+    [documentId, run],
+  );
+
+  const retry = useCallback(
+    async (threadId: string, learnerLevel?: string) => {
+      await run(threadId, (opts) =>
+        streamRetry(documentId, threadId, { ...opts, learnerLevel }),
+      );
+    },
+    [documentId, run],
   );
 
   const cancel = useCallback(async () => {
     const active = activeRef.current;
+    // 취소 시점의 연결만 끊는다 — 대기 중 새 질문이 시작되면 그 연결은 건드리지 않는다.
+    const controller = abortRef.current;
     setState((s) => ({ ...s, phase: "cancelling" }));
+    // started 이벤트 전에 취소하면 messageId가 아직 없다 — 서버는 이미 메시지를 만들었을
+    // 수 있으므로 바로 끊지 말고 잠깐 기다려 서버 취소를 전달한다. 안 그러면 서버가
+    // CANCELLED 대신 CONNECTION_LOST로 확정해 "연결이 끊겼다"는 오류로 표시된다.
+    if (active && !active.messageId) {
+      const deadline = Date.now() + 3000;
+      while (!active.messageId && Date.now() < deadline && activeRef.current === active) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+    }
     // 서버에 취소를 알린다(멱등). 그다음 로컬 연결을 끊는다.
-    if (active?.messageId) {
+    if (active?.messageId && activeRef.current === active) {
       try {
         await cancelStream(documentId, active.threadId, active.messageId);
       } catch {
         // 취소 API 실패는 무시 — 연결을 끊는 것만으로도 클라이언트는 종료된다.
       }
     }
-    abortRef.current?.abort();
+    controller?.abort();
     setState((s) => (s.phase === "cancelling" ? { ...s, phase: "cancelled" } : s));
   }, [documentId]);
 
@@ -145,5 +180,5 @@ export function useQaStream(documentId: string) {
     state.phase !== "interrupted" &&
     state.phase !== "failed";
 
-  return { state, active, ask, cancel, reset };
+  return { state, active, ask, retry, cancel, reset };
 }

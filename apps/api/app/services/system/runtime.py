@@ -8,10 +8,8 @@ import asyncio
 import contextlib
 import json
 import os
-import shutil
 import sqlite3
 import sys
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import IO
 
@@ -19,12 +17,21 @@ from app import __version__
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.core.paths import get_path_provider
+from app.services.system.backups import (
+    enforce_total_budget,
+    next_backup_path,
+    prune_backups,
+)
 
 logger = get_logger(__name__)
 
 _updating = False
 _active_operations = 0
 _lock_handle: IO[bytes] | None = None
+
+
+class QuiescenceTimeout(RuntimeError):
+    """업데이트 안전 지점까지 제한 시간 안에 도달하지 못했다."""
 
 
 def runtime_dir() -> Path:
@@ -94,11 +101,27 @@ def set_updating(value: bool) -> None:
     _updating = value
 
 
+def reject_if_updating() -> None:
+    """업데이트 준비 중에는 새 문서 작업(업로드·추출·OCR)을 시작하지 않는다.
+
+    문구·상태코드가 호출부마다 갈라지지 않게 여기 한 곳에서만 정의한다.
+    """
+    from app.core.errors import AppError, ErrorCode
+
+    if _updating:
+        raise AppError(
+            ErrorCode.INTERNAL_ERROR,
+            "업데이트를 준비하는 중입니다. 잠시 후 다시 시도해 주세요.",
+            status_code=503,
+            retryable=True,
+        )
+
+
 @contextlib.contextmanager
 def operation():
     """진행 중인 문서 작업(업로드 등) 추적 — 업데이트 정지 지점 계산에 사용.
 
-    수락 검사(_reject_if_updating)와 카운터 증가는 같은 이벤트 루프 틱에서 일어나므로
+    수락 검사(reject_if_updating)와 카운터 증가는 같은 이벤트 루프 틱에서 일어나므로
     게이트를 닫은 뒤 카운터가 0이 되면 새 변경이 없음이 보장된다.
     """
     global _active_operations
@@ -114,17 +137,29 @@ def active_operations() -> int:
 
 
 async def wait_for_quiescence(timeout_seconds: float = 60.0) -> None:
-    """진행 중 요청과 백그라운드 작업이 모두 끝날 때까지 대기."""
+    """진행 중 요청과 백그라운드 작업이 모두 끝날 때까지 제한 시간 안에서 대기.
+
+    `runner.drain()`은 한 번 들어가면 수 시간짜리 요약이 끝날 때까지 돌아오지 않는다.
+    여기서는 작업을 소유하거나 완료시킬 필요가 없고, 안전 지점에 도달했는지만 보면
+    되므로 비차단 상태를 폴링한다. 제한 시간을 넘기면 백업을 진행하지 않고 실패한다.
+    """
     from app.services.tasks.runner import get_task_runner
 
     runner = get_task_runner()
-    deadline = asyncio.get_event_loop().time() + timeout_seconds
-    while asyncio.get_event_loop().time() < deadline:
-        await runner.drain()
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + max(0.0, timeout_seconds)
+    while True:
         if _active_operations == 0 and not runner.has_pending():
             return
-        await asyncio.sleep(0.05)
-    logger.warning("quiescence_timeout", active=_active_operations)
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            logger.warning(
+                "quiescence_timeout",
+                active=_active_operations,
+                pending=runner.has_pending(),
+            )
+            raise QuiescenceTimeout("background work did not reach a safe update point")
+        await asyncio.sleep(min(0.05, remaining))
 
 
 def checkpoint_and_backup() -> str | None:
@@ -137,16 +172,28 @@ def checkpoint_and_backup() -> str | None:
     if not db_path.is_file():
         return None
 
-    with sqlite3.connect(db_path) as conn:
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-
-    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     provider.backups_dir.mkdir(parents=True, exist_ok=True)
-    backup = provider.backups_dir / f"pre-update-{__version__}-{stamp}.db"
-    suffix = 1
-    while backup.exists():  # 같은 초에 재실행돼도 기존 백업을 덮어쓰지 않는다
-        backup = provider.backups_dir / f"pre-update-{__version__}-{stamp}-{suffix}.db"
-        suffix += 1
-    shutil.copy2(db_path, backup)
+    backup = next_backup_path(provider.backups_dir, "pre-update-", __version__)
+
+    # SQLite의 백업 API로 뜬다. shutil.copy2는 파일을 그냥 읽어 복사하므로, 수 GB DB를
+    # 복사하는 수십 초~수 분 동안 다른 요청이 DB에 쓰면 사본이 찢어진다 — 앞부분과
+    # 뒷부분이 서로 다른 시점이 되어 'database disk image is malformed'로 열리지
+    # 않는다. 되돌릴 목적으로 만든 백업이 되돌릴 수 없는 파일이 되는 것이 최악이다.
+    #
+    # reject_if_updating은 업로드·추출·OCR **시작**만 막고, Q&A 답변 저장·스레드
+    # 삭제·설정 저장 같은 쓰기는 그대로 진행된다. 그 경로를 전부 잠그는 대신 SQLite가
+    # 이미 제공하는 것을 쓴다: `.backup()`은 복사 중 원본이 바뀌면 바뀐 페이지를 다시
+    # 읽어 일관된 스냅샷을 만든다. 쓰기를 막지 않으므로 사용자 작업도 멈추지 않는다.
+    # Connection의 context manager는 commit/rollback만 하므로 직접 close해야
+    # Windows의 파일 잠금과 DB 핸들이 GC 시점까지 남지 않는다.
+    with contextlib.closing(sqlite3.connect(db_path)) as src:
+        # 먼저 WAL을 본체로 접어 넣는다 — 사본이 WAL 파일 없이도 완결되게.
+        src.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        with contextlib.closing(sqlite3.connect(backup)) as dst:
+            src.backup(dst)
     logger.info("pre_update_backup_created", backup=backup.name)
+    # 새 백업이 자리 잡은 뒤에 정리한다 — 먼저 지우면 복사가 실패했을 때
+    # 되돌릴 사본만 없앤 꼴이 된다.
+    prune_backups(provider.backups_dir, "pre-update-")
+    enforce_total_budget(provider.backups_dir)
     return backup.name

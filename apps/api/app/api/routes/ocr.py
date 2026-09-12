@@ -11,7 +11,6 @@ from app.api.deps import get_current_user
 from app.core.errors import AppError, ErrorCode
 from app.core.logging import correlation_id_var
 from app.db.session import get_db
-from app.models.document import DocumentJob
 from app.models.enums import JobStatus, JobType, OcrRunStatus
 from app.models.extraction import DocumentPage
 from app.models.ocr import OcrRun
@@ -20,6 +19,7 @@ from app.schemas.common import CamelModel, Envelope
 from app.schemas.document import DocumentOut
 from app.services.documents.service import get_owned_document
 from app.services.ocr import service as ocr_service
+from app.services.tasks.jobs import latest_job
 from app.utils.responses import wrap
 
 router = APIRouter(prefix="/api/documents", tags=["ocr"])
@@ -27,7 +27,12 @@ router = APIRouter(prefix="/api/documents", tags=["ocr"])
 
 class OcrOptions(CamelModel):
     language: str = Field(default="kor+eng", pattern=r"^[a-z+_]{2,30}$")
-    quality: str = Field(default="standard")
+    # 기본값을 여기서 정하지 않는다. 시작은 standard, 재시도는 high가 기본이라 값이
+    # 다르고, 무엇보다 프런트엔드는 빈 `{}`를 보낸다. 여기에 "standard"를 박아두면
+    # `body or OcrOptions(quality="high")` 같은 fallback이 영원히 죽는다 — 빈 body도
+    # 채워진 모델이라 truthy이기 때문이다. 실제로 '다시 읽기'가 첫 실행과 같은 DPI로
+    # 돌아, 결정론적 엔진이 바이트 단위로 같은 결과를 내는 no-op이 되어 있었다.
+    quality: str | None = None
     pages: list[int] | None = None
 
 
@@ -67,7 +72,7 @@ async def start_ocr(
         doc,
         correlation_id_var.get(),
         language=options.language,
-        quality=options.quality,
+        quality=options.quality or "standard",
         pages=options.pages,
     )
     return wrap(OcrStartOut(target_pages=targets, started=targets > 0))
@@ -82,7 +87,7 @@ async def retry_ocr(
 ) -> dict:
     """실패·저품질 페이지 재시도 (고품질 모드 기본)."""
     doc = await get_owned_document(db, user, document_id)
-    options = body or OcrOptions(quality="high")
+    options = body or OcrOptions()
     pages = options.pages
     if pages is None:
         rows = (
@@ -97,9 +102,7 @@ async def retry_ocr(
         ).all()
         pages = [r[0] for r in rows]
         if not pages:
-            raise AppError(
-                ErrorCode.INVALID_STATE, "다시 읽을 페이지가 없습니다.", status_code=409
-            )
+            raise AppError(ErrorCode.INVALID_STATE, "다시 읽을 페이지가 없습니다.", status_code=409)
     doc, targets = await ocr_service.start_ocr(
         db,
         doc,
@@ -130,21 +133,11 @@ async def ocr_status(
 ) -> dict:
     await get_owned_document(db, user, document_id)
     pages = (
-        await db.execute(
-            select(DocumentPage).where(DocumentPage.document_id == document_id)
-        )
-    ).scalars().all()
-    job = (
-        await db.execute(
-            select(DocumentJob)
-            .where(
-                DocumentJob.document_id == document_id,
-                DocumentJob.job_type == JobType.OCR_DOCUMENT,
-            )
-            .order_by(DocumentJob.created_at.desc())
-            .limit(1)
-        )
-    ).scalars().first()
+        (await db.execute(select(DocumentPage).where(DocumentPage.document_id == document_id)))
+        .scalars()
+        .all()
+    )
+    job = await latest_job(db, document_id, JobType.OCR_DOCUMENT)
     in_progress = [p for p in pages if p.ocr_status in ("pending", "running")]
     # 진행률은 최근 잡 범위로 한정한다 — 과거 실행의 완료 페이지를 합산하지 않는다
     done_page_ids: set[uuid.UUID] = set()
@@ -191,7 +184,7 @@ async def ocr_single_page(
         doc,
         correlation_id_var.get(),
         language=options.language,
-        quality=options.quality,
+        quality=options.quality or "standard",
         pages=[page_number],
     )
     return wrap(OcrStartOut(target_pages=targets, started=targets > 0))

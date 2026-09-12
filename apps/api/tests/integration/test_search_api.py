@@ -3,7 +3,7 @@
 import uuid
 
 from app.db.session import get_session_factory
-from app.models.document import DocumentJob
+from app.models.document import Document, DocumentJob
 from app.models.enums import JobStatus, JobType
 from tests import extraction_fixtures as fx
 from tests.integration.conftest import drain_jobs
@@ -79,6 +79,50 @@ class TestSearchApiValidation:
         )
         assert res.status_code == 200
         assert res.json()["data"] == []
+
+    async def test_search_and_rebuild_fail_closed_while_ocr_is_active(self, client):
+        """OCR 페이지 커밋 사이의 기존/혼합 청크를 정상 결과처럼 노출하지 않는다."""
+        doc = await upload_extracted(client, fx.single_column_korean(pages=2))
+        await client.post(f"/api/documents/{doc['id']}/chunks/rebuild")
+        await drain_jobs()
+
+        async with get_session_factory()() as session:
+            session.add(
+                DocumentJob(
+                    document_id=uuid.UUID(doc["id"]),
+                    job_type=JobType.OCR_DOCUMENT,
+                    status=JobStatus.RUNNING,
+                    correlation_id="active-ocr-search-guard",
+                )
+            )
+            await session.commit()
+
+        responses = (
+            await client.post(
+                f"/api/documents/{doc['id']}/search", json={"query": "심장은"}
+            ),
+            await client.post(f"/api/documents/{doc['id']}/chunks/rebuild"),
+        )
+        for response in responses:
+            assert response.status_code == 409
+            assert response.json()["error"]["code"] == "INVALID_STATE"
+            assert response.json()["error"]["retryable"] is True
+
+    async def test_search_rejects_stale_chunk_revision(self, client):
+        doc = await upload_extracted(client, fx.single_column_korean(pages=1))
+        await client.post(f"/api/documents/{doc['id']}/chunks/rebuild")
+        await drain_jobs()
+        async with get_session_factory()() as session:
+            document = await session.get(Document, uuid.UUID(doc["id"]))
+            assert document is not None
+            document.content_revision += 1
+            await session.commit()
+
+        response = await client.post(
+            f"/api/documents/{doc['id']}/search", json={"query": "심장은"}
+        )
+        assert response.status_code == 409
+        assert response.json()["error"]["code"] == "INVALID_STATE"
 
     async def test_search_result_shape_and_click_navigation_fields(self, client):
         doc = await upload_extracted(client, fx.single_column_korean(pages=2))

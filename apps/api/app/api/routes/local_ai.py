@@ -101,10 +101,16 @@ async def list_models(user: User = Depends(get_current_user)) -> dict:
         ModelsOut(
             models=[
                 ModelOut(
-                    model=m.model, tier=m.tier, label=m.label, description=m.description,
-                    approx_bytes=m.approx_bytes, installed=m.installed,
-                    recommended=m.recommended, ram_advice=m.ram_advice,
-                    disk_ok=m.disk_ok, required_bytes=m.required_bytes,
+                    model=m.model,
+                    tier=m.tier,
+                    label=m.label,
+                    description=m.description,
+                    approx_bytes=m.approx_bytes,
+                    installed=m.installed,
+                    recommended=m.recommended,
+                    ram_advice=m.ram_advice,
+                    disk_ok=m.disk_ok,
+                    required_bytes=m.required_bytes,
                 )
                 for m in view.models
             ],
@@ -141,8 +147,10 @@ async def activate(
     view = await local_service.activate(db, body.model, overwrite_external=body.overwrite_external)
     return wrap(
         ActivatedOut(
-            enabled=view.enabled, provider_type=view.provider_type,
-            model_name=view.model_name, is_local=view.is_local,
+            enabled=view.enabled,
+            provider_type=view.provider_type,
+            model_name=view.model_name,
+            is_local=view.is_local,
         )
     )
 

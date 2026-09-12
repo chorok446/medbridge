@@ -4,7 +4,6 @@ import asyncio
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError, ErrorCode
@@ -14,21 +13,13 @@ from app.models.document import Document, DocumentJob
 from app.models.enums import JobStatus, JobType, ProcessingStatus
 from app.services.documents import storage, validation
 from app.services.documents.state_machine import transition
+from app.services.tasks.jobs import latest_job
 
 logger = get_logger(__name__)
 
 
 async def _latest_job(session: AsyncSession, document_id: uuid.UUID) -> DocumentJob | None:
-    stmt = (
-        select(DocumentJob)
-        .where(
-            DocumentJob.document_id == document_id,
-            DocumentJob.job_type == JobType.VALIDATE_FILE,
-        )
-        .order_by(DocumentJob.created_at.desc())
-        .limit(1)
-    )
-    return (await session.execute(stmt)).scalars().first()
+    return await latest_job(session, document_id, JobType.VALIDATE_FILE)
 
 
 def _mark_failed(doc: Document, job: DocumentJob | None, code: str, message: str) -> None:
@@ -85,7 +76,7 @@ async def validate_document(document_id: uuid.UUID, correlation_id: str) -> None
         await session.commit()
 
         try:
-            if not doc.storage_key or not storage.original_exists(doc.storage_key):
+            if not doc.storage_key:
                 _mark_failed(
                     doc,
                     job,
@@ -94,9 +85,16 @@ async def validate_document(document_id: uuid.UUID, correlation_id: str) -> None
                 )
                 await session.commit()
                 return
-            data = await asyncio.to_thread(storage.get_original, doc.storage_key)
-        except AppError:
-            raise
+            original_path = await asyncio.to_thread(storage.resolve_original_path, doc.storage_key)
+            if not await asyncio.to_thread(original_path.is_file):
+                _mark_failed(
+                    doc,
+                    job,
+                    ErrorCode.VALIDATION_FAILED,
+                    "저장된 파일을 찾을 수 없습니다. 파일을 다시 업로드해 주세요.",
+                )
+                await session.commit()
+                return
         except Exception:
             _mark_failed(
                 doc,
@@ -111,13 +109,15 @@ async def validate_document(document_id: uuid.UUID, correlation_id: str) -> None
         await session.commit()
 
         try:
-            result = await asyncio.to_thread(validation.inspect_pdf, data)
+            # PdfReader에는 저장소가 traversal 검사를 마친 경로의 file handle을 넘긴다.
+            # 해시와 크기도 bounded chunk로 다시 계산해 저장 중 변조를 함께 검출한다.
+            result = await asyncio.to_thread(validation.inspect_pdf_path, original_path)
             if result.sha256 != doc.sha256:
                 raise AppError(
                     ErrorCode.VALIDATION_FAILED,
                     "저장된 파일이 업로드된 파일과 일치하지 않습니다.",
                 )
-            if len(data) != doc.file_size:
+            if result.file_size != doc.file_size:
                 raise AppError(ErrorCode.VALIDATION_FAILED, "파일 크기가 일치하지 않습니다.")
         except AppError as exc:
             # 검증 판정 실패: 재시도해도 결과가 같으므로 즉시 실패 처리

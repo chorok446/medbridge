@@ -32,8 +32,11 @@ def build_groups(chunks: list[ChunkInput]) -> list[ChunkGroup]:
     - 섹션 제목이 바뀌어도 현재 그룹이 GROUP_MIN_CHARS 미만이면 계속 채운다(작은 섹션 병합).
     - 단일 청크가 상한보다 길면 그 청크만 담긴 그룹이 된다(청크를 쪼개지 않는다).
 
-    group.section_title은 그룹의 **첫 청크** 제목이다. 여러 섹션이 병합된 그룹에서는
-    대표 제목으로만 쓰이며, 출처는 제목이 아니라 chunk id로 유지된다.
+    group.section_title은 그룹이 **한 절만** 담을 때의 그 제목이다. 여러 절이 합쳐진
+    그룹은 None이 된다 — 첫 절의 제목을 대표로 쓰면 그 그룹의 요약이 구역 요약 카드가
+    될 때 제목과 내용이 어긋난다('적응증' 아래에 금기·부작용이 섞여 나온다). 작은 절을
+    합치는 것 자체는 옳지만(제목마다 끊으면 호출이 폭증한다), 합쳤다는 사실을 제목이
+    숨겨서는 안 된다. 출처는 제목이 아니라 chunk id로 유지된다.
     """
     groups: list[ChunkGroup] = []
     current: ChunkGroup | None = None
@@ -54,4 +57,22 @@ def build_groups(chunks: list[ChunkInput]) -> list[ChunkGroup]:
             groups.append(current)
         current.chunks.append(chunk)
 
+    for group in groups:
+        # 등장 순서를 지킨 고유 제목 목록. set을 쓰면 순서가 뒤섞여 "첫 절"을 고를 수 없다.
+        titles: list[str] = []
+        for c in group.chunks:
+            if c.section_title and c.section_title not in titles:
+                titles.append(c.section_title)
+        if len(titles) > 1:
+            # 여러 절이 한 그룹에 담겼을 때 첫 절의 제목만 내세우면 나머지 절의 내용까지
+            # 그 제목 아래 있는 것처럼 보인다. 그렇다고 None으로 두면 제목이 통째로
+            # 사라지는데, GROUP_MIN_CHARS 때문에 실제 교재의 그룹은 거의 항상 2~3개
+            # 절을 삼키므로 '섹션별 요약' 카드 대부분이 제목을 잃는다 — 사용자는 제목
+            # 없는 문단만 보며 각 요약이 문서의 어디인지 알 수 없게 된다.
+            #
+            # 첫 절을 밝히되 더 있다는 사실을 함께 적는다. 둘 다 참이고, 사용자가
+            # 원문에서 찾아갈 지점도 준다.
+            group.section_title = f"{titles[0]} 외 {len(titles) - 1}개 절"
+        elif titles:
+            group.section_title = titles[0]
     return [g for g in groups if g.chunks]

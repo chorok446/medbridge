@@ -1,0 +1,422 @@
+{
+  "schema_version": 1,
+  "validation_date": "2026-09-10",
+  "installed_product_head": "324e9fda6b3c876d7f513def00889ed4b0c19e6e",
+  "tested_product_commit": "3dd178b7f369d502624a01775434c352b3674ea0",
+  "scope_notes": [
+    "Actual document replays used read-only SQLite and local Ollama; no GUI or persistence.",
+    "Raw claim diagnostics refer to the model's incomplete source IDs before completion. Accepted claims use the completed IDs and unchanged grounding checks.",
+    "Replays ran in the working tree later committed; fixed clean commit whole-service evaluation is recorded separately.",
+    "No document text, filenames, paths, internal source IDs, or screenshots are published."
+  ],
+  "large_document": {
+    "alias": "large-1",
+    "bytes": 431634439,
+    "pages": 1060,
+    "active_chunks": 16239,
+    "content_revision": 17
+  },
+  "prompt_only_probe": {
+    "generated_at": "2026-09-09T21:26:12.812470+00:00",
+    "question": "심부전의 정의를 설명하는 원문 한 문장과 출처를 보여주세요.",
+    "scope": "read-only retrieval + streaming provider + claim verification; no GUI or persistence",
+    "model_digest_before": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+    "model_digest_after": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+    "retrieval_seconds": 0.03784170000017184,
+    "retrieved_chunks": 32,
+    "context_chars": 2090,
+    "runs": [
+      {
+        "run": 1,
+        "seconds": 4.801204000000325,
+        "status": "insufficient_evidence",
+        "final_hint": "answered",
+        "rejection_reasons": [
+          "not_lexically_grounded"
+        ],
+        "claim_diagnostics": [
+          {
+            "claim_sha256": "4346c4da29d604202ea949c01fe0dee4668a102a044f360bdf104c08f87609a9",
+            "claim_chars": 121,
+            "source_count": 2,
+            "source_context_positions": [
+              5,
+              6
+            ],
+            "source_pages": [
+              138
+            ],
+            "whole_claim_overlap": true,
+            "unquoted_assertion_overlap": true,
+            "polarity_consistent": false,
+            "source_has_definition_start": true,
+            "source_has_definition_end": false
+          }
+        ],
+        "answer_sha256": "192ce3fe96b112735b97029b3cac4dc567b2c7ba6cdd064faf7d2f1b33bb06d0",
+        "claims": []
+      },
+      {
+        "run": 2,
+        "seconds": 3.573432700000012,
+        "status": "insufficient_evidence",
+        "final_hint": "answered",
+        "rejection_reasons": [
+          "not_lexically_grounded"
+        ],
+        "claim_diagnostics": [
+          {
+            "claim_sha256": "4346c4da29d604202ea949c01fe0dee4668a102a044f360bdf104c08f87609a9",
+            "claim_chars": 121,
+            "source_count": 2,
+            "source_context_positions": [
+              5,
+              6
+            ],
+            "source_pages": [
+              138
+            ],
+            "whole_claim_overlap": true,
+            "unquoted_assertion_overlap": true,
+            "polarity_consistent": false,
+            "source_has_definition_start": true,
+            "source_has_definition_end": false
+          }
+        ],
+        "answer_sha256": "192ce3fe96b112735b97029b3cac4dc567b2c7ba6cdd064faf7d2f1b33bb06d0",
+        "claims": []
+      },
+      {
+        "run": 3,
+        "seconds": 3.563008799999807,
+        "status": "insufficient_evidence",
+        "final_hint": "answered",
+        "rejection_reasons": [
+          "not_lexically_grounded"
+        ],
+        "claim_diagnostics": [
+          {
+            "claim_sha256": "4346c4da29d604202ea949c01fe0dee4668a102a044f360bdf104c08f87609a9",
+            "claim_chars": 121,
+            "source_count": 2,
+            "source_context_positions": [
+              5,
+              6
+            ],
+            "source_pages": [
+              138
+            ],
+            "whole_claim_overlap": true,
+            "unquoted_assertion_overlap": true,
+            "polarity_consistent": false,
+            "source_has_definition_start": true,
+            "source_has_definition_end": false
+          }
+        ],
+        "answer_sha256": "192ce3fe96b112735b97029b3cac4dc567b2c7ba6cdd064faf7d2f1b33bb06d0",
+        "claims": []
+      }
+    ]
+  },
+  "fragment_completion_probe": {
+    "generated_at": "2026-09-09T21:32:18.430970+00:00",
+    "question": "심부전의 정의를 설명하는 원문 한 문장과 출처를 보여주세요.",
+    "scope": "read-only retrieval + streaming provider + claim verification; no GUI or persistence",
+    "model_digest_before": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+    "model_digest_after": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+    "retrieval_seconds": 0.03596430000015971,
+    "retrieved_chunks": 32,
+    "context_chars": 2090,
+    "runs": [
+      {
+        "run": 1,
+        "seconds": 4.749871699999858,
+        "status": "completed",
+        "final_hint": "answered",
+        "rejection_reasons": [],
+        "claim_diagnostics": [
+          {
+            "claim_sha256": "4346c4da29d604202ea949c01fe0dee4668a102a044f360bdf104c08f87609a9",
+            "claim_chars": 121,
+            "source_count": 2,
+            "source_context_positions": [
+              5,
+              6
+            ],
+            "source_pages": [
+              138
+            ],
+            "whole_claim_overlap": true,
+            "unquoted_assertion_overlap": true,
+            "polarity_consistent": false,
+            "source_has_definition_start": true,
+            "source_has_definition_end": false
+          }
+        ],
+        "answer_sha256": "1b372c7668598e50105e85f5fcc12de7003e59d97dd77d9041941e3c3a2b8e7d",
+        "claims": [
+          {
+            "chars": 121,
+            "sha256": "4346c4da29d604202ea949c01fe0dee4668a102a044f360bdf104c08f87609a9",
+            "pages": [
+              138
+            ],
+            "source_count": 3
+          }
+        ]
+      },
+      {
+        "run": 2,
+        "seconds": 3.3600421000001006,
+        "status": "completed",
+        "final_hint": "answered",
+        "rejection_reasons": [],
+        "claim_diagnostics": [
+          {
+            "claim_sha256": "4346c4da29d604202ea949c01fe0dee4668a102a044f360bdf104c08f87609a9",
+            "claim_chars": 121,
+            "source_count": 2,
+            "source_context_positions": [
+              5,
+              6
+            ],
+            "source_pages": [
+              138
+            ],
+            "whole_claim_overlap": true,
+            "unquoted_assertion_overlap": true,
+            "polarity_consistent": false,
+            "source_has_definition_start": true,
+            "source_has_definition_end": false
+          }
+        ],
+        "answer_sha256": "1b372c7668598e50105e85f5fcc12de7003e59d97dd77d9041941e3c3a2b8e7d",
+        "claims": [
+          {
+            "chars": 121,
+            "sha256": "4346c4da29d604202ea949c01fe0dee4668a102a044f360bdf104c08f87609a9",
+            "pages": [
+              138
+            ],
+            "source_count": 3
+          }
+        ]
+      },
+      {
+        "run": 3,
+        "seconds": 3.4263694999999643,
+        "status": "completed",
+        "final_hint": "answered",
+        "rejection_reasons": [],
+        "claim_diagnostics": [
+          {
+            "claim_sha256": "4346c4da29d604202ea949c01fe0dee4668a102a044f360bdf104c08f87609a9",
+            "claim_chars": 121,
+            "source_count": 2,
+            "source_context_positions": [
+              5,
+              6
+            ],
+            "source_pages": [
+              138
+            ],
+            "whole_claim_overlap": true,
+            "unquoted_assertion_overlap": true,
+            "polarity_consistent": false,
+            "source_has_definition_start": true,
+            "source_has_definition_end": false
+          }
+        ],
+        "answer_sha256": "1b372c7668598e50105e85f5fcc12de7003e59d97dd77d9041941e3c3a2b8e7d",
+        "claims": [
+          {
+            "chars": 121,
+            "sha256": "4346c4da29d604202ea949c01fe0dee4668a102a044f360bdf104c08f87609a9",
+            "pages": [
+              138
+            ],
+            "source_count": 3
+          }
+        ]
+      }
+    ]
+  },
+  "final_product_probe": {
+    "generated_at": "2026-09-09T21:54:00.141860+00:00",
+    "question": "심부전의 정의를 설명하는 원문 한 문장과 출처를 보여주세요.",
+    "scope": "read-only retrieval + streaming provider + claim verification; no GUI or persistence",
+    "model_digest_before": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+    "model_digest_after": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+    "retrieval_seconds": 0.03760150000016438,
+    "retrieved_chunks": 32,
+    "context_chars": 2090,
+    "runs": [
+      {
+        "run": 1,
+        "seconds": 4.766258499999822,
+        "status": "completed",
+        "final_hint": "answered",
+        "rejection_reasons": [],
+        "claim_diagnostics": [
+          {
+            "claim_sha256": "5f3f9c7e562796f780183f1f4411ffa3ac9bb2434e6b80201d1ba133344456c8",
+            "claim_chars": 121,
+            "source_count": 2,
+            "source_context_positions": [
+              5,
+              6
+            ],
+            "source_pages": [
+              138
+            ],
+            "whole_claim_overlap": true,
+            "unquoted_assertion_overlap": true,
+            "polarity_consistent": false,
+            "source_has_definition_start": true,
+            "source_has_definition_end": false
+          }
+        ],
+        "answer_sha256": "8689ac0149b4c233bd715bf78d3aeaf7bf966e6ec1329efb9986790fa5a3c0ce",
+        "claims": [
+          {
+            "chars": 121,
+            "sha256": "5f3f9c7e562796f780183f1f4411ffa3ac9bb2434e6b80201d1ba133344456c8",
+            "pages": [
+              138
+            ],
+            "source_count": 3
+          }
+        ]
+      },
+      {
+        "run": 2,
+        "seconds": 3.353216599999996,
+        "status": "completed",
+        "final_hint": "answered",
+        "rejection_reasons": [],
+        "claim_diagnostics": [
+          {
+            "claim_sha256": "5f3f9c7e562796f780183f1f4411ffa3ac9bb2434e6b80201d1ba133344456c8",
+            "claim_chars": 121,
+            "source_count": 2,
+            "source_context_positions": [
+              5,
+              6
+            ],
+            "source_pages": [
+              138
+            ],
+            "whole_claim_overlap": true,
+            "unquoted_assertion_overlap": true,
+            "polarity_consistent": false,
+            "source_has_definition_start": true,
+            "source_has_definition_end": false
+          }
+        ],
+        "answer_sha256": "8689ac0149b4c233bd715bf78d3aeaf7bf966e6ec1329efb9986790fa5a3c0ce",
+        "claims": [
+          {
+            "chars": 121,
+            "sha256": "5f3f9c7e562796f780183f1f4411ffa3ac9bb2434e6b80201d1ba133344456c8",
+            "pages": [
+              138
+            ],
+            "source_count": 3
+          }
+        ]
+      },
+      {
+        "run": 3,
+        "seconds": 3.371258300000136,
+        "status": "completed",
+        "final_hint": "answered",
+        "rejection_reasons": [],
+        "claim_diagnostics": [
+          {
+            "claim_sha256": "5f3f9c7e562796f780183f1f4411ffa3ac9bb2434e6b80201d1ba133344456c8",
+            "claim_chars": 121,
+            "source_count": 2,
+            "source_context_positions": [
+              5,
+              6
+            ],
+            "source_pages": [
+              138
+            ],
+            "whole_claim_overlap": true,
+            "unquoted_assertion_overlap": true,
+            "polarity_consistent": false,
+            "source_has_definition_start": true,
+            "source_has_definition_end": false
+          }
+        ],
+        "answer_sha256": "8689ac0149b4c233bd715bf78d3aeaf7bf966e6ec1329efb9986790fa5a3c0ce",
+        "claims": [
+          {
+            "chars": 121,
+            "sha256": "5f3f9c7e562796f780183f1f4411ffa3ac9bb2434e6b80201d1ba133344456c8",
+            "pages": [
+              138
+            ],
+            "source_count": 3
+          }
+        ]
+      }
+    ]
+  },
+  "data_preservation": {
+    "quick_check": "ok",
+    "foreign_key_violations": 0,
+    "unchanged_tables": {
+      "documents": {
+        "rows": 12,
+        "sha256": "c3a70a020aa70b9318ad45063d61edbe52be8d9f82716ea1c3e4cc7386541022",
+        "matches_backup": true
+      },
+      "document_pages": {
+        "rows": 4339,
+        "sha256": "042fba7ec097311e0edc63e11f09154df7bf919511d1ed6bcda72cb490cc06c7",
+        "matches_backup": true
+      },
+      "document_blocks": {
+        "rows": 364819,
+        "sha256": "a5f391b6db39fe6ab4a1147b6bb63212c79e14ee4e9660940fee95811132372b",
+        "matches_backup": true
+      },
+      "summary_settings": {
+        "rows": 1,
+        "sha256": "81ff5a90db10b3a83102e2ff05e5a1443c01f1bd8b5c12404cb3ea180e2b2421",
+        "matches_backup": true
+      }
+    },
+    "original_qa_rows": {
+      "qa_threads": {
+        "rows": 19,
+        "unchanged": 19
+      },
+      "qa_messages": {
+        "rows": 90,
+        "unchanged": 90
+      },
+      "qa_claims": {
+        "rows": 201,
+        "unchanged": 201
+      }
+    },
+    "current_qa_fingerprints": {
+      "qa_threads": {
+        "rows": 20,
+        "sha256": "d76ad8b047938dc285e6816f812788ed424418780f5dc0741b9fd86fd79de2aa"
+      },
+      "qa_messages": {
+        "rows": 94,
+        "sha256": "d4528e99cac61c2b8e1677e9db2f0238ebff18ed000e070fec96de6b74534875"
+      },
+      "qa_claims": {
+        "rows": 202,
+        "sha256": "2be50a058977cc20dbdedba7b4120588ae0e2759b2b2ab59a0ccdc01c84b1539"
+      }
+    },
+    "active_qa": 0
+  }
+}

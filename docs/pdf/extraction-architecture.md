@@ -20,9 +20,12 @@
 
 ## 저장 모델
 
-document_pages(1행/페이지) ← document_blocks ← document_lines, document_words,
-document_tables. 전부 SQLite 호환 타입, bbox는 원본 페이지 좌표(pt).
+document_pages(1행/페이지) ← document_blocks ← document_lines, document_tables.
+전부 SQLite 호환 타입, bbox는 원본 페이지 좌표(pt).
 원본 raw_text와 정규화 normalized_text 분리 보존.
+단어 단위 테이블(document_words)은 0013에서 제거했다 — 읽는 곳이 페이지당 COUNT(*)
+하나뿐이어서 그 값만 document_pages.digital_word_count로 남겼다. 단어 좌표가 필요한
+기능을 만들려면 재추출해야 한다.
 
 ## 로그 정책 (§19)
 

@@ -1,0 +1,414 @@
+{
+  "schemaVersion": 1,
+  "scope": "Windows CI installer upgrade, two GUI questions, read-only diagnostic and preservation",
+  "releaseDecision": "HOLD",
+  "productCodeChanged": false,
+  "testedHead": "324e9fda6b3c876d7f513def00889ed4b0c19e6e",
+  "manifestCommit": "41d04739f24e7f9a5d89a8f6798fb8ce2f96ca35",
+  "matchingTree": "69ad06b7b321c5f8e19253c801583c7721f0e0f3",
+  "ci": {
+    "run": 34396816569,
+    "conclusion": "success",
+    "jobsPassed": 6,
+    "artifactId": 10122460774,
+    "artifactApiDigest": "sha256:216b16f9b07f5b18eb5ccbd6b8239a95afef30a1c3babd3b6af7c0ed9a946b3c"
+  },
+  "installer": {
+    "bytes": 105749825,
+    "sha256": "f616247b44e55d93842891e51ee1bab88fc2a9dbd275aa9a420e24bc5831a942",
+    "authenticode": "NotSigned",
+    "manifestAndEightFilesVerified": true,
+    "actionTimeApprovalReceived": true,
+    "existingPathReinstallSucceeded": true,
+    "desktopShortcutCreation": false
+  },
+  "installedBinaries": {
+    "medbridgeExeSha256": "6daa98ee0f228d13a6c5e00a92db823dd51038d4c619b052ac85b7ea930d8cb7",
+    "sidecarExeSha256": "bbd40f3e8c382cc519d013d25233a50daf27a11c554998db5bbe3a68170ff61b"
+  },
+  "backup": {
+    "createdAt": "2026-09-09T20:58:45.1253792Z",
+    "files": 93,
+    "bytes": 9210190648,
+    "sourceAndCopyHashesReverifiedAt": "2026-09-09T21:07:52.0775332Z",
+    "appClosedAtReverification": true
+  },
+  "document": {
+    "label": "large-1",
+    "bytes": 431634439,
+    "pages": 1060,
+    "revision": 17,
+    "activeChunks": 16239
+  },
+  "gui": {
+    "observed_at": "2026-09-10T06:16:25.321194+09:00",
+    "document_label": "large-1",
+    "new_threads": 1,
+    "answers": [
+      {
+        "status": "insufficient_evidence",
+        "error_code": null,
+        "created_at": "2026-09-09 21:12:25.219963",
+        "stream_started_at": "2026-09-09 21:12:25.218955",
+        "completed_at": "2026-09-09 21:12:39.699914",
+        "provider_name": "openai_compatible",
+        "model_name": "qwen3:8b",
+        "sequence_number": 2,
+        "document_revision": 17,
+        "chunk_revision": 17,
+        "retrieval_mode": null,
+        "last_stream_seq": 0,
+        "content_chars": 41,
+        "content_sha256": "192ce3fe96b112735b97029b3cac4dc567b2c7ba6cdd064faf7d2f1b33bb06d0",
+        "draft_chars": 0,
+        "claims": [],
+        "duration_sec": 14.480959
+      },
+      {
+        "status": "completed",
+        "error_code": null,
+        "created_at": "2026-09-09 21:13:42.188719",
+        "stream_started_at": "2026-09-09 21:13:42.188719",
+        "completed_at": "2026-09-09 21:13:48.307801",
+        "provider_name": "openai_compatible",
+        "model_name": "qwen3:8b",
+        "sequence_number": 4,
+        "document_revision": 17,
+        "chunk_revision": 17,
+        "retrieval_mode": null,
+        "last_stream_seq": 1,
+        "content_chars": 21,
+        "content_sha256": "7f15969bdbb80e51582d5388abcce87f55cca3fd34bcf149eb7226d53a29061a",
+        "draft_chars": 0,
+        "claims": [
+          {
+            "status": "supported",
+            "text_chars": 17,
+            "text_sha256": "9ceb4daa84c82cd568a3f77a3d096deb784b0334506f6dd4a86761d4d5af4901",
+            "pages": [
+              104
+            ],
+            "reference_count": 1,
+            "all_reference_blocks_and_coordinates_match": true
+          }
+        ],
+        "duration_sec": 6.119082
+      }
+    ],
+    "active_qa": 0,
+    "foreign_key_violations": 0,
+    "question": "심부전의 정의를 설명하는 원문 한 문장과 출처를 보여주세요.",
+    "reviewVerdicts": [
+      "FAIL: definition exists but answer withheld",
+      "FAIL: table-of-contents heading only; no definition sentence despite completed/supported"
+    ],
+    "sourceNavigation": {
+      "page": 104,
+      "headingHighlightObserved": true,
+      "definitionAnswered": false
+    },
+    "screenshotsPublished": false
+  },
+  "sourceDiagnostic": {
+    "generated_at": "2026-09-09T21:15:18.198857+00:00",
+    "question": "심부전의 정의를 설명하는 원문 한 문장과 출처를 보여주세요.",
+    "scope": "read-only retrieval + streaming provider + claim verification; no GUI or persistence",
+    "model_digest_before": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+    "model_digest_after": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+    "retrieval_seconds": 0.04075720000014371,
+    "retrieved_chunks": 32,
+    "context_chars": 2090,
+    "runs": [
+      {
+        "run": 1,
+        "seconds": 7.329015300000037,
+        "status": "insufficient_evidence",
+        "final_hint": "answered",
+        "rejection_reasons": [
+          "not_lexically_grounded",
+          "not_lexically_grounded"
+        ],
+        "claim_diagnostics": [
+          {
+            "claim_sha256": "e0ce563f03fd5e0a6a6321a111e9855af61d5f3877b4e4b613ff28d4d12d2b9e",
+            "claim_chars": 246,
+            "source_count": 1,
+            "source_context_positions": [
+              6
+            ],
+            "source_pages": [
+              138
+            ],
+            "whole_claim_overlap": false,
+            "unquoted_assertion_overlap": true,
+            "polarity_consistent": false,
+            "source_has_definition_start": false,
+            "source_has_definition_end": false
+          },
+          {
+            "claim_sha256": "e0ce563f03fd5e0a6a6321a111e9855af61d5f3877b4e4b613ff28d4d12d2b9e",
+            "claim_chars": 246,
+            "source_count": 1,
+            "source_context_positions": [
+              6
+            ],
+            "source_pages": [
+              138
+            ],
+            "whole_claim_overlap": false,
+            "unquoted_assertion_overlap": true,
+            "polarity_consistent": false,
+            "source_has_definition_start": false,
+            "source_has_definition_end": false
+          }
+        ],
+        "answer_sha256": "192ce3fe96b112735b97029b3cac4dc567b2c7ba6cdd064faf7d2f1b33bb06d0",
+        "claims": []
+      },
+      {
+        "run": 2,
+        "seconds": 7.026415600000064,
+        "status": "insufficient_evidence",
+        "final_hint": "answered",
+        "rejection_reasons": [
+          "not_lexically_grounded",
+          "not_lexically_grounded"
+        ],
+        "claim_diagnostics": [
+          {
+            "claim_sha256": "e0ce563f03fd5e0a6a6321a111e9855af61d5f3877b4e4b613ff28d4d12d2b9e",
+            "claim_chars": 246,
+            "source_count": 1,
+            "source_context_positions": [
+              6
+            ],
+            "source_pages": [
+              138
+            ],
+            "whole_claim_overlap": false,
+            "unquoted_assertion_overlap": true,
+            "polarity_consistent": false,
+            "source_has_definition_start": false,
+            "source_has_definition_end": false
+          },
+          {
+            "claim_sha256": "e0ce563f03fd5e0a6a6321a111e9855af61d5f3877b4e4b613ff28d4d12d2b9e",
+            "claim_chars": 246,
+            "source_count": 1,
+            "source_context_positions": [
+              6
+            ],
+            "source_pages": [
+              138
+            ],
+            "whole_claim_overlap": false,
+            "unquoted_assertion_overlap": true,
+            "polarity_consistent": false,
+            "source_has_definition_start": false,
+            "source_has_definition_end": false
+          }
+        ],
+        "answer_sha256": "192ce3fe96b112735b97029b3cac4dc567b2c7ba6cdd064faf7d2f1b33bb06d0",
+        "claims": []
+      },
+      {
+        "run": 3,
+        "seconds": 7.034189100000049,
+        "status": "insufficient_evidence",
+        "final_hint": "answered",
+        "rejection_reasons": [
+          "not_lexically_grounded",
+          "not_lexically_grounded"
+        ],
+        "claim_diagnostics": [
+          {
+            "claim_sha256": "e0ce563f03fd5e0a6a6321a111e9855af61d5f3877b4e4b613ff28d4d12d2b9e",
+            "claim_chars": 246,
+            "source_count": 1,
+            "source_context_positions": [
+              6
+            ],
+            "source_pages": [
+              138
+            ],
+            "whole_claim_overlap": false,
+            "unquoted_assertion_overlap": true,
+            "polarity_consistent": false,
+            "source_has_definition_start": false,
+            "source_has_definition_end": false
+          },
+          {
+            "claim_sha256": "e0ce563f03fd5e0a6a6321a111e9855af61d5f3877b4e4b613ff28d4d12d2b9e",
+            "claim_chars": 246,
+            "source_count": 1,
+            "source_context_positions": [
+              6
+            ],
+            "source_pages": [
+              138
+            ],
+            "whole_claim_overlap": false,
+            "unquoted_assertion_overlap": true,
+            "polarity_consistent": false,
+            "source_has_definition_start": false,
+            "source_has_definition_end": false
+          }
+        ],
+        "answer_sha256": "192ce3fe96b112735b97029b3cac4dc567b2c7ba6cdd064faf7d2f1b33bb06d0",
+        "claims": []
+      }
+    ],
+    "contextDefinitionFragments": [
+      {
+        "position": 5,
+        "chars": 45,
+        "pages": [
+          138
+        ],
+        "is_definition_heading": false,
+        "contains_definition_start": true,
+        "contains_definition_end": false
+      },
+      {
+        "position": 6,
+        "chars": 47,
+        "pages": [
+          138
+        ],
+        "is_definition_heading": false,
+        "contains_definition_start": false,
+        "contains_definition_end": false
+      },
+      {
+        "position": 7,
+        "chars": 280,
+        "pages": [
+          138
+        ],
+        "is_definition_heading": false,
+        "contains_definition_start": false,
+        "contains_definition_end": true
+      }
+    ],
+    "limitations": "Exploratory replay without GUI history or persistence; not direct instrumentation of either GUI response"
+  },
+  "preservationBeforeInstall": {
+    "quick_check": "ok",
+    "foreign_key_violations": 0,
+    "unchanged_tables": {
+      "documents": {
+        "rows": 12,
+        "sha256": "c3a70a020aa70b9318ad45063d61edbe52be8d9f82716ea1c3e4cc7386541022",
+        "matches_backup": true
+      },
+      "document_pages": {
+        "rows": 4339,
+        "sha256": "042fba7ec097311e0edc63e11f09154df7bf919511d1ed6bcda72cb490cc06c7",
+        "matches_backup": true
+      },
+      "document_blocks": {
+        "rows": 364819,
+        "sha256": "a5f391b6db39fe6ab4a1147b6bb63212c79e14ee4e9660940fee95811132372b",
+        "matches_backup": true
+      },
+      "summary_settings": {
+        "rows": 1,
+        "sha256": "81ff5a90db10b3a83102e2ff05e5a1443c01f1bd8b5c12404cb3ea180e2b2421",
+        "matches_backup": true
+      }
+    },
+    "original_qa_rows": {
+      "qa_threads": {
+        "rows": 19,
+        "unchanged": 19
+      },
+      "qa_messages": {
+        "rows": 90,
+        "unchanged": 90
+      },
+      "qa_claims": {
+        "rows": 201,
+        "unchanged": 201
+      }
+    },
+    "current_qa_fingerprints": {
+      "qa_threads": {
+        "rows": 19,
+        "sha256": "ac23df7f2b7b25191f62f6f17002d2c51bb3c08f12e4943790a4134c65d42069"
+      },
+      "qa_messages": {
+        "rows": 90,
+        "sha256": "59396c64bd5bf8863b5e23a4be587b1333586f2fc06909e7aefc81ccbf3ecae9"
+      },
+      "qa_claims": {
+        "rows": 201,
+        "sha256": "eebeb1325d4505b62d568c6880c7162e0eba581d6d78be707fe509ef44b59c08"
+      }
+    },
+    "active_qa": 0
+  },
+  "preservationAfterNormalRestart": {
+    "quick_check": "ok",
+    "foreign_key_violations": 0,
+    "unchanged_tables": {
+      "documents": {
+        "rows": 12,
+        "sha256": "c3a70a020aa70b9318ad45063d61edbe52be8d9f82716ea1c3e4cc7386541022",
+        "matches_backup": true
+      },
+      "document_pages": {
+        "rows": 4339,
+        "sha256": "042fba7ec097311e0edc63e11f09154df7bf919511d1ed6bcda72cb490cc06c7",
+        "matches_backup": true
+      },
+      "document_blocks": {
+        "rows": 364819,
+        "sha256": "a5f391b6db39fe6ab4a1147b6bb63212c79e14ee4e9660940fee95811132372b",
+        "matches_backup": true
+      },
+      "summary_settings": {
+        "rows": 1,
+        "sha256": "81ff5a90db10b3a83102e2ff05e5a1443c01f1bd8b5c12404cb3ea180e2b2421",
+        "matches_backup": true
+      }
+    },
+    "original_qa_rows": {
+      "qa_threads": {
+        "rows": 19,
+        "unchanged": 19
+      },
+      "qa_messages": {
+        "rows": 90,
+        "unchanged": 90
+      },
+      "qa_claims": {
+        "rows": 201,
+        "unchanged": 201
+      }
+    },
+    "current_qa_fingerprints": {
+      "qa_threads": {
+        "rows": 20,
+        "sha256": "d76ad8b047938dc285e6816f812788ed424418780f5dc0741b9fd86fd79de2aa"
+      },
+      "qa_messages": {
+        "rows": 94,
+        "sha256": "d4528e99cac61c2b8e1677e9db2f0238ebff18ed000e070fec96de6b74534875"
+      },
+      "qa_claims": {
+        "rows": 202,
+        "sha256": "2be50a058977cc20dbdedba7b4120588ae0e2759b2b2ab59a0ccdc01c84b1539"
+      }
+    },
+    "active_qa": 0
+  },
+  "normalRestartNewQaHashesUnchanged": true,
+  "remaining": [
+    "sentence-spanning source ID attribution",
+    "reject title-only non-answers without weakening grounding",
+    "full Windows checklist",
+    "clean machine and offline validation",
+    "Ollama stop/recovery",
+    "large document ingestion and peak memory"
+  ]
+}

@@ -31,7 +31,13 @@ export interface SummaryList {
   artifacts: SummaryArtifact[];
 }
 
-export type SummaryFailureCategory = "timeout" | "invalid_response";
+export type SummaryFailureCategory =
+  | "timeout"
+  | "invalid_response"
+  | "context_overflow"
+  | "empty_result"
+  // 실패가 아니라 "성공했지만 일부 내용이 빠짐" — status는 succeeded로 온다.
+  | "partial_content";
 
 export interface SummaryStatus {
   providerAvailable: boolean;
@@ -42,6 +48,8 @@ export interface SummaryStatus {
   progress: number;
   canRetry: boolean;
   failureCategory: SummaryFailureCategory | null;
+  /** 화면에 보이는 요약에 내용이 빠졌는지. 최신 run이 아니라 그 요약을 만든 run 기준이다. */
+  partial: boolean;
 }
 
 export interface SummaryStartResult {

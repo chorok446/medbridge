@@ -25,7 +25,7 @@ export function DocumentTable({ items, onRetry, onRename, onDelete, onReport, bu
         <p className="mt-1 text-sm text-slate-500">첫 PDF를 올리면 여기에 표시됩니다.</p>
         <a
           href="#upload-section"
-          className="mt-4 inline-block rounded bg-blue-600 px-5 py-2.5 font-medium text-white hover:bg-blue-700"
+          className="mt-4 inline-block rounded-md bg-blue-600 px-5 py-2.5 font-medium text-white hover:bg-blue-700"
         >
           PDF 추가하기
         </a>

@@ -39,6 +39,24 @@ def _lookup(*specs) -> dict[str, QaChunkRef]:
 
 
 class TestVerify:
+    @pytest.mark.parametrize("hint", ["not_found", "insufficient_evidence"])
+    def test_abstention_discards_related_claim_and_answer(self, hint):
+        out = verify(
+            {
+                "answer": "심장은 혈액을 보낸다[c0]",
+                "answerStatus": hint,
+                "claims": [{"text": "심장은 혈액을 보낸다", "sourceChunkIds": ["c1"]}],
+                "followUpSuggestions": ["심장 수술 통계는?"],
+            },
+            _lookup(("c1", "심장은 혈액을 보낸다")),
+            had_results=True,
+        )
+        assert out.answer_status == hint
+        assert out.claims == []
+        assert out.followups == []
+        assert "혈액" not in out.answer
+        assert "[c0]" not in out.answer
+
     def test_supported_claim_reconstructs_refs_from_chunks(self):
         lookup = _lookup(("c1", "심장은 혈액을 보낸다"))
         out = verify(
@@ -209,6 +227,140 @@ class TestVerify:
         assert len(out.followups) == 3
 
 
+class TestCitationMarkers:
+    """답변 산문의 [c<n>] 마커는 검증을 통과한 근거만 가리켜야 한다."""
+
+    def test_valid_marker_survives(self):
+        lookup = _lookup(("c1", "심장은 혈액을 보낸다"))
+        out = verify(
+            {"answer": "심장은 혈액을 보냅니다[c0].", "answerStatus": "answered",
+             "claims": [{"text": "심장은 혈액을 보낸다", "sourceChunkIds": ["c1"]}]},
+            lookup, had_results=True,
+        )
+        assert out.answer == "심장은 혈액을 보냅니다[c0]."
+
+    def test_out_of_range_marker_is_removed(self):
+        lookup = _lookup(("c1", "심장은 혈액을 보낸다"))
+        out = verify(
+            {"answer": "심장은 혈액을 보냅니다[c7].", "answerStatus": "answered",
+             "claims": [{"text": "심장은 혈액을 보낸다", "sourceChunkIds": ["c1"]}]},
+            lookup, had_results=True,
+        )
+        assert out.answer == "심장은 혈액을 보냅니다."
+
+    def test_marker_to_unsupported_claim_is_removed(self):
+        # 두 번째 claim은 유효 출처가 없어 unsupported → 그 마커는 지운다.
+        lookup = _lookup(("c1", "심장은 혈액을 보낸다"))
+        out = verify(
+            {"answer": "심장은 혈액을 보냅니다[c0]. 폐는 산소를 만듭니다[c1].",
+             "answerStatus": "answered",
+             "claims": [{"text": "심장은 혈액을 보낸다", "sourceChunkIds": ["c1"]},
+                        {"text": "폐는 산소를 만든다", "sourceChunkIds": ["없는청크"]}]},
+            lookup, had_results=True,
+        )
+        assert "[c1]" not in out.answer
+        assert "[c0]" in out.answer
+
+    def test_marker_is_remapped_when_earlier_claim_is_skipped(self):
+        # 0번 raw 항목이 빈 텍스트로 버려지면 모델의 [c1]은 최종 claim_index 0을 가리켜야 한다.
+        lookup = _lookup(("c1", "심장은 혈액을 보낸다"))
+        out = verify(
+            {"answer": "심장은 혈액을 보냅니다[c1].", "answerStatus": "answered",
+             "claims": [{"text": "", "sourceChunkIds": ["c1"]},
+                        {"text": "심장은 혈액을 보낸다", "sourceChunkIds": ["c1"]}]},
+            lookup, had_results=True,
+        )
+        assert out.claims[0].claim_index == 0
+        assert out.answer == "심장은 혈액을 보냅니다[c0]."
+
+    def test_repeated_marker_for_same_claim_is_kept(self):
+        lookup = _lookup(("c1", "심장은 혈액을 보낸다"))
+        out = verify(
+            {"answer": "심장은 혈액을 보냅니다[c0]. 다시 말해 그렇습니다[c0].",
+             "answerStatus": "answered",
+             "claims": [{"text": "심장은 혈액을 보낸다", "sourceChunkIds": ["c1"]}]},
+            lookup, had_results=True,
+        )
+        assert out.answer.count("[c0]") == 2
+
+    def test_answer_without_markers_is_untouched(self):
+        lookup = _lookup(("c1", "심장은 혈액을 보낸다"))
+        out = verify(
+            {"answer": "심장은 혈액을 보냅니다.", "answerStatus": "answered",
+             "claims": [{"text": "심장은 혈액을 보낸다", "sourceChunkIds": ["c1"]}]},
+            lookup, had_results=True,
+        )
+        assert out.answer == "심장은 혈액을 보냅니다."
+
+    def test_document_brackets_are_not_treated_as_markers(self):
+        lookup = _lookup(("c1", "심장은 혈액을 보낸다"))
+        out = verify(
+            {"answer": "표 [1]과 [c0]을 보라.", "answerStatus": "answered",
+             "claims": [{"text": "심장은 혈액을 보낸다", "sourceChunkIds": ["c1"]}]},
+            lookup, had_results=True,
+        )
+        assert "표 [1]" in out.answer
+
+    def test_conflicting_claim_marker_survives(self):
+        c1 = "초기 연구에서는 이 요법이 사망 위험을 감소시킨다고 보고하였다"
+        c2 = "후속 연구에서는 이 요법이 사망 위험에 영향을 주지 않았다고 보고하였다"
+        lookup = _lookup(("c1", c1), ("c2", c2))
+        out = verify(
+            {"answer": f"{c1}[c0] 그러나 {c2}[c1]", "answerStatus": "answered",
+             "claims": [{"text": c1, "sourceChunkIds": ["c1"]},
+                        {"text": c2, "sourceChunkIds": ["c2"]}]},
+            lookup, had_results=True,
+        )
+        assert out.answer_status == "conflicting_evidence"
+        assert "[c0]" in out.answer and "[c1]" in out.answer
+
+
+class TestDeterministicProviderCitations:
+    """결정론 공급자도 마커를 낸다 — 통합 테스트가 실제 인용 경로를 타야 의미가 있다."""
+
+    def test_answer_carries_markers_for_each_claim(self):
+        req = QaRequest(
+            question="심장은?",
+            chunks=[
+                QaContextChunk(chunk_id="c1", section_title="순환", text="심장은 혈액을 보낸다",
+                               page_start=1, page_end=1),
+                QaContextChunk(chunk_id="c2", section_title="호흡", text="폐는 산소를 교환한다",
+                               page_start=2, page_end=2),
+            ],
+        )
+        out = DeterministicQaProvider().answer(req)
+        assert "[c0]" in out["answer"]
+        assert "[c1]" in out["answer"]
+
+    def test_not_found_answer_has_no_markers(self):
+        out = DeterministicQaProvider().answer(QaRequest(question="x", chunks=[]))
+        assert "[c" not in out["answer"]
+
+    def test_system_prompt_documents_the_marker_rule(self):
+        from app.services.qa.provider import _SYSTEM_PROMPT
+
+        assert "[c0]" in _SYSTEM_PROMPT
+
+
+class TestLearnerLevelReachesThePrompt:
+    """학습 수준은 요약에만 있었다 — 질문 경로에도 통과시킨다."""
+
+    def test_level_changes_the_user_prompt(self):
+        from app.services.qa.provider import _build_user_prompt
+
+        base = QaRequest(question="심장은?", chunks=[], learner_level="nursing_student")
+        concise = QaRequest(question="심장은?", chunks=[], learner_level="concise")
+        assert _build_user_prompt(base) != _build_user_prompt(concise)
+        assert "간단" in _build_user_prompt(concise)
+
+    def test_unknown_level_falls_back_to_default(self):
+        from app.services.qa.provider import _build_user_prompt
+
+        weird = QaRequest(question="심장은?", chunks=[], learner_level="wizard")
+        default = QaRequest(question="심장은?", chunks=[])
+        assert _build_user_prompt(weird) == _build_user_prompt(default)
+
+
 class TestConflictDetectorAndReasons:
     C1 = "초기 연구에서는 이 요법이 사망 위험을 감소시킨다고 보고하였다"
     C2 = "후속 연구에서는 이 요법이 사망 위험에 영향을 주지 않았다고 보고하였다"
@@ -314,3 +466,78 @@ class TestProviders:
         )
         with pytest.raises(SummaryNetworkError):
             p.answer(QaRequest(question="q", chunks=[QaContextChunk("c1", None, "t", 1, 1)]))
+
+
+class TestCitationEdges:
+    def test_truncated_marker_fragment_is_not_left_behind(self):
+        from app.services.qa.settings import ANSWER_MAX_CHARS
+
+        lookup = _lookup(("c1", "심장은 혈액을 보낸다"))
+        # 절단이 마커 한가운데 떨어지도록 길이를 맞춘다.
+        filler = "가" * (ANSWER_MAX_CHARS - 2)
+        out = verify(
+            {"answer": f"{filler}[c0]", "answerStatus": "answered",
+             "claims": [{"text": "심장은 혈액을 보낸다", "sourceChunkIds": ["c1"]}]},
+            lookup, had_results=True,
+        )
+        assert "[c" not in out.answer
+        assert len(out.answer) <= ANSWER_MAX_CHARS
+
+    def test_duplicate_claim_marker_remaps_to_the_survivor(self):
+        lookup = _lookup(("c1", "심장은 혈액을 보낸다"))
+        out = verify(
+            {"answer": "설명[c0] 요약하면[c1]", "answerStatus": "answered",
+             "claims": [{"text": "심장은 혈액을 보낸다", "sourceChunkIds": ["c1"]},
+                        {"text": "심장은 혈액을 보낸다", "sourceChunkIds": ["c1"]}]},
+            lookup, had_results=True,
+        )
+        assert len(out.claims) == 1
+        # 중복이라 버려진 자리를 가리키던 마커도 살아 있는 동일 claim으로 이어져야 한다.
+        assert out.answer == "설명[c0] 요약하면[c0]"
+
+    def test_followup_items_are_length_capped(self):
+        from app.services.qa.settings import FOLLOWUP_MAX_CHARS
+
+        lookup = _lookup(("c1", "본문 내용"))
+        out = verify(
+            {"answer": "x", "answerStatus": "answered",
+             "claims": [{"text": "본문 내용", "sourceChunkIds": ["c1"]}],
+             "followUpSuggestions": ["질" * 5000]},
+            lookup, had_results=True,
+        )
+        assert len(out.followups[0]) == FOLLOWUP_MAX_CHARS
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            "복용량은 얼마인가요?",  # 배열 대신 문자열 — 흔한 계약 위반
+            {"q1": "복용량은?", "q2": "부작용은?"},  # 객체
+            123,
+        ],
+    )
+    def test_non_list_followups_are_rejected_not_iterated(self, payload):
+        """리스트가 아니면 버린다 — 순회하면 글자 하나짜리 제안이 저장된다.
+
+        문자열을 순회하면 ["복","용","량"]이 되고, 그 값이 DB에 저장돼 답변 아래
+        한 글자짜리 칩 세 개로 그려진다. 누르면 한 글자 질문이 전송돼 모델 호출을
+        한 번 다 쓰고 엉뚱한 답이 나온다.
+        """
+        lookup = _lookup(("c1", "본문 내용"))
+        out = verify(
+            {"answer": "x", "answerStatus": "answered",
+             "claims": [{"text": "본문 내용", "sourceChunkIds": ["c1"]}],
+             "followUpSuggestions": payload},
+            lookup, had_results=True,
+        )
+        assert out.followups == []
+
+    def test_non_string_items_inside_a_list_are_dropped(self):
+        """리스트 안의 이물질도 문자열로 강제하지 않는다."""
+        lookup = _lookup(("c1", "본문 내용"))
+        out = verify(
+            {"answer": "x", "answerStatus": "answered",
+             "claims": [{"text": "본문 내용", "sourceChunkIds": ["c1"]}],
+             "followUpSuggestions": ["정상 질문?", 42, None, {"a": 1}]},
+            lookup, had_results=True,
+        )
+        assert out.followups == ["정상 질문?"]

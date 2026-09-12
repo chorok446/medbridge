@@ -38,6 +38,10 @@ export interface QaMessage {
   sequenceNumber: number;
   retrievalMode: string | null;
   claims: QaClaim[];
+  /** 서버가 판정한 동일 질문 재시도 가능 여부. */
+  canRetry: boolean;
+  /** 모델이 제안한 다음 질문. 마이그레이션 0012 이전 메시지는 빈 배열이다. */
+  followups: string[];
 }
 
 export interface QaThread {

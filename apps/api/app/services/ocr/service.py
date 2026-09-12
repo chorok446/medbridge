@@ -22,7 +22,7 @@ from app.models.enums import (
     OcrRunStatus,
     ProcessingStatus,
 )
-from app.models.extraction import DocumentBlock, DocumentLine, DocumentPage, DocumentWord
+from app.models.extraction import DocumentBlock, DocumentLine, DocumentPage
 from app.models.ocr import OcrRun
 from app.services.documents.state_machine import transition
 from app.services.extraction.geometry import overlap_ratio
@@ -78,13 +78,7 @@ async def start_ocr(
     from app.services.system import runtime
     from app.services.tasks.runner import get_task_runner
 
-    if runtime.is_updating():
-        raise AppError(
-            ErrorCode.INTERNAL_ERROR,
-            "업데이트를 준비하는 중입니다. 잠시 후 다시 시도해 주세요.",
-            status_code=503,
-            retryable=True,
-        )
+    runtime.reject_if_updating()
     if not engine().available:
         raise AppError(
             ErrorCode.INTERNAL_ERROR,
@@ -125,9 +119,7 @@ async def start_ocr(
 async def cancel_ocr(db: AsyncSession, doc: Document) -> Document:
     job = await _latest_ocr_job(db, doc.id)
     if job is None or job.status not in (JobStatus.QUEUED, JobStatus.RUNNING):
-        raise AppError(
-            ErrorCode.INVALID_STATE, "지금은 취소할 작업이 없습니다.", status_code=409
-        )
+        raise AppError(ErrorCode.INVALID_STATE, "지금은 취소할 작업이 없습니다.", status_code=409)
     job.status = JobStatus.FAILED
     job.failure_code = "CANCELLED"
     job.completed_at = datetime.now(UTC)
@@ -142,30 +134,61 @@ async def cancel_ocr(db: AsyncSession, doc: Document) -> Document:
     ).scalars()
     for page in pending_pages:
         page.ocr_status = OcrRunStatus.OCR_CANCELLED.value
+    await _close_open_runs(db, doc.id, OcrRunStatus.OCR_CANCELLED)
     await db.commit()
     return doc
 
 
-async def _latest_ocr_job(db: AsyncSession, document_id: uuid.UUID) -> DocumentJob | None:
-    return (
+async def _close_open_runs(db: AsyncSession, document_id: uuid.UUID, status: OcrRunStatus) -> None:
+    """RUNNING으로 남은 실행 기록을 끝난 것으로 확정한다.
+
+    `apply_ocr_result`의 "본문이 실제로 바뀌었나" 판정은 직전 OcrRun의 status를
+    본다. 취소·크래시로 끝난 실행이 RUNNING인 채로 남으면 그 비교가 항상 참이 되어,
+    결과가 바이트 단위로 같은 재실행도 "바뀜"으로 판정된다. 그러면 content_revision이
+    올라 이미 성공시켜 둔 요약 노드 수백 개가 재사용 키에서 통째로 무효가 되고,
+    사용자는 내용이 하나도 바뀌지 않았는데 요약을 처음부터 다시 만들어야 한다.
+    """
+    rows = (
         await db.execute(
-            select(DocumentJob)
-            .where(
-                DocumentJob.document_id == document_id,
-                DocumentJob.job_type == JobType.OCR_DOCUMENT,
+            select(OcrRun).where(
+                OcrRun.document_id == document_id,
+                OcrRun.status == OcrRunStatus.RUNNING,
             )
-            .order_by(DocumentJob.created_at.desc())
-            .limit(1)
         )
-    ).scalars().first()
+    ).scalars()
+    for run in rows:
+        run.status = status
+        run.completed_at = datetime.now(UTC)
+
+
+async def _latest_ocr_job(db: AsyncSession, document_id: uuid.UUID) -> DocumentJob | None:
+    from app.services.tasks.jobs import latest_job
+
+    return await latest_job(db, document_id, JobType.OCR_DOCUMENT)
 
 
 def classify_result(result: OcrResult) -> tuple[OcrRunStatus, float, float]:
-    """반환: (상태, 낮은 신뢰 비율, 중앙값)."""
+    """반환: (상태, 낮은 신뢰 비율, 중앙값).
+
+    **버려진 단어도 모수에 넣는다.** OCR_MIN_WORD_CONFIDENCE 필터는 OcrResult를
+    만들기 전에 걸리므로, `result.words`만 보면 노이즈가 대부분인 쪽이 "남은
+    몇 개가 깨끗하니 정상"으로 통과한다 — 100단어 중 85개가 신뢰도 0.1이라
+    버려지고 남은 15개가 0.75면 low_ratio가 0이 된다.
+
+    그 판정이 두 곳으로 흘러 같은 방향으로 틀린다: rollup_document_status가 이
+    쪽을 unresolved로 세지 않아 문서를 EXTRACTED로 승격시키고, chunking의 저신뢰
+    제외에도 걸리지 않아 15단어짜리 잔해가 요약·검색의 근거가 된다. 사용자는
+    본문 85%가 통째로 빠진 문서를 '다 읽었다'로 신뢰하고 재시도 안내조차 받지
+    못한다. 버려진 단어는 임계값 미만인 것이 확실하므로 저신뢰로 세면 된다.
+    """
     if len(result.words) < OCR_EMPTY_MIN_WORDS:
         return OcrRunStatus.OCR_EMPTY, 1.0, 0.0
     confs = [w.confidence for w in result.words]
-    low_ratio = sum(1 for c in confs if c < OCR_LOW_CONFIDENCE_WORD) / len(confs)
+    dropped = max(0, result.low_quality_dropped)
+    low_ratio = (sum(1 for c in confs if c < OCR_LOW_CONFIDENCE_WORD) + dropped) / (
+        len(confs) + dropped
+    )
+    # 중앙값은 살아남은 단어로만 낸다 — 버린 단어의 실제 신뢰도는 이미 없다.
     median = statistics.median(confs)
     if low_ratio > OCR_LOW_CONFIDENCE_RATIO_WARN:
         return OcrRunStatus.OCR_LOW_CONFIDENCE, low_ratio, median
@@ -192,26 +215,13 @@ async def _digital_text_bboxes(
 
 async def _delete_ocr_rows(db: AsyncSession, page_id: uuid.UUID) -> None:
     """OCR 출처 행만 제거 — 디지털 결과는 보존한다."""
-    ocr_block_ids = [
-        row[0]
-        for row in (
-            await db.execute(
-                select(DocumentBlock.id).where(DocumentBlock.page_id == page_id)
-            )
-        ).all()
-    ]
     # 블록 metadata로 필터 (JSON 조회는 파이썬에서)
     blocks = (
-        await db.execute(select(DocumentBlock).where(DocumentBlock.id.in_(ocr_block_ids)))
+        await db.execute(select(DocumentBlock).where(DocumentBlock.page_id == page_id))
     ).scalars()
     ocr_ids = [b.id for b in blocks if (b.metadata_json or {}).get("source") == "ocr"]
     if ocr_ids:
         await db.execute(delete(DocumentBlock).where(DocumentBlock.id.in_(ocr_ids)))
-    await db.execute(
-        delete(DocumentWord).where(
-            DocumentWord.page_id == page_id, DocumentWord.source_method == "ocr"
-        )
-    )
 
 
 async def _digital_normalized_text(db: AsyncSession, page_id: uuid.UUID) -> str:
@@ -236,8 +246,32 @@ async def _digital_normalized_text(db: AsyncSession, page_id: uuid.UUID) -> str:
 
 async def apply_ocr_result(
     db: AsyncSession, page: DocumentPage, result: OcrResult, run: OcrRun
-) -> None:
-    """OCR 결과를 원자적으로 교체 저장 — 같은 트랜잭션에서 커밋은 호출자가 한다."""
+) -> bool:
+    """OCR 결과를 원자적으로 교체 저장 — 같은 트랜잭션에서 커밋은 호출자가 한다.
+
+    반환값은 **페이지 본문이 실제로 달라졌는지**다. 호출자는 이 값으로 문서
+    content_revision을 올릴지 정한다 — 같은 결과를 다시 쓴 재실행까지 revision을
+    올리면 이미 만들어 둔 청크·요약이 아무 이유 없이 stale이 된다.
+    """
+    previous_text = page.normalized_text or ""
+    # 판정 상태도 함께 본다. 같은 단어를 신뢰도만 다르게 돌려주면 본문은 그대로여도
+    # 청크 포함 여부가 뒤집히므로(저신뢰 페이지는 청크에서 빠진다) 재생성이 필요하다.
+    #
+    # 비교 대상은 `page.ocr_status`가 아니라 **직전 실행 기록**이다. 페이지 상태는 잡을
+    # 등록하는 순간 이미 pending으로 덮여 있어, 그걸 기준으로 삼으면 결과가 완전히 같은
+    # 재실행도 항상 "바뀜"으로 판정된다.
+    previous_status = (
+        (
+            await db.execute(
+                select(OcrRun.status)
+                .where(OcrRun.page_id == page.id, OcrRun.id != run.id)
+                .order_by(OcrRun.created_at.desc())
+                .limit(1)
+            )
+        )
+        .scalars()
+        .first()
+    )
     digital_boxes = await _digital_text_bboxes(db, page.id)
     await _delete_ocr_rows(db, page.id)
 
@@ -245,25 +279,19 @@ async def apply_ocr_result(
     kept = [
         w
         for w in result.words
-        if not any(
-            overlap_ratio(w.bbox, box) >= OCR_DEDUPE_OVERLAP_RATIO for box in digital_boxes
-        )
+        if not any(overlap_ratio(w.bbox, box) >= OCR_DEDUPE_OVERLAP_RATIO for box in digital_boxes)
     ]
 
-    max_order = (
+    max_order, max_block_index = (
         await db.execute(
-            select(func.max(DocumentBlock.reading_order)).where(
-                DocumentBlock.page_id == page.id
-            )
+            select(
+                func.max(DocumentBlock.reading_order),
+                func.max(DocumentBlock.block_index),
+            ).where(DocumentBlock.page_id == page.id)
         )
-    ).scalar_one_or_none() or 0
-    max_block_index = (
-        await db.execute(
-            select(func.max(DocumentBlock.block_index)).where(
-                DocumentBlock.page_id == page.id
-            )
-        )
-    ).scalar_one_or_none() or 0
+    ).one()
+    max_order = max_order or 0
+    max_block_index = max_block_index or 0
 
     # TSV 계층으로 블록·줄 재구성
     by_block: dict[int, list] = {}
@@ -272,7 +300,6 @@ async def apply_ocr_result(
 
     block_rows: list[DocumentBlock] = []
     line_rows: list[DocumentLine] = []
-    word_rows: list[DocumentWord] = []
     order = max_order
     for bi, block_words in sorted(by_block.items()):
         order += 1
@@ -322,42 +349,16 @@ async def apply_ocr_result(
                     metadata_json={"source": "ocr", "paragraph_index": pi},
                 )
             )
-            word_rows.extend(
-                DocumentWord(
-                    page_id=page.id,
-                    block_id=block_id,
-                    line_id=line_id,
-                    word_index=w.word_index,
-                    x0=w.bbox[0],
-                    y0=w.bbox[1],
-                    x1=w.bbox[2],
-                    y1=w.bbox[3],
-                    text=w.text,
-                    normalized_text=normalize_text(w.text),
-                    confidence=w.confidence,
-                    source_method="ocr",
-                    metadata_json={},
-                )
-                for w in ws
-            )
 
     db.add_all(block_rows)
     await db.flush()
     db.add_all(line_rows)
     await db.flush()
-    db.add_all(word_rows)
 
     status, low_ratio, median = classify_result(result)
     ocr_text = normalize_text("\n".join(b.text for b in block_rows))
     # 재실행 누적 방지: 항상 디지털 기준에서 다시 조립한다
     digital_text = await _digital_normalized_text(db, page.id)
-    digital_word_count = (
-        await db.execute(
-            select(func.count())
-            .select_from(DocumentWord)
-            .where(DocumentWord.page_id == page.id, DocumentWord.source_method == "digital")
-        )
-    ).scalar_one()
     had_digital = bool(digital_text.strip())
     if ocr_text and had_digital:
         page.normalized_text = f"{digital_text}\n\n{ocr_text}"
@@ -370,7 +371,9 @@ async def apply_ocr_result(
     page.requires_ocr = False
     page.ocr_status = status.value
     page.ocr_mean_confidence = result.mean_confidence
-    page.word_count = digital_word_count + len(word_rows)
+    # 디지털 기준선은 추출 시점 값 그대로 두고 OCR 몫만 더한다. word_count는 재실행
+    # 때마다 덮이므로 여기서 기준선으로 쓸 수 없다.
+    page.word_count = page.digital_word_count + len(kept)
 
     run.status = status
     run.mean_confidence = result.mean_confidence
@@ -379,24 +382,33 @@ async def apply_ocr_result(
     run.word_count = len(kept)
     run.duration_ms = result.duration_ms
     run.completed_at = datetime.now(UTC)
+    return page.normalized_text != previous_text or status != previous_status
 
 
 async def rollup_document_status(db: AsyncSession, doc: Document) -> None:
     """OCR 후 문서 상태 상향: 남은 requires_ocr·실패 페이지 기준으로 재계산."""
     pages = (
-        await db.execute(
-            select(DocumentPage).where(DocumentPage.document_id == doc.id)
-        )
-    ).scalars().all()
+        (await db.execute(select(DocumentPage).where(DocumentPage.document_id == doc.id)))
+        .scalars()
+        .all()
+    )
     if not pages:
         return
     remaining_ocr = sum(1 for p in pages if p.requires_ocr)
-    # 실패·빈 결과 페이지는 '읽힌 것'으로 승격하지 않는다 (M6)
+    # 실패·빈 결과 페이지는 '읽힌 것'으로 승격하지 않는다 (M6).
+    # 저신뢰 결과도 같다 — 단어는 있지만 내용은 노이즈라 청크에서도 제외된다. 이걸
+    # '읽힌 것'으로 세면 문서가 extracted로 승격돼, 사용자는 본문 일부가 통째로 빠진
+    # 문서를 '다 읽었다'로 신뢰하고 재시도 안내조차 받지 못한다.
     unresolved = sum(
         1
         for p in pages
         if p.extraction_status.value == "failed"
-        or p.ocr_status in (OcrRunStatus.OCR_FAILED.value, OcrRunStatus.OCR_EMPTY.value)
+        or p.ocr_status
+        in (
+            OcrRunStatus.OCR_FAILED.value,
+            OcrRunStatus.OCR_EMPTY.value,
+            OcrRunStatus.OCR_LOW_CONFIDENCE.value,
+        )
     )
     if doc.processing_status not in (
         ProcessingStatus.OCR_REQUIRED,

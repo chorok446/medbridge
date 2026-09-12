@@ -25,6 +25,14 @@ def alembic_config() -> AlembicConfig:
     return cfg
 
 
+def head_revision() -> str:
+    """스크립트 디렉터리 기준 head — 마이그레이션이 늘 때마다 테스트의 하드코딩이
+    깨지지 않게 한 곳에서 계산한다."""
+    from alembic.script import ScriptDirectory
+
+    return ScriptDirectory.from_config(alembic_config()).get_current_head() or ""
+
+
 @pytest.fixture(scope="session", autouse=True)
 def prepare_infra():
     get_path_provider().ensure_directories()

@@ -5,6 +5,7 @@
 
 import json
 import sqlite3
+import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -53,9 +54,30 @@ class TestModels:
         assert by_model["qwen3:8b"]["installed"] is True
         assert by_model["qwen3:8b"]["recommended"] is True
         assert by_model["qwen3:4b"]["installed"] is False
-        # 32GB → 8B 권장, 14B 선택 가능
+        # 32GB → 8B 권장, 14B·30B-A3B 선택 가능
         assert by_model["qwen3:8b"]["ramAdvice"] == "recommended"
         assert by_model["qwen3:14b"]["ramAdvice"] == "selectable"
+        assert by_model["qwen3:30b-a3b"]["ramAdvice"] == "selectable"
+
+    async def test_nominal_32gb_machine_is_still_selectable(self, client, monkeypatch):
+        # 공칭 32GB 기기의 OS 보고값은 예약 메모리 때문에 32GiB에 못 미친다(~31.5GiB).
+        # 문서가 "32GB 이상이면 선택 가능"이라 안내하는 바로 그 기기를 경고로 내몰면 안 된다.
+        monkeypatch.setattr(ollama_client, "list_models", lambda: [])
+        monkeypatch.setattr(system, "total_ram_bytes", lambda: int(31.5 * 1024**3))
+        monkeypatch.setattr(system, "free_disk_bytes", lambda path="/": 200 * 1024**3)
+        res = await client.get("/api/local-ai/models")
+        by_model = {m["model"]: m for m in res.json()["data"]["models"]}
+        assert by_model["qwen3:14b"]["ramAdvice"] == "selectable"
+        assert by_model["qwen3:30b-a3b"]["ramAdvice"] == "selectable"
+
+    async def test_30b_a3b_warns_below_32gb_ram(self, client, monkeypatch):
+        # 가중치만 19GB라 32GB 미만에서는 실행이 어렵다 — 경고로 안내한다.
+        monkeypatch.setattr(ollama_client, "list_models", lambda: [])
+        monkeypatch.setattr(system, "total_ram_bytes", lambda: 16 * 1024**3)
+        monkeypatch.setattr(system, "free_disk_bytes", lambda path="/": 200 * 1024**3)
+        res = await client.get("/api/local-ai/models")
+        by_model = {m["model"]: m for m in res.json()["data"]["models"]}
+        assert by_model["qwen3:30b-a3b"]["ramAdvice"] == "warn"
 
     async def test_disk_shortage_flags_model(self, client, monkeypatch):
         monkeypatch.setattr(ollama_client, "list_models", lambda: [])
@@ -489,16 +511,20 @@ class TestActivate:
     async def test_duplicate_settings_are_detected_without_overwriting(
         self, monkeypatch
     ):
+        # id를 명시해 싱글턴 PK가 생기기 **전에** 중복이 굳은 설치본을 재현한다.
+        # 이제 기본값이 고정 id라 ORM 경로로는 중복을 만들 수 없다.
         async with get_session_factory()() as session:
             session.add_all(
                 [
                     SummarySettings(
+                        id=uuid.uuid4(),
                         enabled=False,
                         provider_type="disabled",
                         model_name="first",
                         is_local=False,
                     ),
                     SummarySettings(
+                        id=uuid.uuid4(),
                         enabled=False,
                         provider_type="openai_compatible",
                         endpoint="https://api.example.com/v1",

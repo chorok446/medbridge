@@ -1,0 +1,511 @@
+{
+  "scope": "User-installed CI 7234601 native Windows GUI verification; not the later conflict-abstention build",
+  "headCommit": "72346017e2781efd2165a61a2cdb2ec0bf0859b0",
+  "productCodeCommit": "a9d945e75821cc213f71d967f2b6cc789c8328d1",
+  "workflow": {
+    "runId": 34427515470,
+    "conclusion": "success",
+    "successfulJobs": 6,
+    "url": "https://github.com/chorok446/medbridge/actions/runs/34427515470"
+  },
+  "provenance": {
+    "manifest": {
+      "schemaVersion": 1,
+      "testedCommit": "fd9b8aeb8c64685a4f2abbcba5e8a2e09b16f41a",
+      "workflowRunId": 34427515470,
+      "installer": {
+        "name": "MedBridge Study_0.1.0_x64-setup.exe",
+        "sha256": "09c861ea13af05fd1d165693e1e46906381a14d8974716c911b0af218e880478",
+        "size": 105761257
+      },
+      "testKit": [
+        {
+          "name": "01_digital_simple.pdf",
+          "sha256": "5cd43cf1bddd1cff17cc252d628b82f5f1ea456ca34e542c05176d47c87c673e",
+          "size": 7434
+        },
+        {
+          "name": "02_two_column_paper.pdf",
+          "sha256": "844338ea705bfd5af615de6c5a696e955cb61f6f603f1798248bd5e8209f0a8e",
+          "size": 4191
+        },
+        {
+          "name": "03_table_doc.pdf",
+          "sha256": "9df06fcfd0005d376ef57d4db369e50448529e63566bfd5b0de6a8de1fec10c8",
+          "size": 3401
+        },
+        {
+          "name": "04_rotated_page.pdf",
+          "sha256": "89e82e1e32fbf12dd0f46d8ea82f12c096f609a711da59ee4af1f370a3e7a4cd",
+          "size": 1159
+        },
+        {
+          "name": "05_scanned_korean_short.pdf",
+          "sha256": "9b27a4eb1aea2d53b6944d0383376622a4f96ee786648d7a17da20319e02bda3",
+          "size": 11602950
+        },
+        {
+          "name": "06_scanned_korean_long.pdf",
+          "sha256": "71f8940147ebf252908a21e90bf0f83236f92cd25bfea6f58778147925834d94",
+          "size": 11604242
+        },
+        {
+          "name": "07_mixed_50pages.pdf",
+          "sha256": "d4c960c4a9b5be85e472844be16c21c01a4516e3b78ac59f40e84d94c9c685d4",
+          "size": 34913421
+        }
+      ]
+    },
+    "pullRequestMergeParents": [
+      "79f70e0ab36c87a895890ea38e55678c6167424d",
+      "72346017e2781efd2165a61a2cdb2ec0bf0859b0"
+    ],
+    "mergeAndHeadTree": "bd227e0e9099da0b3aef97d293249ec9f57240e1",
+    "userInstallerAndSevenFixturesMatchCiManifest": true,
+    "installedPayloadComparedToUnpackedInstaller": false
+  },
+  "installedFingerprints": {
+    "medbridge": {
+      "bytes": 15316480,
+      "sha256": "c37ff4c3d029930bf15d026d05dce2c81e7b1c55e58a78b63cb17ffc3e0ccda7"
+    },
+    "sidecar": {
+      "bytes": 45736956,
+      "sha256": "24bc83b72922c16d988667dbd0d5345af90ad1ba3acd25df4ec84da6ac8674b3"
+    }
+  },
+  "document": {
+    "label": "large-1",
+    "bytes": 431634439,
+    "pages": 1060,
+    "activeChunks": 16239,
+    "revision": 17
+  },
+  "gui": {
+    "observed_at": "2026-09-10T11:35:28.456349+09:00",
+    "document_label": "large-1",
+    "new_threads": 1,
+    "answers": [
+      {
+        "status": "completed",
+        "error_code": null,
+        "created_at": "2026-09-10 02:29:57.321467",
+        "stream_started_at": "2026-09-10 02:29:57.320462",
+        "completed_at": "2026-09-10 02:30:06.615715",
+        "provider_name": "openai_compatible",
+        "model_name": "qwen3:8b",
+        "sequence_number": 2,
+        "document_revision": 17,
+        "chunk_revision": 17,
+        "retrieval_mode": null,
+        "last_stream_seq": 1,
+        "content_chars": 125,
+        "content_sha256": "8689ac0149b4c233bd715bf78d3aeaf7bf966e6ec1329efb9986790fa5a3c0ce",
+        "draft_chars": 0,
+        "claims": [
+          {
+            "status": "supported",
+            "text_chars": 121,
+            "text_sha256": "5f3f9c7e562796f780183f1f4411ffa3ac9bb2434e6b80201d1ba133344456c8",
+            "pages": [
+              138
+            ],
+            "reference_count": 7,
+            "all_reference_blocks_and_coordinates_match": true
+          }
+        ],
+        "duration_sec": 9.295253
+      },
+      {
+        "status": "completed",
+        "error_code": null,
+        "created_at": "2026-09-10 02:33:37.021165",
+        "stream_started_at": "2026-09-10 02:33:37.021165",
+        "completed_at": "2026-09-10 02:33:43.878262",
+        "provider_name": "openai_compatible",
+        "model_name": "qwen3:8b",
+        "sequence_number": 4,
+        "document_revision": 17,
+        "chunk_revision": 17,
+        "retrieval_mode": null,
+        "last_stream_seq": 1,
+        "content_chars": 125,
+        "content_sha256": "8689ac0149b4c233bd715bf78d3aeaf7bf966e6ec1329efb9986790fa5a3c0ce",
+        "draft_chars": 0,
+        "claims": [
+          {
+            "status": "supported",
+            "text_chars": 121,
+            "text_sha256": "5f3f9c7e562796f780183f1f4411ffa3ac9bb2434e6b80201d1ba133344456c8",
+            "pages": [
+              138
+            ],
+            "reference_count": 7,
+            "all_reference_blocks_and_coordinates_match": true
+          }
+        ],
+        "duration_sec": 6.857097
+      },
+      {
+        "status": "completed",
+        "error_code": null,
+        "created_at": "2026-09-10 02:34:56.467870",
+        "stream_started_at": "2026-09-10 02:34:56.467870",
+        "completed_at": "2026-09-10 02:35:03.449580",
+        "provider_name": "openai_compatible",
+        "model_name": "qwen3:8b",
+        "sequence_number": 6,
+        "document_revision": 17,
+        "chunk_revision": 17,
+        "retrieval_mode": null,
+        "last_stream_seq": 1,
+        "content_chars": 125,
+        "content_sha256": "8689ac0149b4c233bd715bf78d3aeaf7bf966e6ec1329efb9986790fa5a3c0ce",
+        "draft_chars": 0,
+        "claims": [
+          {
+            "status": "supported",
+            "text_chars": 121,
+            "text_sha256": "5f3f9c7e562796f780183f1f4411ffa3ac9bb2434e6b80201d1ba133344456c8",
+            "pages": [
+              138
+            ],
+            "reference_count": 7,
+            "all_reference_blocks_and_coordinates_match": true
+          }
+        ],
+        "duration_sec": 6.98171
+      }
+    ],
+    "active_qa": 0,
+    "foreign_key_violations": 0
+  },
+  "sourceNavigation": {
+    "linksClicked": 3,
+    "pdfPage": 138,
+    "storedBlockRefsPerAnswer": 7,
+    "coordinatesMatch": true,
+    "highlightScope": "chunk-wide; third source also highlights adjacent table/title/rows",
+    "sentenceExactHighlight": false
+  },
+  "restart": {
+    "normalClose": true,
+    "processesAfterClose": 0,
+    "closedObservedAt": "2026-09-10T02:37:19.6430962Z",
+    "relaunchedInstalledApp": true,
+    "threeAnswersAndSourceLinksVisible": true,
+    "allPreAndPostRestartFingerprintsEqual": true
+  },
+  "preservation": {
+    "quick_check": "ok",
+    "foreign_key_violations": 0,
+    "unchanged_tables": {
+      "documents": {
+        "rows": 12,
+        "sha256": "c3a70a020aa70b9318ad45063d61edbe52be8d9f82716ea1c3e4cc7386541022",
+        "matches_backup": true
+      },
+      "document_pages": {
+        "rows": 4339,
+        "sha256": "042fba7ec097311e0edc63e11f09154df7bf919511d1ed6bcda72cb490cc06c7",
+        "matches_backup": true
+      },
+      "document_blocks": {
+        "rows": 364819,
+        "sha256": "a5f391b6db39fe6ab4a1147b6bb63212c79e14ee4e9660940fee95811132372b",
+        "matches_backup": true
+      },
+      "summary_settings": {
+        "rows": 1,
+        "sha256": "81ff5a90db10b3a83102e2ff05e5a1443c01f1bd8b5c12404cb3ea180e2b2421",
+        "matches_backup": true
+      }
+    },
+    "original_qa_rows": {
+      "qa_threads": {
+        "rows": 19,
+        "unchanged": 19
+      },
+      "qa_messages": {
+        "rows": 90,
+        "unchanged": 90
+      },
+      "qa_claims": {
+        "rows": 201,
+        "unchanged": 201
+      }
+    },
+    "current_qa_fingerprints": {
+      "qa_threads": {
+        "rows": 21,
+        "sha256": "aa1c4d027820890232d4e3a2a91d3d238f65c62cc1024c8369b6aed8a9b47d45"
+      },
+      "qa_messages": {
+        "rows": 100,
+        "sha256": "7b546cf337fc9fb8238520e681ab8836691bbfd3de28d024aeb5cde48e1318f8"
+      },
+      "qa_claims": {
+        "rows": 205,
+        "sha256": "d5c57261d6e83c61586a838281ff2208c4d890572cd41454630701a947686b18"
+      }
+    },
+    "pre_test_qa_preservation": {
+      "qa_threads": {
+        "rows": 20,
+        "sha256": "d76ad8b047938dc285e6816f812788ed424418780f5dc0741b9fd86fd79de2aa",
+        "matches_before_test": true
+      },
+      "qa_messages": {
+        "rows": 94,
+        "sha256": "d4528e99cac61c2b8e1677e9db2f0238ebff18ed000e070fec96de6b74534875",
+        "matches_before_test": true
+      },
+      "qa_claims": {
+        "rows": 202,
+        "sha256": "2be50a058977cc20dbdedba7b4120588ae0e2759b2b2ab59a0ccdc01c84b1539",
+        "matches_before_test": true
+      }
+    },
+    "active_qa": 0
+  },
+  "limits": [
+    "No new installation was performed by the agent",
+    "No new upload/load/peak-memory benchmark",
+    "No clean-PC/offline/Ollama-removal test",
+    "No forced shutdown or cancellation test this turn",
+    "Private document contents/names/IDs/screenshots excluded"
+  ],
+  "conflictSafety": {
+    "codeCommit": "193babd6c07652ca1501156795ef8e509ec5d778",
+    "scope": "Only explicit conflicting_evidence with fewer than two supported claims abstains; previous raw bad-ID/final hint remains unknown",
+    "tests": {
+      "before": {
+        "failed": 15,
+        "passed": 14
+      },
+      "after": {
+        "passed": 29
+      },
+      "fullApi": {
+        "passed": 1340,
+        "skipped": 4,
+        "seconds": 122.44,
+        "warnings": 1
+      },
+      "ruff": "pass",
+      "mypy": {
+        "result": "pass",
+        "files": 130
+      },
+      "diffCheck": "pass"
+    },
+    "evaluation": {
+      "instrumentation": "Synthetic conflict-only _stream_attempt/_extract_delta/_parse_semantic_events wrappers; content capped at 8192 chars per attempt; full existing release evaluator and guards",
+      "exitCode": 0,
+      "generatedAt": "2026-09-10T02:53:05+00:00",
+      "model": "qwen3:8b",
+      "modelDigest": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+      "summary": {
+        "totalCases": 13,
+        "totalRuns": 39,
+        "protocolSuccessRate": 1,
+        "statusAccuracy": 1,
+        "answerableValidRate": 1,
+        "notFoundHoldAccuracy": 1,
+        "safetyFailureCases": 0,
+        "explicitSafetyViolationCases": 0,
+        "criticalCaseFailureCases": 0,
+        "unstableCases": 0,
+        "categoryPassRate": {
+          "grounded_basic": 1,
+          "numeric": 1,
+          "not_found": 1,
+          "polarity": 1,
+          "direction": 1,
+          "unit": 1,
+          "conflict": 1,
+          "prompt_injection": 1,
+          "long_context": 1
+        },
+        "latencyP50Sec": 2.922,
+        "latencyP95Sec": 29.23
+      },
+      "gate": {
+        "verdict": "default_recommended",
+        "safetyPassed": true,
+        "explicitSafetyPassed": true,
+        "criticalCasesPassed": true,
+        "modelGatePassed": true,
+        "failures": []
+      },
+      "priorFailurePreserved": true,
+      "priorFailureRawIdsAndHintReproduced": false,
+      "conflictAttempts": [
+        {
+          "case_id": "conflict_mortality",
+          "run": 31,
+          "source_chunks": [
+            {
+              "id": "synthetic-source-1",
+              "text": "초기 연구\n\n초기 연구에서는 이 요법이 사망 위험을 감소시킨다고 보고하였다."
+            },
+            {
+              "id": "synthetic-source-2",
+              "text": "후속 연구\n\n후속 대규모 연구에서는 이 요법이 사망 위험에 유의한 영향을 주지 않았다고 보고하였다."
+            }
+          ],
+          "attempt": 1,
+          "prompt_sha256": "7ee11bcf18e89ddb39223280e58c5a4a5a5f714cc80e1dc9edfbc6349aa0ef78",
+          "content": "{\"type\":\"claim\",\"text\":\"초기 연구에서는 이 요법이 사망 위험을 감소시킨다고 보고하였다.\",\"sourceChunkIds\":[\"synthetic-source-1\"]}\n{\"type\":\"claim\",\"text\":\"후속 대규모 연구에서는 이 요법이 사망 위험에 유의한 영향을 주지 않았다고 보고하였다.\",\"sourceChunkIds\":[\"synthetic-source-2\"]}\n{\"type\":\"final\",\"answerStatus\":\"conflicting_evidence\",\"followUpSuggestions\":[\"초기 연구와 후속 연구의 결과가 다르므로, 이 요법이 사망 위험에 미치는 영향에 대한 추가 연구가 필요합니다.\"]}",
+          "content_chars": 395,
+          "done_frames": 1,
+          "parsed": [
+            "claim",
+            "claim",
+            "final"
+          ],
+          "invalid_lines": 0,
+          "events": [
+            {
+              "type": "claim",
+              "text": "초기 연구에서는 이 요법이 사망 위험을 감소시킨다고 보고하였다.",
+              "sourceChunkIds": [
+                "synthetic-source-1"
+              ]
+            },
+            {
+              "type": "claim",
+              "text": "후속 대규모 연구에서는 이 요법이 사망 위험에 유의한 영향을 주지 않았다고 보고하였다.",
+              "sourceChunkIds": [
+                "synthetic-source-2"
+              ]
+            },
+            {
+              "type": "final",
+              "answerStatus": "conflicting_evidence",
+              "followUpSuggestions": [
+                "초기 연구와 후속 연구의 결과가 다르므로, 이 요법이 사망 위험에 미치는 영향에 대한 추가 연구가 필요합니다."
+              ]
+            }
+          ]
+        },
+        {
+          "case_id": "conflict_mortality",
+          "run": 32,
+          "source_chunks": [
+            {
+              "id": "synthetic-source-3",
+              "text": "초기 연구\n\n초기 연구에서는 이 요법이 사망 위험을 감소시킨다고 보고하였다."
+            },
+            {
+              "id": "synthetic-source-4",
+              "text": "후속 연구\n\n후속 대규모 연구에서는 이 요법이 사망 위험에 유의한 영향을 주지 않았다고 보고하였다."
+            }
+          ],
+          "attempt": 2,
+          "prompt_sha256": "fd38e584d259ce0572b7d69dff2f5835fea81a84420b24c5a6f910f7b6f50d46",
+          "content": "{\"type\":\"claim\",\"text\":\"초기 연구에서는 이 요법이 사망 위험을 감소시킨다고 보고하였다.\",\"sourceChunkIds\":[\"synthetic-source-3\"]}\n{\"type\":\"claim\",\"text\":\"후속 대규모 연구에서는 이 요법이 사망 위험에 유의한 영향을 주지 않았다고 보고하였다.\",\"sourceChunkIds\":[\"synthetic-source-4\"]}\n{\"type\":\"final\",\"answerStatus\":\"conflicting_evidence\",\"followUpSuggestions\":[\"초기 연구와 후속 연구의 결과가 서로 다르므로, 이 요법이 사망 위험에 미치는 영향에 대한 추가 연구가 필요합니다.\",\"두 연구의 방법론이나 데이터 수집 방식을 비교해 보는 것이 도움이 될 수 있습니다.\"]}",
+          "content_chars": 447,
+          "done_frames": 1,
+          "parsed": [
+            "claim",
+            "claim",
+            "final"
+          ],
+          "invalid_lines": 0,
+          "events": [
+            {
+              "type": "claim",
+              "text": "초기 연구에서는 이 요법이 사망 위험을 감소시킨다고 보고하였다.",
+              "sourceChunkIds": [
+                "synthetic-source-3"
+              ]
+            },
+            {
+              "type": "claim",
+              "text": "후속 대규모 연구에서는 이 요법이 사망 위험에 유의한 영향을 주지 않았다고 보고하였다.",
+              "sourceChunkIds": [
+                "synthetic-source-4"
+              ]
+            },
+            {
+              "type": "final",
+              "answerStatus": "conflicting_evidence",
+              "followUpSuggestions": [
+                "초기 연구와 후속 연구의 결과가 서로 다르므로, 이 요법이 사망 위험에 미치는 영향에 대한 추가 연구가 필요합니다.",
+                "두 연구의 방법론이나 데이터 수집 방식을 비교해 보는 것이 도움이 될 수 있습니다."
+              ]
+            }
+          ]
+        },
+        {
+          "case_id": "conflict_mortality",
+          "run": 33,
+          "source_chunks": [
+            {
+              "id": "synthetic-source-5",
+              "text": "초기 연구\n\n초기 연구에서는 이 요법이 사망 위험을 감소시킨다고 보고하였다."
+            },
+            {
+              "id": "synthetic-source-6",
+              "text": "후속 연구\n\n후속 대규모 연구에서는 이 요법이 사망 위험에 유의한 영향을 주지 않았다고 보고하였다."
+            }
+          ],
+          "attempt": 3,
+          "prompt_sha256": "cdf4af407db6a9c98c585eff9b675f5480afd9f87dd01c58c93db31095c59cd1",
+          "content": "{\"type\":\"claim\",\"text\":\"초기 연구에서는 이 요법이 사망 위험을 감소시킨다고 보고하였다.\",\"sourceChunkIds\":[\"synthetic-source-5\"]}\n{\"type\":\"claim\",\"text\":\"후속 대규모 연구에서는 이 요법이 사망 위험에 유의한 영향을 주지 않았다고 보고하였다.\",\"sourceChunkIds\":[\"synthetic-source-6\"]}\n{\"type\":\"final\",\"answerStatus\":\"conflicting_evidence\",\"followUpSuggestions\":[\"초기 연구와 후속 연구의 결과가 서로 다르므로, 이 요법이 사망 위험에 미치는 영향에 대한 추가 연구가 필요합니다.\",\"두 연구의 방법론이나 데이터 수집 방식을 비교하여 일관된 결론을 도출할 수 있습니다.\"]}",
+          "content_chars": 448,
+          "done_frames": 1,
+          "parsed": [
+            "claim",
+            "claim",
+            "final"
+          ],
+          "invalid_lines": 0,
+          "events": [
+            {
+              "type": "claim",
+              "text": "초기 연구에서는 이 요법이 사망 위험을 감소시킨다고 보고하였다.",
+              "sourceChunkIds": [
+                "synthetic-source-5"
+              ]
+            },
+            {
+              "type": "claim",
+              "text": "후속 대규모 연구에서는 이 요법이 사망 위험에 유의한 영향을 주지 않았다고 보고하였다.",
+              "sourceChunkIds": [
+                "synthetic-source-6"
+              ]
+            },
+            {
+              "type": "final",
+              "answerStatus": "conflicting_evidence",
+              "followUpSuggestions": [
+                "초기 연구와 후속 연구의 결과가 서로 다르므로, 이 요법이 사망 위험에 미치는 영향에 대한 추가 연구가 필요합니다.",
+                "두 연구의 방법론이나 데이터 수집 방식을 비교하여 일관된 결론을 도출할 수 있습니다."
+              ]
+            }
+          ]
+        }
+      ],
+      "retryLogs": [
+        "2026-09-10 11:49:39 [info     ] qa_ollama_stream_retry         attempt=1 discarded_claim_count=2 discarded_event_count=2 failure_category=server_error failure_reason=native_error_frame max_attempts=3 retry_delay_ms=1182",
+        "2026-09-10 11:49:45 [info     ] qa_ollama_stream_recovered     attempts=2 discarded_claim_count=2 discarded_event_count=2",
+        "2026-09-10 11:52:13 [info     ] qa_ollama_stream_retry         attempt=1 discarded_claim_count=0 discarded_event_count=0 failure_category=server_error failure_reason=http_500 max_attempts=3 retry_delay_ms=1023",
+        "2026-09-10 11:52:16 [info     ] qa_ollama_stream_recovered     attempts=2 discarded_claim_count=0 discarded_event_count=0",
+        "2026-09-10 11:52:19 [info     ] qa_ollama_stream_retry         attempt=1 discarded_claim_count=1 discarded_event_count=1 failure_category=server_error failure_reason=native_error_frame max_attempts=3 retry_delay_ms=1167",
+        "2026-09-10 11:52:23 [info     ] qa_ollama_stream_recovered     attempts=2 discarded_claim_count=1 discarded_event_count=1",
+        "2026-09-10 11:52:55 [info     ] qa_ollama_stream_retry         attempt=1 discarded_claim_count=1 discarded_event_count=1 failure_category=server_error failure_reason=native_error_frame max_attempts=3 retry_delay_ms=1191",
+        "2026-09-10 11:53:02 [info     ] qa_ollama_stream_recovered     attempts=2 discarded_claim_count=1 discarded_event_count=1"
+      ],
+      "timingCaveat": "Instrumented run with installed GUI and read-only DB preservation check; not a performance comparison"
+    },
+    "installedInGui": false,
+    "limitations": [
+      "Does not reconstruct unverified IDs",
+      "Does not cover a missing/answered final hint when only one side survives",
+      "May emit a validated provisional claim before the final conflict hint",
+      "Does not establish general semantic correctness"
+    ]
+  }
+}

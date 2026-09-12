@@ -17,6 +17,7 @@ from app.models.user import User
 from app.schemas.common import CamelModel, Envelope
 from app.services.documents.service import get_owned_document
 from app.services.summary import service as summary_service
+from app.services.summary.schema import bounded_source_refs
 from app.services.summary.settings import DEFAULT_LEARNER_LEVEL
 from app.utils.responses import wrap
 
@@ -44,6 +45,7 @@ class SummaryStatusOut(CamelModel):
     progress: int
     can_retry: bool
     failure_category: str | None
+    partial: bool
 
 
 class SummaryArtifactOut(CamelModel):
@@ -98,6 +100,7 @@ async def summary_status(
             progress=s.progress,
             can_retry=s.can_retry,
             failure_category=s.failure_category,
+            partial=s.partial,
         )
     )
 
@@ -119,7 +122,9 @@ async def list_summary(
                     title=a.title,
                     position=a.position,
                     content=a.content_json,
-                    source_refs=a.source_refs_json,
+                    # 새 산출물은 저장 전에 이미 제한하지만, 업그레이드 전 DB의 큰 배열도
+                    # 응답 경계에서 다시 제한해 단일 API 호출이 수천 bbox를 내리지 않는다.
+                    source_refs=bounded_source_refs(a.source_refs_json or []),
                 )
                 for a in artifacts
             ],

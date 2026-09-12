@@ -4,6 +4,8 @@
 완벽한 문단 복원을 가정하지 않으며, 불확실하면 confidence를 낮춘다.
 """
 
+import re
+from bisect import bisect_right
 from dataclasses import dataclass
 
 from app.services.extraction.engine import BlockRec
@@ -16,12 +18,21 @@ from app.services.extraction.thresholds import (
     TWO_COLUMN_MIN_BLOCKS,
 )
 
+_NUMBERED_TABLE_CAPTION = re.compile(
+    r"^(?:표\s*|table\s+)\d+(?:[.-]\d+)*[.,:]?\s+\S", re.IGNORECASE
+)
+_SPLIT_NUMBERED_SECTION = re.compile(r"[0-9]+\.[ \t]*\r?\n[^\r\n]+")
+_CAPTION_MAX_CHARS = 96
+_SECTION_MAX_CHARS = 64
+_CAPTION_ROW_GAP = 40.0  # 화면 좌표계의 PDF point 단위
+
 
 @dataclass
 class OrderResult:
     order: list[int]  # block_index를 읽기 순서대로 나열
     confidence: float
     two_column: bool
+    section_heading_indices: frozenset[int] = frozenset()
 
 
 def compute_reading_order(
@@ -29,9 +40,7 @@ def compute_reading_order(
 ) -> OrderResult:
     text_blocks = [b for b in blocks if b.block_type == "text" and b.text.strip()]
     if not text_blocks:
-        return OrderResult(
-            order=[b.block_index for b in blocks], confidence=1.0, two_column=False
-        )
+        return OrderResult(order=[b.block_index for b in blocks], confidence=1.0, two_column=False)
 
     content_x0 = min(b.bbox[0] for b in text_blocks)
     content_width = max(max(b.bbox[2] for b in text_blocks) - content_x0, 1.0)
@@ -109,7 +118,94 @@ def compute_reading_order(
     confidence = (
         READING_ORDER_CONFIDENCE_TWO_COL if straddlers == 0 else READING_ORDER_CONFIDENCE_FALLBACK
     )
-    return OrderResult(order=_with_nontext(ordered, blocks), confidence=confidence, two_column=True)
+    boundaries, sections = _heading_boundaries(
+        text_blocks, content_x0, content_width, tolerance, footnote_y
+    )
+    if boundaries:
+        # 검증된 제목의 위쪽을 경계로 안정 정렬한다. 기존 구간 내부의
+        # 좌→우 열 순서는 보존하며, 선행 본문을 제목 위 구간으로 되돌린다.
+        regrouped = sorted(
+            ordered,
+            key=lambda b: (b.bbox[1] >= footnote_y, bisect_right(boundaries, b.bbox[1])),
+        )
+        if regrouped != ordered:
+            confidence = min(confidence, READING_ORDER_CONFIDENCE_FALLBACK)
+            ordered = regrouped
+    return OrderResult(
+        order=_with_nontext(ordered, blocks), confidence=confidence, two_column=True,
+        section_heading_indices=sections,
+    )
+
+
+def _heading_boundaries(
+    blocks: list[BlockRec], content_x0: float, content_width: float,
+    tolerance: float, footnote_y: float,
+) -> tuple[list[float], frozenset[int]]:
+    """좌측 번호 제목 + 인접 전폭 본문으로 확인되는 경계만 사용한다.
+
+    표 구조나 행·열 관계를 추론하지 않는다. 독립 열 또는 경계를 가로지르는
+    본문이 있으면 기존 순서를 유지한다. 이미지 bbox는 텍스트 흐름을 나누지 않는다.
+    """
+    body = [b for b in blocks if b.bbox[1] < footnote_y]
+    full_width = content_width * FULL_WIDTH_BLOCK_RATIO
+    boundaries = []
+    sections: set[int] = set()
+    for caption in body:
+        x0, top, x1, bottom = caption.bbox
+        label = caption.text.strip()
+        if (
+            x0 > content_x0 + tolerance or x1 - x0 >= full_width
+            or len(label) > _CAPTION_MAX_CHARS or len(label.splitlines()) > 2
+        ):
+            continue
+        is_caption = bool(_NUMBERED_TABLE_CAPTION.match(label))
+        is_section = not is_caption and _is_standalone_section(
+            caption, body, full_width
+        )
+        if not is_caption and not is_section:
+            continue
+        if not any(
+            b.bbox[2] - b.bbox[0] >= full_width
+            and bottom <= b.bbox[1] <= bottom + _CAPTION_ROW_GAP
+            for b in body
+        ):
+            continue
+        if any(
+            b is not caption and (
+                b.bbox[1] < top < b.bbox[3]
+                or (top <= b.bbox[1] < bottom and b.bbox[0] >= x1)
+            )
+            for b in body
+        ):
+            continue
+        boundaries.append(top)
+        if is_section:
+            sections.add(caption.block_index)
+    return sorted(set(boundaries)), frozenset(sections)
+
+
+def _is_standalone_section(heading: BlockRec, body: list[BlockRec], full_width: float) -> bool:
+    """번호만 첫 줄에 있는 짧은 절 제목에 추가적인 공간 근거를 요구한다."""
+    label = heading.text.strip()
+    if (
+        len(label) > _SECTION_MAX_CHARS or not _SPLIT_NUMBERED_SECTION.fullmatch(label)
+        or label.endswith((".", "?", "!", ",", ";", ":", "。", "？", "！"))
+    ):
+        return False
+    top, bottom = heading.bbox[1], heading.bbox[3]
+    if any(b is not heading and top <= b.bbox[1] < bottom for b in body):
+        return False  # 캡션과 달리 절 제목에는 겹쳐 시작하는 본문을 허용하지 않는다.
+    above = [b.bbox[3] for b in body if b.bbox[1] < top]
+    if bottom <= top or not above or top - max(above) < bottom - top:
+        return False  # 제목 높이 이상의 여백이 없으면 목록/연속 본문으로 남긴다.
+    below = [b for b in body if b.bbox[1] >= bottom and b is not heading]
+    if not below:
+        return False
+    nearest_top = min(b.bbox[1] for b in below)
+    return all(
+        b.bbox[2] - b.bbox[0] >= full_width
+        for b in below if b.bbox[1] == nearest_top
+    )
 
 
 def _with_nontext(ordered_text: list[BlockRec], all_blocks: list[BlockRec]) -> list[int]:

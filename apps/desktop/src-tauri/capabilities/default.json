@@ -9,6 +9,13 @@
     "process:default",
     "process:allow-restart",
     "updater:default",
-    "opener:allow-open-url"
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        {
+          "url": "https://ollama.com/download/windows"
+        }
+      ]
+    }
   ]
 }

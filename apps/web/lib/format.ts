@@ -47,8 +47,9 @@ export const FAILURE_GUIDES: Record<string, string> = {
 };
 
 export function failureGuide(code: string | null): string {
+  // code가 ""이면 `"" && X`는 ""(nullish 아님)라 ??가 기본 안내로 못 떨어진다 — ||로 방어.
   return (
-    (code && FAILURE_GUIDES[code]) ??
+    (code ? FAILURE_GUIDES[code] : undefined) ||
     "PDF가 손상되었거나 암호로 보호되어 있을 수 있습니다. 다른 PDF를 선택하거나 다시 시도해 주세요."
   );
 }

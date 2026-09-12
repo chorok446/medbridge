@@ -1,0 +1,152 @@
+{
+  "testedCommit": "49131afa747c51d4e44005820e14cb4da00c2896",
+  "forcedAt": "2026-09-09T18:32:22.2739944Z",
+  "guard": {
+    "exactInstalledProcess": true,
+    "syntheticOnly": true,
+    "otherJobsTerminal": true
+  },
+  "afterForceBeforeRestart": {
+    "active": 1,
+    "new_answers": [
+      {
+        "status": "cancelled",
+        "error_code": "CANCELLED",
+        "created_at": "2026-09-09 18:23:35.743134",
+        "stream_started_at": "2026-09-09 18:23:35.742110",
+        "completed_at": "2026-09-09 18:23:46.866013",
+        "cancel_requested_at": "2026-09-09 18:23:46.812498",
+        "interrupted_at": null,
+        "model_name": "qwen3:8b",
+        "question": "심장은 온몸에 혈액을 보내는 근육 기관이다라는 문서의 문장을 구성하는 단어를 각각 설명하고 문단 1부터 문단 12까지 순서대로 원문을 인용해 주세요.",
+        "content": "답변 생성을 취소했습니다.",
+        "draft_chars": 0,
+        "last_stream_seq": 0,
+        "duration_sec": 11.123903,
+        "claims": [],
+        "exact_ordered_12": false,
+        "duplicate_text_and_sources": 0,
+        "known_unsupported_terms": []
+      },
+      {
+        "status": "completed",
+        "error_code": null,
+        "created_at": "2026-09-09 18:24:43.704263",
+        "stream_started_at": "2026-09-09 18:24:43.704263",
+        "completed_at": "2026-09-09 18:25:03.444567",
+        "cancel_requested_at": null,
+        "interrupted_at": null,
+        "model_name": "qwen3:8b",
+        "question": "이 문서에서 심장은 어떤 기관이라고 설명하나요?",
+        "content": "심장은 온몸에 혈액을 보내는 근육 기관이다 (원문: 심장은 온몸에 혈액을 보내는 근육 기관이다).[c0]",
+        "draft_chars": 0,
+        "last_stream_seq": 1,
+        "duration_sec": 19.740304,
+        "claims": [
+          {
+            "index": 0,
+            "text": "심장은 온몸에 혈액을 보내는 근육 기관이다 (원문: 심장은 온몸에 혈액을 보내는 근육 기관이다).",
+            "status": "supported",
+            "pages": [
+              1,
+              2
+            ]
+          }
+        ],
+        "exact_ordered_12": false,
+        "duplicate_text_and_sources": 0,
+        "known_unsupported_terms": []
+      },
+      {
+        "status": "streaming",
+        "error_code": null,
+        "created_at": "2026-09-09 18:32:22.191194",
+        "stream_started_at": "2026-09-09 18:32:22.191194",
+        "completed_at": null,
+        "cancel_requested_at": null,
+        "interrupted_at": null,
+        "model_name": "qwen3:8b",
+        "question": "심장은 온몸에 혈액을 보내는 근육 기관이다라는 문서의 문장을 구성하는 단어를 각각 설명하고 문단 1부터 문단 12까지 순서대로 원문을 인용해 주세요.",
+        "content": "",
+        "draft_chars": 0,
+        "last_stream_seq": 0,
+        "claims": [],
+        "exact_ordered_12": false,
+        "duplicate_text_and_sources": 0,
+        "known_unsupported_terms": []
+      }
+    ]
+  },
+  "afterRestartBeforeRetry": {
+    "active": 0,
+    "new_answers": [
+      {
+        "status": "cancelled",
+        "error_code": "CANCELLED",
+        "created_at": "2026-09-09 18:23:35.743134",
+        "stream_started_at": "2026-09-09 18:23:35.742110",
+        "completed_at": "2026-09-09 18:23:46.866013",
+        "cancel_requested_at": "2026-09-09 18:23:46.812498",
+        "interrupted_at": null,
+        "model_name": "qwen3:8b",
+        "question": "심장은 온몸에 혈액을 보내는 근육 기관이다라는 문서의 문장을 구성하는 단어를 각각 설명하고 문단 1부터 문단 12까지 순서대로 원문을 인용해 주세요.",
+        "content": "답변 생성을 취소했습니다.",
+        "draft_chars": 0,
+        "last_stream_seq": 0,
+        "duration_sec": 11.123903,
+        "claims": [],
+        "exact_ordered_12": false,
+        "duplicate_text_and_sources": 0,
+        "known_unsupported_terms": []
+      },
+      {
+        "status": "completed",
+        "error_code": null,
+        "created_at": "2026-09-09 18:24:43.704263",
+        "stream_started_at": "2026-09-09 18:24:43.704263",
+        "completed_at": "2026-09-09 18:25:03.444567",
+        "cancel_requested_at": null,
+        "interrupted_at": null,
+        "model_name": "qwen3:8b",
+        "question": "이 문서에서 심장은 어떤 기관이라고 설명하나요?",
+        "content": "심장은 온몸에 혈액을 보내는 근육 기관이다 (원문: 심장은 온몸에 혈액을 보내는 근육 기관이다).[c0]",
+        "draft_chars": 0,
+        "last_stream_seq": 1,
+        "duration_sec": 19.740304,
+        "claims": [
+          {
+            "index": 0,
+            "text": "심장은 온몸에 혈액을 보내는 근육 기관이다 (원문: 심장은 온몸에 혈액을 보내는 근육 기관이다).",
+            "status": "supported",
+            "pages": [
+              1,
+              2
+            ]
+          }
+        ],
+        "exact_ordered_12": false,
+        "duplicate_text_and_sources": 0,
+        "known_unsupported_terms": []
+      },
+      {
+        "status": "interrupted",
+        "error_code": "APP_RESTARTED",
+        "created_at": "2026-09-09 18:32:22.191194",
+        "stream_started_at": "2026-09-09 18:32:22.191194",
+        "completed_at": "2026-09-09 18:32:44.279170",
+        "cancel_requested_at": null,
+        "interrupted_at": "2026-09-09 18:32:44.279170",
+        "model_name": "qwen3:8b",
+        "question": "심장은 온몸에 혈액을 보내는 근육 기관이다라는 문서의 문장을 구성하는 단어를 각각 설명하고 문단 1부터 문단 12까지 순서대로 원문을 인용해 주세요.",
+        "content": "",
+        "draft_chars": 0,
+        "last_stream_seq": 0,
+        "duration_sec": 22.087976,
+        "claims": [],
+        "exact_ordered_12": false,
+        "duplicate_text_and_sources": 0,
+        "known_unsupported_terms": []
+      }
+    ]
+  }
+}

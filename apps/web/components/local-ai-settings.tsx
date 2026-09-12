@@ -1,7 +1,7 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { type ReactNode, useRef, useState } from "react";
 import { useModelDownload } from "@/hooks/use-model-download";
 import { ApiError } from "@/lib/api/client";
 import {
@@ -11,9 +11,8 @@ import {
   testLocalModel,
   type LocalModel,
 } from "@/lib/api/local-ai";
-import { openExternalUrl } from "@/lib/tauri";
+import { OLLAMA_INSTALL_URL, openExternalUrl } from "@/lib/tauri";
 
-const OLLAMA_INSTALL_URL = "https://ollama.com/download/windows";
 const GIB = 1024 ** 3;
 
 function errorDetails(error: ApiError): Record<string, unknown> | null {
@@ -71,10 +70,31 @@ export function LocalAiSection() {
   const recheck = () => statusQuery.refetch();
 
   if (status === "not_running") {
-    return <NotRunning onRecheck={recheck} />;
+    return (
+      <InstallGuide
+        onRecheck={recheck}
+        message={
+          <>
+            로컬 AI를 사용하려면 먼저 <b>로컬 AI 실행 프로그램</b>이 필요합니다. 아래에서
+            설치 안내를 열어 설치한 뒤 “다시 확인”을 눌러 주세요.
+          </>
+        }
+        note="설치 파일은 공식 페이지에서만 받으세요. MedBridge가 대신 내려받지 않습니다."
+      />
+    );
   }
   if (status === "incompatible") {
-    return <Incompatible onRecheck={recheck} />;
+    return (
+      <InstallGuide
+        onRecheck={recheck}
+        message={
+          <>
+            설치된 로컬 AI 실행 프로그램이 오래된 버전이에요. 최신 버전으로 업데이트한 뒤
+            “다시 확인”을 눌러 주세요.
+          </>
+        }
+      />
+    );
   }
   if (status === "error" || statusQuery.isError) {
     return <StatusError onRecheck={recheck} />;
@@ -82,50 +102,76 @@ export function LocalAiSection() {
   return <ReadyPanel onRecheck={recheck} />;
 }
 
-function NotRunning({ onRecheck }: { onRecheck: () => void }) {
-  return (
-    <div aria-live="polite" className="flex flex-col gap-3 text-sm">
-      <p className="text-slate-700">
-        로컬 AI를 사용하려면 먼저 <b>로컬 AI 실행 프로그램</b>이 필요합니다. 아래에서 설치
-        안내를 열어 설치한 뒤 “다시 확인”을 눌러 주세요.
-      </p>
-      <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
-          onClick={() => void openExternalUrl(OLLAMA_INSTALL_URL)}
-          className="rounded bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700"
-        >
-          설치 안내 열기
-        </button>
-        <button
-          type="button"
-          onClick={onRecheck}
-          className="rounded border border-slate-300 px-4 py-2 hover:bg-slate-50"
-        >
-          다시 확인
-        </button>
-      </div>
-      <p className="text-xs text-slate-400">
-        설치 파일은 공식 페이지에서만 받으세요. MedBridge가 대신 내려받지 않습니다.
-      </p>
-    </div>
-  );
-}
+/** 미설치·구버전 공통 안내 — 문구만 다르고 버튼·레이아웃은 같다. */
+function InstallGuide({
+  onRecheck,
+  message,
+  note,
+}: {
+  onRecheck: () => void;
+  message: ReactNode;
+  note?: string;
+}) {
+  const installUrlRef = useRef<HTMLInputElement>(null);
+  const [opening, setOpening] = useState(false);
+  const [feedback, setFeedback] = useState<{
+    tone: "success" | "error";
+    message: string;
+  } | null>(null);
 
-function Incompatible({ onRecheck }: { onRecheck: () => void }) {
+  async function openInstallGuide() {
+    if (opening) return;
+    setOpening(true);
+    setFeedback(null);
+    try {
+      const opened = await openExternalUrl(OLLAMA_INSTALL_URL);
+      setFeedback(
+        opened
+          ? {
+              tone: "success",
+              message: "기본 브라우저에서 Ollama 공식 설치 페이지를 열었습니다.",
+            }
+          : {
+              tone: "error",
+              message: "브라우저가 페이지 열기를 차단했습니다. 아래 공식 주소를 복사해 주세요.",
+            },
+      );
+    } catch {
+      setFeedback({
+        tone: "error",
+        message: "설치 페이지를 열지 못했습니다. 아래 공식 주소를 복사해 브라우저에서 열어 주세요.",
+      });
+    } finally {
+      setOpening(false);
+    }
+  }
+
+  async function copyInstallUrl() {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("clipboard unavailable");
+      await navigator.clipboard.writeText(OLLAMA_INSTALL_URL);
+      setFeedback({ tone: "success", message: "Ollama 공식 다운로드 주소를 복사했습니다." });
+    } catch {
+      installUrlRef.current?.focus();
+      installUrlRef.current?.select();
+      setFeedback({
+        tone: "error",
+        message: "자동으로 복사하지 못했습니다. 선택된 주소를 Ctrl+C로 복사해 주세요.",
+      });
+    }
+  }
+
   return (
     <div aria-live="polite" className="flex flex-col gap-3 text-sm">
-      <p className="text-slate-700">
-        설치된 로컬 AI 실행 프로그램이 오래된 버전이에요. 최신 버전으로 업데이트한 뒤 “다시
-        확인”을 눌러 주세요.
-      </p>
+      <p className="text-slate-700">{message}</p>
       <div className="flex flex-wrap gap-2">
         <button
           type="button"
-          onClick={() => void openExternalUrl(OLLAMA_INSTALL_URL)}
-          className="rounded bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700"
+          onClick={() => void openInstallGuide()}
+          disabled={opening}
+          className="rounded-md bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
         >
-          설치 안내 열기
+          {opening ? "설치 안내 여는 중…" : "설치 안내 열기"}
         </button>
         <button
           type="button"
@@ -135,6 +181,42 @@ function Incompatible({ onRecheck }: { onRecheck: () => void }) {
           다시 확인
         </button>
       </div>
+      <div className="flex flex-col gap-1.5">
+        <label htmlFor="ollama-install-url" className="text-xs font-medium text-slate-700">
+          Ollama 공식 다운로드 주소
+        </label>
+        <div className="flex gap-2">
+          <input
+            id="ollama-install-url"
+            ref={installUrlRef}
+            type="url"
+            readOnly
+            value={OLLAMA_INSTALL_URL}
+            onFocus={(event) => event.currentTarget.select()}
+            className="min-w-0 flex-1 rounded border border-slate-300 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-700"
+          />
+          <button
+            type="button"
+            onClick={() => void copyInstallUrl()}
+            className="rounded border border-slate-300 px-3 py-2 text-xs hover:bg-slate-50"
+          >
+            주소 복사
+          </button>
+        </div>
+      </div>
+      {feedback && (
+        <p
+          role={feedback.tone === "error" ? "alert" : "status"}
+          className={`rounded px-3 py-2 text-xs ${
+            feedback.tone === "error"
+              ? "bg-red-50 text-red-700"
+              : "bg-green-50 text-green-800"
+          }`}
+        >
+          {feedback.message}
+        </p>
+      )}
+      {note && <p className="text-xs text-slate-500">{note}</p>}
     </div>
   );
 }
@@ -329,7 +411,16 @@ function ReadyPanel({ onRecheck }: { onRecheck: () => void }) {
       )}
 
       {confirmOverwrite && (
-        <div role="alertdialog" className="rounded border border-amber-200 bg-amber-50 p-3">
+        // role은 실제 동작과 맞춰야 한다. alertdialog였지만 초점 트랩도, 최초
+        // 초점 이동도, Esc도, backdrop도 없는 그냥 카드다. 스크린리더는 "경고
+        // 대화상자가 열렸다"고 안내하면서 초점은 그대로 두어, 사용자는 무엇을
+        // 확인하라는 것인지 찾지 못한 채 뒷배경을 계속 탐색하게 된다. 이름조차
+        // 없어 "경고 대화상자"라고만 읽혔다(WCAG 4.1.2).
+        <div
+          role="group"
+          aria-label="로컬 AI로 바꿀지 확인"
+          className="rounded border border-amber-200 bg-amber-50 p-3"
+        >
           <p className="mb-2 text-amber-900">
             이미 외부 AI가 설정되어 있어요. 로컬 AI로 바꿀까요?
           </p>
@@ -338,7 +429,7 @@ function ReadyPanel({ onRecheck }: { onRecheck: () => void }) {
               type="button"
               onClick={() => requestActivation(confirmOverwrite, true)}
               disabled={activateMutation.isPending}
-              className="rounded bg-blue-600 px-3 py-1.5 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              className="rounded-md bg-blue-600 px-3 py-1.5 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
             >
               로컬 AI로 변경
             </button>
@@ -357,7 +448,7 @@ function ReadyPanel({ onRecheck }: { onRecheck: () => void }) {
       <button
         type="button"
         onClick={onRecheck}
-        className="w-fit text-xs text-slate-400 underline hover:text-slate-600"
+        className="w-fit text-xs text-slate-500 underline hover:text-slate-600"
       >
         상태 다시 확인
       </button>
@@ -405,7 +496,7 @@ function DownloadProgress({
           중단
         </button>
       </div>
-      <p className="mt-2 text-xs text-slate-400">
+      <p className="mt-2 text-xs text-slate-500">
         앱을 종료하면 다음 실행에서 설치 상태를 다시 확인해요.
       </p>
     </div>
@@ -445,7 +536,7 @@ function ReadyWithModels({
               className="h-4 w-4"
             />
             <span>
-              {m.label} <span className="text-xs text-slate-400">({formatSize(m.approxBytes)})</span>
+              {m.label} <span className="text-xs text-slate-500">({formatSize(m.approxBytes)})</span>
             </span>
           </label>
         ))}
@@ -463,7 +554,7 @@ function ReadyWithModels({
           type="button"
           onClick={() => onActivate(activeModel)}
           disabled={activating}
-          className="rounded bg-blue-600 px-3 py-1.5 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+          className="rounded-md bg-blue-600 px-3 py-1.5 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
         >
           기본 모델로 사용
         </button>
@@ -499,7 +590,7 @@ function ModelChooser({
                 <span className="font-medium text-slate-800">
                   {m.label}
                   {isDefault && (
-                    <span className="ml-2 rounded bg-blue-50 px-1.5 py-0.5 text-[11px] text-blue-700">
+                    <span className="ml-2 rounded bg-blue-50 px-1.5 py-0.5 text-xs text-blue-700">
                       추천
                     </span>
                   )}
@@ -519,7 +610,7 @@ function ModelChooser({
                 disabled={!m.diskOk}
                 className={
                   isDefault
-                    ? "mt-1 w-fit rounded bg-blue-600 px-3 py-1.5 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                    ? "mt-1 w-fit rounded-md bg-blue-600 px-3 py-1.5 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
                     : "mt-1 w-fit rounded border border-slate-300 px-3 py-1.5 hover:bg-slate-50 disabled:opacity-50"
                 }
               >

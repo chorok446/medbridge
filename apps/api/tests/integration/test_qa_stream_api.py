@@ -1,10 +1,13 @@
 """Q&A 스트리밍 API 통합 테스트 — 프로토콜·출처·취소·복구·revision·동의·동시성."""
 
+import asyncio
 import json
+import re
 import threading
 import uuid
 from datetime import UTC, datetime
 
+import pytest
 from sqlalchemy import func, select
 
 from app.db.session import get_session_factory
@@ -70,6 +73,18 @@ async def collect(client, doc_id, tid, question="심장은 무엇을 하나요?"
     return events
 
 
+async def collect_retry(client, doc_id, tid) -> list[dict]:
+    events: list[dict] = []
+    async with client.stream(
+        "POST", f"/api/documents/{doc_id}/qa/threads/{tid}/retry/stream", json={}
+    ) as resp:
+        assert resp.status_code == 200, await resp.aread()
+        async for line in resp.aiter_lines():
+            if line.strip():
+                events.append(json.loads(line))
+    return events
+
+
 class TestHappyPath:
     async def test_started_claim_completed_with_sources(self, client):
         await enable_deterministic()
@@ -97,6 +112,156 @@ class TestHappyPath:
 
 
 class TestSourceSafety:
+    @pytest.mark.parametrize("hint", ["answered", "insufficient_evidence"])
+    @pytest.mark.parametrize("duplicate_original", [False, True])
+    async def test_native_literal_quote_labels_reach_stream_and_saved_claims(
+        self, client, monkeypatch, hint, duplicate_original
+    ):
+        from app.services.qa import stream_service
+        from app.services.qa.streaming import OpenAICompatibleStreamingQaProvider
+
+        await enable_deterministic()
+        doc_id, tid = await setup_doc(client)
+        source = "심장은 온몸에 혈액을 보내는 근육 기관이다."
+
+        def model_lines(_url, payload, _key):
+            prompt = payload["messages"][1]["content"]
+            cid = re.search(r"\[chunkId ([^\]]+)\]", prompt)[1]
+            quote = f"{source} (원문: {source})" if duplicate_original else source
+            claims = [{"type": "claim", "text": quote, "sourceChunkIds": [cid]}] * 12
+            # 원문 인용이 있어도 문서 밖 설명을 고쳐주거나 지원 주장으로 만들면 안 된다.
+            claims.insert(0, {"type": "claim", "text": f"산소를 운반하는 체액이다 (원문: {source})",
+                              "sourceChunkIds": [cid]})
+            claims.append({"type": "final", "answerStatus": hint})
+            content = "\n".join(json.dumps(c, ensure_ascii=False) for c in claims)
+            return iter([json.dumps({"message": {"content": content}, "done": True})])
+
+        provider = OpenAICompatibleStreamingQaProvider(
+            endpoint="http://127.0.0.1:11434/v1", model_name="qwen3:8b",
+            api_key="", is_local=True, line_source=model_lines,
+        )
+        monkeypatch.setattr(stream_service, "get_qa_streaming_provider",
+                            lambda db: _fake_async(provider))
+        question = "문단 1부터 문단 12까지 순서대로 원문을 인용해 주세요."
+        events = await collect(client, doc_id, tid, question=question)
+        message = events[-1]["message"]
+        expected = [f"문단 {i}. {source}" for i in range(1, 13)] if hint == "answered" else []
+        assert message["status"] == ("completed" if hint == "answered" else hint)
+        assert [c["text"] for c in message["claims"]] == expected
+        assert "산소" not in message["content"]
+        if hint == "answered":
+            emitted = [e for e in events if e["type"] == "claim"]
+            assert [e["text"] for e in emitted] == expected
+            assert [e["claimIndex"] for e in emitted] == list(range(12))
+            assert all(c["sourceRefs"] for c in message["claims"])
+        async with get_session_factory()() as session:
+            saved = await session.get(QaMessage, uuid.UUID(message["id"]))
+            rows = (await session.execute(
+                select(QaClaim).where(QaClaim.message_id == saved.id).order_by(QaClaim.claim_index)
+            )).scalars().all()
+            assert [r.claim_text for r in rows] == expected
+            assert saved.content == message["content"]
+            assert saved.draft_content is None
+
+    async def test_duplicate_claims_do_not_repeat_stream_draft_or_saved_answer(
+        self, client, monkeypatch
+    ):
+        from app.services.qa import stream_service
+
+        await enable_deterministic()
+        doc_id, tid = await setup_doc(client)
+        source = "심장은 온몸에 혈액을 보내는 근육 기관이다."
+        checkpointed = []
+        original_checkpoint = stream_service._checkpoint_draft
+
+        async def capture_checkpoint(factory, assistant_id, claims):
+            checkpointed.append([c.text for c in claims])
+            await original_checkpoint(factory, assistant_id, claims)
+
+        class RepeatingProvider:
+            provider_name = "deterministic"
+            model_name = "m"
+            available = True
+            is_local = True
+
+            def stream_answer(self, request, token):
+                cid = request.chunks[0].chunk_id
+                # An invalid earlier copy must not hide a later supported claim.
+                yield {"type": "claim", "text": source, "sourceChunkIds": ["unknown"]}
+                for _ in range(12):
+                    yield {"type": "claim", "text": f"  {source}  ",
+                           "sourceChunkIds": [cid, cid]}
+                # Paragraph labels are not duplicates and must keep sequential citations.
+                yield {"type": "claim", "text": f"문단 2. {source}", "sourceChunkIds": [cid]}
+                yield {"type": "final", "answerStatus": "answered"}
+
+        monkeypatch.setattr(stream_service, "_checkpoint_draft", capture_checkpoint)
+        monkeypatch.setattr(
+            stream_service, "get_qa_streaming_provider",
+            lambda db: _fake_async(RepeatingProvider()),
+        )
+        events = await collect(client, doc_id, tid)
+        claims = [e for e in events if e["type"] == "claim"]
+        expected = [source, f"문단 2. {source}"]
+        assert [c["text"] for c in claims] == expected
+        assert [c["claimIndex"] for c in claims] == [0, 1]
+        assert [c["seq"] for c in claims] == [1, 2]
+        assert checkpointed == [[source], expected]
+        message = events[-1]["message"]
+        assert message["status"] == "completed"
+        assert message["content"] == f"{source}[c0]\n문단 2. {source}[c1]"
+        assert len(message["claims"]) == 2
+        async with get_session_factory()() as session:
+            saved = await session.get(QaMessage, uuid.UUID(message["id"]))
+            rows = (await session.execute(
+                select(QaClaim).where(QaClaim.message_id == saved.id).order_by(QaClaim.claim_index)
+            )).scalars().all()
+            assert [r.claim_text for r in rows] == expected
+            assert saved.content == message["content"]
+            assert saved.draft_content is None
+            assert saved.last_stream_seq == 2
+
+    @pytest.mark.parametrize("hint", ["not_found", "insufficient_evidence"])
+    async def test_abstention_clears_draft_claims_from_final_message(
+        self, client, monkeypatch, hint
+    ):
+        await enable_deterministic()
+        doc_id, tid = await setup_doc(client)
+
+        class AbstainingProvider:
+            provider_name = "deterministic"
+            model_name = "m"
+            available = True
+            is_local = True
+
+            def stream_answer(self, request, token):
+                chunk = request.chunks[0]
+                yield {"type": "claim", "text": chunk.text[:200],
+                       "sourceChunkIds": [chunk.chunk_id]}
+                yield {"type": "final", "answerStatus": hint,
+                       "followUpSuggestions": ["관련된 다른 질문"]}
+
+        monkeypatch.setattr(
+            "app.services.qa.stream_service.get_qa_streaming_provider",
+            lambda db: _fake_async(AbstainingProvider()),
+        )
+        events = await collect(client, doc_id, tid)
+        assert any(e["type"] == "claim" for e in events)  # 실제 draft 경로를 통과
+        message = events[-1]["message"]
+        assert message["status"] == hint
+        assert message["claims"] == []
+        assert "[c0]" not in message["content"]
+        async with get_session_factory()() as session:
+            saved = await session.get(QaMessage, uuid.UUID(message["id"]))
+            assert saved.status.value == hint
+            assert saved.content == message["content"]
+            assert not saved.followups_json
+            assert saved.draft_content is None
+            count = await session.scalar(
+                select(func.count()).select_from(QaClaim).where(QaClaim.message_id == saved.id)
+            )
+            assert count == 0
+
     async def test_unsupported_claim_not_emitted(self, client, monkeypatch):
         # 검색되지 않은/무관한 chunk id를 붙인 claim은 스트림으로 나가지 않는다
         await enable_deterministic()
@@ -121,6 +286,54 @@ class TestSourceSafety:
         assert not any(e["type"] == "claim" for e in events)
         completed = next(e for e in events if e["type"] == "completed")
         assert completed["message"]["status"] == "insufficient_evidence"
+
+    @pytest.mark.parametrize("with_supported", [False, True])
+    async def test_quote_laundering_never_reaches_stream_or_storage(
+        self, client, monkeypatch, with_supported
+    ):
+        await enable_deterministic()
+        doc_id, tid = await setup_doc(client)
+        source = "심장은 온몸에 혈액을 보내는 근육 기관이다."
+
+        class QuotedExpansionProvider:
+            provider_name = "deterministic"
+            model_name = "m"
+            available = True
+            is_local = True
+
+            def stream_answer(self, request, token):
+                ids = [request.chunks[0].chunk_id]
+                for explanation in (
+                    "'혈액'은 심장이 보내는 유체로, 산소와 영양분을 운반하는 역할을 합니다",
+                    "'근육'은 심장이 근육 조직으로 이루어져 있으며, "
+                    "수축과 이완을 통해 혈액을 펌프하는 특성을 나타냅니다",
+                ):
+                    yield {"type": "claim", "text": f"{explanation} (원문: {source}).",
+                           "sourceChunkIds": ids}
+                if with_supported:
+                    yield {"type": "claim", "text": source, "sourceChunkIds": ids}
+                yield {"type": "final", "answerStatus": "answered"}
+
+        monkeypatch.setattr(
+            "app.services.qa.stream_service.get_qa_streaming_provider",
+            lambda db: _fake_async(QuotedExpansionProvider()),
+        )
+        events = await collect(client, doc_id, tid)
+        emitted = [e for e in events if e["type"] == "claim"]
+        assert [e["text"] for e in emitted] == ([source] if with_supported else [])
+        message = events[-1]["message"]
+        assert message["status"] == ("completed" if with_supported else "insufficient_evidence")
+        assert len(message["claims"]) == int(with_supported)
+        async with get_session_factory()() as session:
+            saved = await session.get(QaMessage, uuid.UUID(message["id"]))
+            claims = (await session.execute(
+                select(QaClaim).where(QaClaim.message_id == saved.id)
+            )).scalars().all()
+            assert [c.claim_text for c in claims] == ([source] if with_supported else [])
+            assert saved.content == message["content"]
+            assert saved.draft_content is None
+            assert "산소" not in saved.content
+            assert "수축" not in saved.content
 
 
 class TestConcurrency:
@@ -149,6 +362,75 @@ class TestConcurrency:
 
 
 class TestCancel:
+    @pytest.mark.parametrize("explicit_cancel", [False, True])
+    @pytest.mark.parametrize("stop_after", ["started", "finalizing", "completed"])
+    @pytest.mark.parametrize("close_mode", ["aclose", "cancelled_error"])
+    async def test_stream_close_preserves_cancel_intent(
+        self, client, explicit_cancel, stop_after, close_mode
+    ):
+        # GUI는 취소 POST 성공 뒤 연결을 닫는다. 다음 이벤트를 기다리는 기존
+        # 취소 테스트와 달리 제너레이터 정리가 먼저 실행되는 순서를 고정한다.
+        from app.services.qa import cancel_registry, stream_service
+
+        await enable_deterministic()
+        doc_id, tid = await setup_doc(client)
+        factory = get_session_factory()
+        async with factory() as session:
+            user = (await session.execute(select(User))).scalars().first()
+            doc = await session.get(Document, uuid.UUID(doc_id))
+            thread = await session.get(QaThread, uuid.UUID(tid))
+            _, assistant, request_id = await stream_service.prepare_stream(
+                session, doc, user, thread, "심장은 무엇을 하나요?"
+            )
+            aid = assistant.id
+            revisions = doc.content_revision, doc.chunk_revision
+        stream = stream_service.run_stream(
+            uuid.UUID(doc_id), uuid.UUID(tid), aid, "심장은 무엇을 하나요?",
+            request_id, *revisions, _FakeRequest(),
+        )
+        async for event in stream:
+            if event["type"] == stop_after or event.get("phase") == stop_after:
+                break
+        else:
+            pytest.fail(f"중단 지점 미도달: {stop_after}")
+
+        before = await stream_service._message_dto(factory, aid)
+        if stop_after == "finalizing":
+            async with factory() as session:
+                assert (await session.get(QaMessage, aid)).draft_content
+        if explicit_cancel:
+            response = await client.post(
+                f"/api/documents/{doc_id}/qa/threads/{tid}/messages/{aid}/cancel"
+            )
+            assert response.status_code == 200
+        if close_mode == "cancelled_error":
+            with pytest.raises(asyncio.CancelledError):
+                await stream.athrow(asyncio.CancelledError())
+        else:
+            await stream.aclose()
+
+        completed = stop_after == "completed"
+        expected = (QaMessageStatus.COMPLETED if completed else
+                    QaMessageStatus.CANCELLED if explicit_cancel else QaMessageStatus.INTERRUPTED)
+        async with factory() as session:
+            message = await session.get(QaMessage, aid)
+            assert message.status == expected
+            assert message.error_code == (
+                None if completed else "CANCELLED" if explicit_cancel else "CONNECTION_LOST"
+            )
+            assert (message.cancel_requested_at is not None) == (explicit_cancel and not completed)
+            assert (message.interrupted_at is not None) == (not completed and not explicit_cancel)
+            assert message.completed_at is not None
+            assert message.draft_content is None
+        after = await stream_service._message_dto(factory, aid)
+        if completed:
+            assert after == before  # 완료된 본문·출처를 정리 경로가 덮어쓰지 않는다.
+        else:
+            assert after["claims"] == []  # 부분 응답을 완료된 주장으로 저장하지 않는다.
+        assert cancel_registry.request_cancel(str(aid)) is False
+        following = await collect(client, doc_id, tid)
+        assert following[-1]["message"]["status"] == "completed"
+
     async def test_cancel_during_stream(self, client, monkeypatch):
         # ASGITransport에서 스트림 소비 중 중첩 요청은 교착되므로, 취소 경로는
         # run_stream 제너레이터를 in-process로 구동해 검증한다(HTTP 왕복 없음).
@@ -332,9 +614,148 @@ class TestRecovery:
             ).scalar_one()
         assert active == 0
 
+    async def test_recovered_interrupted_answer_can_retry_via_stream(self, client):
+        await enable_deterministic()
+        doc_id, tid = await setup_doc(client)
+        async with get_session_factory()() as s:
+            doc = await s.get(Document, uuid.UUID(doc_id))
+            user_msg = QaMessage(
+                thread_id=uuid.UUID(tid),
+                role=QaMessageRole.USER,
+                content="심장은 무엇을 하나요?",
+                status=QaMessageStatus.COMPLETED,
+                sequence_number=1,
+                document_revision=doc.content_revision,
+                chunk_revision=doc.chunk_revision,
+            )
+            assistant_msg = QaMessage(
+                thread_id=uuid.UUID(tid),
+                role=QaMessageRole.ASSISTANT,
+                content="",
+                status=QaMessageStatus.STREAMING,
+                sequence_number=2,
+                document_revision=doc.content_revision,
+                chunk_revision=doc.chunk_revision,
+                stream_request_id="before-restart",
+                draft_content="부분 답변",
+            )
+            s.add_all([user_msg, assistant_msg])
+            await s.commit()
+            assistant_id = assistant_msg.id
+
+        from app.services.qa.stream_service import recover_interrupted_streams
+
+        assert await recover_interrupted_streams() >= 1
+        detail = await client.get(f"/api/documents/{doc_id}/qa/threads/{tid}")
+        interrupted = [
+            m for m in detail.json()["data"]["messages"] if m["role"] == "assistant"
+        ][-1]
+        assert interrupted["status"] == "interrupted"
+        assert interrupted["canRetry"] is True
+
+        events = await collect_retry(client, doc_id, tid)
+        started = next(e for e in events if e["type"] == "started")
+        completed = next(e for e in events if e["type"] == "completed")
+        assert started["messageId"] == str(assistant_id)
+        assert completed["message"]["status"] in ("completed", "insufficient_evidence")
+        assert completed["message"]["canRetry"] is False
+
+        async with get_session_factory()() as s:
+            users = (
+                await s.execute(
+                    select(func.count()).select_from(QaMessage).where(
+                        QaMessage.thread_id == uuid.UUID(tid),
+                        QaMessage.role == QaMessageRole.USER,
+                    )
+                )
+            ).scalar_one()
+            assistants = (
+                await s.execute(
+                    select(func.count()).select_from(QaMessage).where(
+                        QaMessage.thread_id == uuid.UUID(tid),
+                        QaMessage.role == QaMessageRole.ASSISTANT,
+                    )
+                )
+            ).scalar_one()
+        assert users == 1
+        assert assistants == 1
+
 
 def _fake_async(provider):
     async def _coro():
         return provider
 
     return _coro()
+
+
+class TestStreamingCarriesTheNewContract:
+    """화면이 쓰는 유일한 경로는 스트리밍이다 — 인용·후속질문·학습수준이 여기서 살아야 한다."""
+
+    async def test_final_content_carries_citation_markers(self, client):
+        await enable_deterministic()
+        doc_id, tid = await setup_doc(client)
+        events = await collect(client, doc_id, tid)
+        completed = [e for e in events if e["type"] == "completed"][-1]
+        msg = completed["message"]
+        assert msg["claims"], "지원 주장이 있어야 이 테스트가 의미 있다"
+        # 저장된 본문에 마커가 있어야 프론트가 문장 안에서 근거를 짚을 수 있다.
+        for i in range(len(msg["claims"])):
+            assert f"[c{i}]" in msg["content"]
+
+    async def test_marker_index_matches_claim_order(self, client):
+        await enable_deterministic()
+        doc_id, tid = await setup_doc(client)
+        events = await collect(client, doc_id, tid)
+        msg = [e for e in events if e["type"] == "completed"][-1]["message"]
+        # [cN]은 claims[N]의 텍스트가 끝나는 자리에 붙는다.
+        for i, claim in enumerate(msg["claims"]):
+            assert f"{claim['text']}[c{i}]" in msg["content"]
+
+    async def test_followups_from_the_final_event_are_persisted(self, client, monkeypatch):
+        await enable_deterministic()
+        from app.services.qa import streaming as st
+
+        original = st.DeterministicStreamingQaProvider.stream_answer
+
+        def with_followups(self, request, cancel_token):
+            for event in original(self, request, cancel_token):
+                if event.get("type") == "final":
+                    event = {**event, "followUpSuggestions": ["더 자세히?", "다른 예시는?"]}
+                yield event
+
+        monkeypatch.setattr(st.DeterministicStreamingQaProvider, "stream_answer", with_followups)
+        doc_id, tid = await setup_doc(client)
+        await collect(client, doc_id, tid)
+        detail = (await client.get(f"/api/documents/{doc_id}/qa/threads/{tid}")).json()["data"]
+        assistant = [m for m in detail["messages"] if m["role"] == "assistant"][-1]
+        assert assistant["followups"] == ["더 자세히?", "다른 예시는?"]
+
+    async def test_learner_level_reaches_the_streaming_prompt(self, client, monkeypatch):
+        await enable_deterministic()
+        from app.services.qa import streaming as st
+
+        seen: list[str] = []
+        original = st.DeterministicStreamingQaProvider.stream_answer
+
+        def capture(self, request, cancel_token):
+            seen.append(request.learner_level)
+            yield from original(self, request, cancel_token)
+
+        monkeypatch.setattr(st.DeterministicStreamingQaProvider, "stream_answer", capture)
+        doc_id, tid = await setup_doc(client)
+        async with client.stream(
+            "POST", f"/api/documents/{doc_id}/qa/threads/{tid}/messages/stream",
+            json={"question": "심장은 무엇을 하나요?", "learnerLevel": "concise"},
+        ) as resp:
+            async for _ in resp.aiter_lines():
+                pass
+        assert seen == ["concise"]
+
+    def test_streaming_prompt_includes_the_level_hint(self):
+        from app.services.qa.provider import QaRequest
+        from app.services.qa.streaming import _build_user_prompt
+
+        concise = _build_user_prompt(QaRequest(question="q", chunks=[], learner_level="concise"))
+        default = _build_user_prompt(QaRequest(question="q", chunks=[]))
+        assert concise != default
+        assert "간단" in concise

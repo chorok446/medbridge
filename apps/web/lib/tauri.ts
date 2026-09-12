@@ -2,6 +2,9 @@
 
 import { useSyncExternalStore } from "react";
 
+export const OLLAMA_INSTALL_URL = "https://ollama.com/download/windows";
+const ALLOWED_EXTERNAL_URLS = new Set([OLLAMA_INSTALL_URL]);
+
 export function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 }
@@ -42,14 +45,33 @@ export async function relaunchApp(): Promise<void> {
 
 /**
  * 외부 URL을 기본 브라우저로 연다(공식 설치 페이지 안내용). Tauri에서는 opener 플러그인,
- * 브라우저 개발 모드에서는 새 탭. https URL만 허용한다.
+ * 브라우저 개발 모드에서는 새 탭. 이 앱이 안내하는 정확한 공식 URL만 허용한다.
+ *
+ * 반환값 false는 브라우저 팝업 차단처럼 명령 자체는 실패하지 않았지만 창을 만들지 못한
+ * 경우다. Tauri 권한 거부·OS opener 실패는 reject해 호출자가 반드시 사용자에게 알린다.
  */
-export async function openExternalUrl(url: string): Promise<void> {
-  if (!/^https:\/\//i.test(url)) return; // https만 — 안전
+export async function openExternalUrl(url: string): Promise<boolean> {
+  if (!ALLOWED_EXTERNAL_URLS.has(url)) {
+    throw new Error("허용되지 않은 외부 URL입니다.");
+  }
   if (!isTauri()) {
-    if (typeof window !== "undefined") window.open(url, "_blank", "noopener,noreferrer");
-    return;
+    if (typeof window === "undefined") return false;
+
+    // window.open(url, ..., "noopener")는 브라우저에 따라 성공해도 null을 반환해
+    // 팝업 차단과 구분할 수 없다. 같은 출처의 빈 창을 먼저 만들고 opener를 끊은 뒤
+    // allowlist URL로 이동하면 차단 여부를 판정하면서 reverse-tabnabbing도 막을 수 있다.
+    const popup = window.open("about:blank", "_blank");
+    if (!popup) return false;
+    try {
+      popup.opener = null;
+      popup.location.href = url;
+      return true;
+    } catch {
+      popup.close();
+      return false;
+    }
   }
   const { openUrl } = await import("@tauri-apps/plugin-opener");
   await openUrl(url);
+  return true;
 }
