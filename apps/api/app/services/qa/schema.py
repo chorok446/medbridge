@@ -54,6 +54,12 @@ _CITATION_RE = re.compile(r"\[c(\d{1,2})\]")
 # 지원 claim 간 상충 감지에 필요한 최소 공유 주제 토큰 수. 서로 다른 근거 청크의 두
 # 주장이 같은 대상을 다루면서(주제 어휘 충분히 겹침) 부정 극성만 반대일 때 상충으로 본다.
 _CONFLICT_MIN_SHARED = 3
+# 인용 도입 경계를 넘어 설명의 부정과 인용의 주제 어휘를 합산하지 않는다.
+# 괄호 안 약어·용어는 그대로 둔다. 도입부만 나누므로 인용 본문도 비교 대상이다.
+_CONFLICT_SECTION_RE = re.compile(
+    r"[（(\[]\s*(?:원문|인용|출처|original|source|quote)\s*[:：]", re.IGNORECASE,
+)
+_CONFLICT_LINKING_WORDS = frozenset({"따라", "따른", "according", "to", "is", "are"})
 
 
 @dataclass
@@ -263,16 +269,25 @@ def _has_negation(text: str) -> bool:
 
 
 def _subject_tokens(text: str) -> set[str]:
-    """상충 비교용 주제 토큰 — 부정 표지를 담은 토큰은 제외한다(주제가 아니라 극성)."""
-    tokens = {t.lower() for t in _WORD_RE.findall(text)}
+    """상충 비교용 주제 토큰 — 연결어와 부정 표지는 주제가 아니므로 제외한다."""
+    tokens = {t.lower() for t in _WORD_RE.findall(text)} - _CONFLICT_LINKING_WORDS
     return {t for t in tokens if not any(m.strip() and m.strip() in t for m in _NEGATION_MARKERS)}
+
+
+def _shared_subject_count(left: set[str], right: set[str]) -> int:
+    shared = left & right
+    # 공통 어휘에 '장치'와 '장치는'이 모두 있을 때만 중복을 합친다. 한쪽에만
+    # 기본형이 있는 경우 기존 공통 토큰을 잃지 않으며 무조건 어미를 자르지 않는다.
+    return sum(not (t.endswith(("은", "는")) and t[:-1] in shared) for t in shared)
 
 
 def claims_conflict(claim_texts: list[str]) -> bool:
     """서로 다른 근거의 두 주장이 같은 대상에 상반된 극성을 보이면 True(보수적).
 
-    조건: 두 주장이 충분한 주제 어휘(_CONFLICT_MIN_SHARED개 이상)를 공유하면서, 한쪽만
-    부정 극성을 담는 경우. 명시적 부정소 기반이라 증가↔감소 같은 반의어 뒤집힘은 잡지
+    조건: 서로 다른 claim의 인용 도입부별 구간이 충분한 주제 어휘
+    (_CONFLICT_MIN_SHARED개 이상)를 공유하면서 한쪽만 부정 극성을 담는 경우.
+    인용을 버리거나 별도 claim으로 저장하지 않는다. 문장·절 단위 함의 검증은 아니며,
+    명시적 부정소 기반이라 증가↔감소 같은 반의어 뒤집힘은 잡지
     못하지만(알려진 상한), 무관한 다중 주장을 상충으로 오탐하지 않도록 보수적으로 잡는다.
     상충을 못 잡으면 오히려 상반 근거가 통일된 답처럼 노출되므로, 안전상 conflicting_evidence
     쪽으로 기운다(거짓 상충은 사용자에게 '출처 확인'을 유도할 뿐 사실을 날조하지 않는다).
@@ -280,14 +295,20 @@ def claims_conflict(claim_texts: list[str]) -> bool:
     n = len(claim_texts)
     if n < 2:
         return False
-    negs = [_has_negation(t) for t in claim_texts]
-    subjects = [_subject_tokens(t) for t in claim_texts]
+    sections = [
+        [(_has_negation(part), _subject_tokens(part))
+         for part in _CONFLICT_SECTION_RE.split(text) if part.strip()]
+        for text in claim_texts
+    ]
     for i in range(n):
         for j in range(i + 1, n):
-            if negs[i] == negs[j]:
-                continue  # 극성 차이가 없으면 상충으로 보지 않는다
-            if len(subjects[i] & subjects[j]) >= _CONFLICT_MIN_SHARED:
-                return True
+            for neg_i, subject_i in sections[i]:
+                for neg_j, subject_j in sections[j]:
+                    if (
+                        neg_i != neg_j
+                        and _shared_subject_count(subject_i, subject_j) >= _CONFLICT_MIN_SHARED
+                    ):
+                        return True
     return False
 
 
