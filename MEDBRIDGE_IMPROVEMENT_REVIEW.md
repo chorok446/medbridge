@@ -1,10 +1,10 @@
 # MedBridge 전체 기술 검토 및 개선 계획
 
 > - 검토 기준일: 2026-08-13 (KST)
-> - 최신 자동 검증일: 2026-09-08 (KST)
+> - 최신 자동 검증일: 2026-09-12 (KST)
 > - 기준 브랜치: `fix/summary-context-overflow`
 > - 최초 검토 기준 커밋: `7d688b33e8a905311ebdc0d5a58feab0887c4663`
-> - 마지막 코드 검증 커밋: `35007a44857e2d08233cba9e533091af220006b9`
+> - 마지막 코드 검증 커밋: `dde86c6f930af95f21de4b16f6f7811937633d83`
 > - 구현 추적 브랜치: `fix/summary-context-overflow`
 > - 문서 상태: 구현 추적 중. 자동 검증과 Windows 실기기 검증을 분리해 기록함.
 
@@ -24,6 +24,18 @@
 반영했다. 동일 콘텐츠 기반 300/500/800MiB 크기 경계와 중단 복구도 실측했다. 다만
 보호된 `main`/Environment, 최종 installer의 실기기 36항목, 서로 다른 실제 대형 PDF
 soak가 남아 있으므로 출시 `HOLD`를 유지한다.
+
+### 2026-09-12 최신 Q&A 진행
+
+- `dde86c6`에서 설명과 인용을 섞은 상충 오탐과 주제어 중복 집계를 보강했다.
+  새 회귀 27개, 전체 API **1,403 passed / 4 skipped**, Ruff·mypy 통과다.
+- 같은 실제 지원 claim 3개를 고정한 상충 오탐은 해소했다. 고정 전체 로컬 모델 평가는
+  **39/39, default_recommended**지만 새 실제 답변은 각각 지원 claim 1개여서 불완전하다.
+- 기능등급 I–IV 근거는 이미 검색에 포함됐다. 다음 작업은 검색 범위 확대가 아니라
+  답변에서 빠지는 근거 및 수치 거부/출처 연결 진단이다. 새 설치본 GUI도 남는다.
+- 사용자 문서·설정·대화 해시 보존. 출시 HOLD와 PR Draft를 유지한다.
+  [상세 기록](docs/testing/qa-conflict-scope-20260912.md),
+  [현재 출시 검증 보고서](docs/testing/sprint4c-qa-release-report.md).
 
 ## 2. 확인된 검증 상태
 
@@ -60,8 +72,8 @@ soak가 남아 있으므로 출시 `HOLD`를 유지한다.
 성공했다. installer artifact digest는
 `sha256:21de8aeff12377e3ed2ccf1cd807ceb976ac687d127998f27d1fea0f44dd2152`다.
 이후 문서와 릴리스 도구 변경이 추가되므로 이를 최종 release artifact로 재사용하지 않는다.
-최신 코드 `35007a4`는 release gate `42 passed`, qa_eval `103 passed`, Ruff와 mypy를
-통과했지만 전체 API와 원격 CI는 아직 다시 실행하지 않았다.
+2026-09-08 당시 `35007a4`는 release gate `42 passed`, qa_eval `103 passed`, Ruff와 mypy를
+통과했으며 당시 전체 API와 원격 CI는 다시 실행하기 전이었다. 최신 Q&A 검증은 위에 기록한다.
 
 ### 2.2 Windows 실기기 부분 검증 (2026-08-25)
 
