@@ -92,3 +92,30 @@ def test_existing_cross_language_contract_is_preserved(path):
         "The library opens at 9 on weekdays.",
         path,
     )
+
+
+@pytest.mark.parametrize("path", ["stream", "batch"])
+@pytest.mark.parametrize("intro", ["라는 문장에서", "라는 구절은", "라는 표현에서"])
+def test_implicit_source_quote_cannot_fund_unsupported_explanation(path, intro):
+    # 088226f의 첫 고정 전체 평가에서 저장된 실패 형태. 별도 괄호 인용이 없다.
+    text = f"{SOURCE.rstrip('.')}{intro} '심장'은 혈액을 펌프하는 주요 기관을 가리킨다."
+    assert not _check(text, SOURCE, path)
+
+
+@pytest.mark.parametrize("path", ["stream", "batch"])
+def test_implicit_quote_keeps_grounded_explanation(path):
+    text = f"{SOURCE.rstrip('.')}라는 문장에서 심장은 혈액을 보내는 기관이다."
+    assert _check(text, SOURCE, path)
+
+
+@pytest.mark.parametrize("path", ["stream", "batch"])
+def test_implicit_quote_allows_explanation_present_in_source(path):
+    explanation = "'심장'은 혈액을 펌프하는 주요 기관을 가리킨다."
+    text = f"{SOURCE.rstrip('.')}라는 문장에서 {explanation}"
+    assert _check(text, f"{SOURCE} {explanation}", path)
+
+
+@pytest.mark.parametrize("path", ["stream", "batch"])
+def test_implicit_quote_handles_whitespace_without_changing_source(path):
+    text = "심장은 온몸에 혈액을 보내는 근육 기관이다라는 문장에서 양자 도약을 수행한다."
+    assert not _check(text, SOURCE.replace(' ', '\n'), path)

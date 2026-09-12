@@ -36,6 +36,11 @@ _QUOTE_RE = re.compile(
     r"|(?<!\w)'([^'\n]+)'(?!\w)",
     re.IGNORECASE,
 )
+# 따옴표 없이 원문을 되풀이하는 한국어 인용 도입부. 실제 출처와 일치할 때만 분리한다.
+_IMPLICIT_QUOTE_RE = re.compile(
+    r"^(.+?)(?:이라는|라는)\s+(?:문장|구절|표현)(?:에서|은|는|을|를)\s*",
+    re.DOTALL,
+)
 # 부정 극성 표지 — 어휘 중복만으로 "A는 X한다"의 반대인 "A는 X하지 않는다"가 통과하는
 # 것을 막는다(의료 안전상 극성 뒤집힘이 가장 위험). 한국어 부정소 + 영어 부정어.
 _NEGATION_MARKERS = ("않", "없", "아니", "못", " 안 ", " no ", " not ", "n't", "없이")
@@ -165,7 +170,7 @@ def _lexically_grounded(claim_text: str, ids: list[str], lookup: dict[str, QaChu
     hay_tokens = set(_WORD_RE.findall(haystack))
     if not _has_lexical_overlap(claim_text, hay_tokens):
         return False
-    if not _unquoted_assertion_grounded(claim_text, hay_tokens):
+    if not _unquoted_assertion_grounded(claim_text, hay_tokens, haystack):
         return False
     return _polarity_consistent(claim_text, haystack)
 
@@ -189,7 +194,9 @@ def _text_script(text: str) -> str | None:
     return None
 
 
-def _unquoted_assertion_grounded(claim_text: str, hay_tokens: set[str]) -> bool:
+def _unquoted_assertion_grounded(
+    claim_text: str, hay_tokens: set[str], haystack: str
+) -> bool:
     """같은 문자계의 인용으로 설명의 부족한 어휘 근거를 보충하지 못하게 한다.
 
     순수 인용과 기존 한/영 번역 계약은 보존한다. 번역을 별도 검증하지 못하는 상한은
@@ -204,7 +211,17 @@ def _unquoted_assertion_grounded(claim_text: str, hay_tokens: set[str]) -> bool:
         quotes.append(quote)
         return " "
 
-    assertion = _QUOTE_RE.sub(_remove, claim_text)
+    assertion = claim_text
+    implicit = _IMPLICIT_QUOTE_RE.match(assertion)
+    if implicit:
+        literal = re.sub(r"\s+", " ", implicit[1]).strip().rstrip(".!?。")
+        hay = re.sub(r"\s+", " ", haystack)
+        if len(_WORD_RE.findall(literal)) >= 2 and re.search(
+            r"(?<!\w)" + re.escape(literal.lower()) + r"(?!\w)", hay
+        ):
+            quotes.append(literal)
+            assertion = assertion[implicit.end():]
+    assertion = _QUOTE_RE.sub(_remove, assertion)
     if not quotes or not _WORD_RE.search(assertion):
         return True
     script = _text_script(assertion)
