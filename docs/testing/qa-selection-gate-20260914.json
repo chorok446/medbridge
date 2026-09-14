@@ -1,0 +1,213 @@
+{
+  "evaluated_at": "2026-09-14",
+  "scope": "evaluation_only_fixed_synthetic_selection_gate",
+  "evaluation_commit": "c89d1d121e0402fa5b92ee1bb93ffb3ae3676607",
+  "validation": {
+    "new_unit_tests": 55,
+    "related_tests_passed": 124,
+    "related_tests_seconds": 0.70,
+    "full_api_passed": 1793,
+    "full_api_skipped": 4,
+    "full_api_seconds": 132.97,
+    "ruff": "passed",
+    "mypy": "passed",
+    "mypy_app_and_runner_source_files": 136
+  },
+  "product_commit": "9cc6414352a658492766aa103151dc3f27783509",
+  "selection_commit": "b3f1cc814121c1bf202f4955487bed8cae4d4072",
+  "initial_run": {
+    "planned_trials": 9,
+    "selection_attempts": 7,
+    "recorded_trials": 7,
+    "completed_quality_trials": 6,
+    "quality_failures": 4,
+    "execution_errors": 1,
+    "complete": false,
+    "passed": false,
+    "launcher_exit_observed": 1,
+    "native_exit_separately_measured": false,
+    "error_phase_recorded": false,
+    "error_type_recorded": false,
+    "root_cause_confirmed": false
+  },
+  "final_run": {
+    "schema_version": 1,
+    "model": "qwen3:8b",
+    "provider": "local",
+    "repeat": 3,
+    "database_writes": 0,
+    "selection_attempts": 9,
+    "model_digest_unchanged": true,
+    "results": [
+      {
+        "case_id": "mixed",
+        "repeat": 1,
+        "status": "selected",
+        "selected_indices": [
+          0,
+          1
+        ],
+        "missing_sources": 1,
+        "unexpected_sources": 0,
+        "incomplete_criteria": 1,
+        "failures": [
+          "missing_sources",
+          "incomplete_criteria"
+        ],
+        "passed": false,
+        "seconds": 0.623
+      },
+      {
+        "case_id": "unrelated_only",
+        "repeat": 1,
+        "status": "not_found",
+        "selected_indices": [],
+        "missing_sources": 0,
+        "unexpected_sources": 0,
+        "incomplete_criteria": 0,
+        "failures": [],
+        "passed": true,
+        "seconds": 0.359
+      },
+      {
+        "case_id": "instruction_unrelated",
+        "repeat": 1,
+        "status": "selected",
+        "selected_indices": [
+          0
+        ],
+        "missing_sources": 0,
+        "unexpected_sources": 1,
+        "incomplete_criteria": 0,
+        "failures": [
+          "status_mismatch",
+          "unexpected_sources"
+        ],
+        "passed": false,
+        "seconds": 0.366
+      },
+      {
+        "case_id": "mixed",
+        "repeat": 2,
+        "status": "selected",
+        "selected_indices": [
+          0,
+          1
+        ],
+        "missing_sources": 1,
+        "unexpected_sources": 0,
+        "incomplete_criteria": 1,
+        "failures": [
+          "missing_sources",
+          "incomplete_criteria"
+        ],
+        "passed": false,
+        "seconds": 1.535
+      },
+      {
+        "case_id": "unrelated_only",
+        "repeat": 2,
+        "status": "not_found",
+        "selected_indices": [],
+        "missing_sources": 0,
+        "unexpected_sources": 0,
+        "incomplete_criteria": 0,
+        "failures": [],
+        "passed": true,
+        "seconds": 0.388
+      },
+      {
+        "case_id": "instruction_unrelated",
+        "repeat": 2,
+        "status": "selected",
+        "selected_indices": [
+          0
+        ],
+        "missing_sources": 0,
+        "unexpected_sources": 1,
+        "incomplete_criteria": 0,
+        "failures": [
+          "status_mismatch",
+          "unexpected_sources"
+        ],
+        "passed": false,
+        "seconds": 0.559
+      },
+      {
+        "case_id": "mixed",
+        "repeat": 3,
+        "status": "selected",
+        "selected_indices": [
+          0,
+          1
+        ],
+        "missing_sources": 1,
+        "unexpected_sources": 0,
+        "incomplete_criteria": 1,
+        "failures": [
+          "missing_sources",
+          "incomplete_criteria"
+        ],
+        "passed": false,
+        "seconds": 0.596
+      },
+      {
+        "case_id": "unrelated_only",
+        "repeat": 3,
+        "status": "not_found",
+        "selected_indices": [],
+        "missing_sources": 0,
+        "unexpected_sources": 0,
+        "incomplete_criteria": 0,
+        "failures": [],
+        "passed": true,
+        "seconds": 0.75
+      },
+      {
+        "case_id": "instruction_unrelated",
+        "repeat": 3,
+        "status": "selected",
+        "selected_indices": [
+          0
+        ],
+        "missing_sources": 0,
+        "unexpected_sources": 1,
+        "incomplete_criteria": 0,
+        "failures": [
+          "status_mismatch",
+          "unexpected_sources"
+        ],
+        "passed": false,
+        "seconds": 0.795
+      }
+    ],
+    "model_digest": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+    "gate": {
+      "scope": "synthetic_source_selection_only",
+      "release_approved": false,
+      "complete": true,
+      "passed": false,
+      "expected_trials": 9,
+      "recorded_trials": 9,
+      "failed_trials": 6,
+      "failed_cases": [
+        "instruction_unrelated",
+        "mixed"
+      ],
+      "failures": [
+        "selection_quality_failed"
+      ]
+    },
+    "native_exit_code": 2,
+    "launcher_exit_observed": 2
+  },
+  "total_selection_attempts": 16,
+  "limitations": [
+    "The oracle is authored for three fixed non-medical synthetic cases and is never sent to the model.",
+    "The gate detects selection failures on these fixtures; it is not a runtime semantic verifier for arbitrary documents.",
+    "The existing selector, model prompt, model settings and product release gate are unchanged.",
+    "Passing this suite never grants product release approval.",
+    "The first run's execution error was not reproduced and its exact cause remains unknown.",
+    "No private document/database reads, installer changes, new large-document soak or new 39-case product model evaluation."
+  ]
+}
