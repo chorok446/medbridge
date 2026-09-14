@@ -1,0 +1,347 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-14",
+  "source_commit": "466beb61836fdcc4e3935317ddf081a0a66e6b15",
+  "evaluation_code_commit": "4c20e165197cc5cdb1b9e000fe5a3ba9a03c1350",
+  "product_commit": "9cc6414352a658492766aa103151dc3f27783509",
+  "product_code_changed": false,
+  "gate_contract_changed": false,
+  "release_approved": false,
+  "original_connection_reset_root_cause_confirmed": false,
+  "diagnostic_attempts": 54,
+  "selection_attempts": 74,
+  "diagnostic_runs": [
+    {
+      "label": "initial_comparison",
+      "exit_code": 0,
+      "diagnostic_completion_not_gate_success": true,
+      "metadata": {
+        "diagnostic_only": true,
+        "model_digest": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+        "planned_probes": 18
+      },
+      "completion": {
+        "diagnostic_complete": true,
+        "model_digest_unchanged": true,
+        "release_approved": false
+      },
+      "trials": [
+        {"case_id":"mixed","repeat":1,"mode":"production","started_utc":"2026-09-14T02:44:37.215984+00:00","result":"returned","expected_selection":true,"selection_status":"selected","events":[{"stage":"tcp_connect","state":"start","seconds":0.011693},{"stage":"tcp_connect","state":"done","seconds":0.012087,"loopback_peer":true,"peer_port":11434,"local_port":8649},{"stage":"response_header","state":"start","seconds":0.012124},{"stage":"response_header","state":"done","seconds":1.506418,"status":200}],"seconds":1.507},
+        {"case_id":"mixed","repeat":1,"mode":"standard_connection","started_utc":"2026-09-14T02:44:38.814201+00:00","result":"returned","expected_selection":true,"selection_status":"selected","events":[{"stage":"tcp_connect","state":"start","seconds":0.011986},{"stage":"tcp_connect","state":"done","seconds":0.01237,"loopback_peer":true,"peer_port":11434,"local_port":8655},{"stage":"response_header","state":"start","seconds":0.012406},{"stage":"response_header","state":"done","seconds":1.403743,"status":200}],"seconds":1.404},
+        {"case_id":"unrelated_only","repeat":1,"mode":"production","started_utc":"2026-09-14T02:44:40.243386+00:00","result":"error","error_chain":[{"kind":"SummaryNetworkError","errno":null,"winerror":null},{"kind":"ConnectionResetError","errno":10054,"winerror":10054}],"events":[{"stage":"tcp_connect","state":"start","seconds":0.013994},{"stage":"tcp_connect","state":"done","seconds":0.014373,"loopback_peer":true,"peer_port":11434,"local_port":10363},{"stage":"response_header","state":"start","seconds":0.014404},{"stage":"response_header","state":"error","seconds":0.711896}],"seconds":0.712},
+        {"case_id":"unrelated_only","repeat":1,"mode":"standard_connection","started_utc":"2026-09-14T02:44:40.980664+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.01065},{"stage":"tcp_connect","state":"done","seconds":0.010979,"loopback_peer":true,"peer_port":11434,"local_port":10369},{"stage":"response_header","state":"start","seconds":0.011002},{"stage":"response_header","state":"done","seconds":0.712391,"status":200}],"seconds":0.713},
+        {"case_id":"instruction_unrelated","repeat":1,"mode":"production","started_utc":"2026-09-14T02:44:41.717986+00:00","result":"error","error_chain":[{"kind":"SummaryNetworkError","errno":null,"winerror":null},{"kind":"ConnectionResetError","errno":10054,"winerror":10054}],"events":[{"stage":"tcp_connect","state":"start","seconds":0.010153},{"stage":"tcp_connect","state":"done","seconds":0.01049,"loopback_peer":true,"peer_port":11434,"local_port":10375},{"stage":"response_header","state":"start","seconds":0.010513},{"stage":"response_header","state":"error","seconds":0.702359}],"seconds":0.702},
+        {"case_id":"instruction_unrelated","repeat":1,"mode":"standard_connection","started_utc":"2026-09-14T02:44:42.445804+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.012062},{"stage":"tcp_connect","state":"done","seconds":0.012511,"loopback_peer":true,"peer_port":11434,"local_port":10381},{"stage":"response_header","state":"start","seconds":0.012549},{"stage":"response_header","state":"done","seconds":0.732877,"status":200}],"seconds":0.733},
+        {"case_id":"mixed","repeat":2,"mode":"standard_connection","started_utc":"2026-09-14T02:44:43.203607+00:00","result":"returned","expected_selection":true,"selection_status":"selected","events":[{"stage":"tcp_connect","state":"start","seconds":0.011185},{"stage":"tcp_connect","state":"done","seconds":0.011538,"loopback_peer":true,"peer_port":11434,"local_port":10387},{"stage":"response_header","state":"start","seconds":0.011567},{"stage":"response_header","state":"done","seconds":1.478503,"status":200}],"seconds":1.479},
+        {"case_id":"mixed","repeat":2,"mode":"production","started_utc":"2026-09-14T02:44:44.706937+00:00","result":"error","error_chain":[{"kind":"SummaryNetworkError","errno":null,"winerror":null},{"kind":"ConnectionResetError","errno":10054,"winerror":10054}],"events":[{"stage":"tcp_connect","state":"start","seconds":0.010738},{"stage":"tcp_connect","state":"done","seconds":0.011291,"loopback_peer":true,"peer_port":11434,"local_port":10393},{"stage":"response_header","state":"start","seconds":0.011327},{"stage":"response_header","state":"error","seconds":1.377965}],"seconds":1.378},
+        {"case_id":"unrelated_only","repeat":2,"mode":"standard_connection","started_utc":"2026-09-14T02:44:46.109412+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.011141},{"stage":"tcp_connect","state":"done","seconds":0.026044,"loopback_peer":true,"peer_port":11434,"local_port":10399},{"stage":"response_header","state":"start","seconds":0.026095},{"stage":"response_header","state":"done","seconds":0.785146,"status":200}],"seconds":0.785},
+        {"case_id":"unrelated_only","repeat":2,"mode":"production","started_utc":"2026-09-14T02:44:46.921397+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.011627},{"stage":"tcp_connect","state":"done","seconds":0.012007,"loopback_peer":true,"peer_port":11434,"local_port":10405},{"stage":"response_header","state":"start","seconds":0.012038},{"stage":"response_header","state":"done","seconds":0.718387,"status":200}],"seconds":0.719},
+        {"case_id":"instruction_unrelated","repeat":2,"mode":"standard_connection","started_utc":"2026-09-14T02:44:47.667130+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.015599},{"stage":"tcp_connect","state":"done","seconds":0.016036,"loopback_peer":true,"peer_port":11434,"local_port":10411},{"stage":"response_header","state":"start","seconds":0.016068},{"stage":"response_header","state":"done","seconds":0.720698,"status":200}],"seconds":0.721},
+        {"case_id":"instruction_unrelated","repeat":2,"mode":"production","started_utc":"2026-09-14T02:44:48.490722+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.01141},{"stage":"tcp_connect","state":"done","seconds":0.011767,"loopback_peer":true,"peer_port":11434,"local_port":10418},{"stage":"response_header","state":"start","seconds":0.011799},{"stage":"response_header","state":"done","seconds":0.720406,"status":200}],"seconds":0.721},
+        {"case_id":"mixed","repeat":3,"mode":"production","started_utc":"2026-09-14T02:44:49.237505+00:00","result":"returned","expected_selection":true,"selection_status":"selected","events":[{"stage":"tcp_connect","state":"start","seconds":0.011128},{"stage":"tcp_connect","state":"done","seconds":0.029918,"loopback_peer":true,"peer_port":11434,"local_port":10424},{"stage":"response_header","state":"start","seconds":0.02999},{"stage":"response_header","state":"done","seconds":1.484715,"status":200}],"seconds":1.485},
+        {"case_id":"mixed","repeat":3,"mode":"standard_connection","started_utc":"2026-09-14T02:44:50.747243+00:00","result":"returned","expected_selection":true,"selection_status":"selected","events":[{"stage":"tcp_connect","state":"start","seconds":0.010161},{"stage":"tcp_connect","state":"done","seconds":0.010494,"loopback_peer":true,"peer_port":11434,"local_port":10430},{"stage":"response_header","state":"start","seconds":0.010515},{"stage":"response_header","state":"done","seconds":1.424184,"status":200}],"seconds":1.425},
+        {"case_id":"unrelated_only","repeat":3,"mode":"production","started_utc":"2026-09-14T02:44:52.201249+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.014696},{"stage":"tcp_connect","state":"done","seconds":0.015155,"loopback_peer":true,"peer_port":11434,"local_port":10436},{"stage":"response_header","state":"start","seconds":0.01519},{"stage":"response_header","state":"done","seconds":0.728371,"status":200}],"seconds":0.729},
+        {"case_id":"unrelated_only","repeat":3,"mode":"standard_connection","started_utc":"2026-09-14T02:44:52.955343+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.011219},{"stage":"tcp_connect","state":"done","seconds":0.011574,"loopback_peer":true,"peer_port":11434,"local_port":10442},{"stage":"response_header","state":"start","seconds":0.011601},{"stage":"response_header","state":"done","seconds":0.70635,"status":200}],"seconds":0.707},
+        {"case_id":"instruction_unrelated","repeat":3,"mode":"production","started_utc":"2026-09-14T02:44:53.693939+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.018671},{"stage":"tcp_connect","state":"done","seconds":0.019096,"loopback_peer":true,"peer_port":11434,"local_port":12623},{"stage":"response_header","state":"start","seconds":0.019131},{"stage":"response_header","state":"done","seconds":0.836764,"status":200}],"seconds":0.837},
+        {"case_id":"instruction_unrelated","repeat":3,"mode":"standard_connection","started_utc":"2026-09-14T02:44:54.571627+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.011743},{"stage":"tcp_connect","state":"done","seconds":0.02968,"loopback_peer":true,"peer_port":11434,"local_port":8866},{"stage":"response_header","state":"start","seconds":0.029741},{"stage":"response_header","state":"done","seconds":0.745454,"status":200}],"seconds":0.746}
+      ]
+    },
+    {
+      "label": "socket_creation_and_callback_isolation",
+      "exit_code": 0,
+      "diagnostic_completion_not_gate_success": true,
+      "metadata": {
+        "diagnostic_only": true,
+        "model_digest": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+        "planned_probes": 18
+      },
+      "completion": {
+        "diagnostic_complete": true,
+        "model_digest_unchanged": true,
+        "release_approved": false
+      },
+      "trials": [
+        {"case_id":"unrelated_only","repeat":1,"mode":"production","started_utc":"2026-09-14T02:47:02.687094+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.010625},{"stage":"tcp_connect","state":"done","seconds":0.011007,"loopback_peer":true,"peer_port":11434,"local_port":9898},{"stage":"response_header","state":"start","seconds":0.011059},{"stage":"response_header","state":"done","seconds":0.761827,"status":200}],"seconds":0.762},
+        {"case_id":"unrelated_only","repeat":1,"mode":"standard_creation","started_utc":"2026-09-14T02:47:03.474217+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.011635},{"stage":"tcp_connect","state":"done","seconds":0.012042,"loopback_peer":true,"peer_port":11434,"local_port":9904},{"stage":"response_header","state":"start","seconds":0.01207},{"stage":"response_header","state":"done","seconds":0.674535,"status":200}],"seconds":0.675},
+        {"case_id":"unrelated_only","repeat":1,"mode":"early_release","started_utc":"2026-09-14T02:47:04.174503+00:00","result":"error","error_chain":[{"kind":"SummaryNetworkError","errno":null,"winerror":null}],"events":[{"stage":"tcp_connect","state":"start","seconds":0.010857},{"stage":"tcp_connect","state":"done","seconds":0.023573,"loopback_peer":true,"peer_port":11434,"local_port":9910},{"stage":"response_header","state":"start","seconds":0.023621},{"stage":"response_header","state":"done","seconds":0.719783,"status":500}],"seconds":0.72},
+        {"case_id":"unrelated_only","repeat":2,"mode":"early_release","started_utc":"2026-09-14T02:47:04.929656+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.016664},{"stage":"tcp_connect","state":"done","seconds":0.017088,"loopback_peer":true,"peer_port":11434,"local_port":9916},{"stage":"response_header","state":"start","seconds":0.017142},{"stage":"response_header","state":"done","seconds":0.814973,"status":200}],"seconds":0.815},
+        {"case_id":"unrelated_only","repeat":2,"mode":"standard_creation","started_utc":"2026-09-14T02:47:05.770552+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.012314},{"stage":"tcp_connect","state":"done","seconds":0.012718,"loopback_peer":true,"peer_port":11434,"local_port":9923},{"stage":"response_header","state":"start","seconds":0.012746},{"stage":"response_header","state":"done","seconds":0.701772,"status":200}],"seconds":0.702},
+        {"case_id":"unrelated_only","repeat":2,"mode":"production","started_utc":"2026-09-14T02:47:06.497523+00:00","result":"error","error_chain":[{"kind":"SummaryNetworkError","errno":null,"winerror":null},{"kind":"ConnectionResetError","errno":10054,"winerror":10054}],"events":[{"stage":"tcp_connect","state":"start","seconds":0.01101},{"stage":"tcp_connect","state":"done","seconds":0.031613,"loopback_peer":true,"peer_port":11434,"local_port":9929},{"stage":"response_header","state":"start","seconds":0.031695},{"stage":"response_header","state":"error","seconds":0.701566}],"seconds":0.702},
+        {"case_id":"unrelated_only","repeat":3,"mode":"production","started_utc":"2026-09-14T02:47:07.226413+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.013571},{"stage":"tcp_connect","state":"done","seconds":0.014041,"loopback_peer":true,"peer_port":11434,"local_port":9936},{"stage":"response_header","state":"start","seconds":0.014081},{"stage":"response_header","state":"done","seconds":0.694389,"status":200}],"seconds":0.695},
+        {"case_id":"unrelated_only","repeat":3,"mode":"standard_creation","started_utc":"2026-09-14T02:47:07.945816+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.010549},{"stage":"tcp_connect","state":"done","seconds":0.010901,"loopback_peer":true,"peer_port":11434,"local_port":9942},{"stage":"response_header","state":"start","seconds":0.010923},{"stage":"response_header","state":"done","seconds":0.688099,"status":200}],"seconds":0.689},
+        {"case_id":"unrelated_only","repeat":3,"mode":"early_release","started_utc":"2026-09-14T02:47:08.658347+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.012097},{"stage":"tcp_connect","state":"done","seconds":0.012498,"loopback_peer":true,"peer_port":11434,"local_port":9948},{"stage":"response_header","state":"start","seconds":0.012586},{"stage":"response_header","state":"done","seconds":0.684468,"status":200}],"seconds":0.685},
+        {"case_id":"unrelated_only","repeat":4,"mode":"early_release","started_utc":"2026-09-14T02:47:09.368321+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.010647},{"stage":"tcp_connect","state":"done","seconds":0.011022,"loopback_peer":true,"peer_port":11434,"local_port":9954},{"stage":"response_header","state":"start","seconds":0.011052},{"stage":"response_header","state":"done","seconds":0.688545,"status":200}],"seconds":0.689},
+        {"case_id":"unrelated_only","repeat":4,"mode":"standard_creation","started_utc":"2026-09-14T02:47:10.160574+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.011271},{"stage":"tcp_connect","state":"done","seconds":0.011639,"loopback_peer":true,"peer_port":11434,"local_port":9961},{"stage":"response_header","state":"start","seconds":0.011666},{"stage":"response_header","state":"done","seconds":0.68531,"status":200}],"seconds":0.686},
+        {"case_id":"unrelated_only","repeat":4,"mode":"production","started_utc":"2026-09-14T02:47:10.872479+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.011974},{"stage":"tcp_connect","state":"done","seconds":0.012379,"loopback_peer":true,"peer_port":11434,"local_port":9967},{"stage":"response_header","state":"start","seconds":0.012415},{"stage":"response_header","state":"done","seconds":0.690678,"status":200}],"seconds":0.691},
+        {"case_id":"unrelated_only","repeat":5,"mode":"production","started_utc":"2026-09-14T02:47:11.588897+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.011382},{"stage":"tcp_connect","state":"done","seconds":0.011792,"loopback_peer":true,"peer_port":11434,"local_port":9973},{"stage":"response_header","state":"start","seconds":0.011829},{"stage":"response_header","state":"done","seconds":0.755089,"status":200}],"seconds":0.755},
+        {"case_id":"unrelated_only","repeat":5,"mode":"standard_creation","started_utc":"2026-09-14T02:47:12.369331+00:00","result":"error","error_chain":[{"kind":"SummaryNetworkError","errno":null,"winerror":null},{"kind":"ConnectionResetError","errno":10054,"winerror":10054}],"events":[{"stage":"tcp_connect","state":"start","seconds":0.010564},{"stage":"tcp_connect","state":"done","seconds":0.010957,"loopback_peer":true,"peer_port":11434,"local_port":9979},{"stage":"response_header","state":"start","seconds":0.010987},{"stage":"response_header","state":"error","seconds":0.685}],"seconds":0.685},
+        {"case_id":"unrelated_only","repeat":5,"mode":"early_release","started_utc":"2026-09-14T02:47:13.081043+00:00","result":"error","error_chain":[{"kind":"SummaryNetworkError","errno":null,"winerror":null},{"kind":"ConnectionResetError","errno":10054,"winerror":10054}],"events":[{"stage":"tcp_connect","state":"start","seconds":0.013823},{"stage":"tcp_connect","state":"done","seconds":0.014246,"loopback_peer":true,"peer_port":11434,"local_port":9985},{"stage":"response_header","state":"start","seconds":0.01428},{"stage":"response_header","state":"error","seconds":0.676183}],"seconds":0.676},
+        {"case_id":"unrelated_only","repeat":6,"mode":"early_release","started_utc":"2026-09-14T02:47:15.016354+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.012739},{"stage":"tcp_connect","state":"done","seconds":0.013148,"loopback_peer":true,"peer_port":11434,"local_port":9993},{"stage":"response_header","state":"start","seconds":0.013182},{"stage":"response_header","state":"done","seconds":0.762243,"status":200}],"seconds":0.763},
+        {"case_id":"unrelated_only","repeat":6,"mode":"standard_creation","started_utc":"2026-09-14T02:47:15.805233+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.012214},{"stage":"tcp_connect","state":"done","seconds":0.012718,"loopback_peer":true,"peer_port":11434,"local_port":9999},{"stage":"response_header","state":"start","seconds":0.012758},{"stage":"response_header","state":"done","seconds":0.697898,"status":200}],"seconds":0.698},
+        {"case_id":"unrelated_only","repeat":6,"mode":"production","started_utc":"2026-09-14T02:47:16.528645+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.026794},{"stage":"tcp_connect","state":"done","seconds":0.027214,"loopback_peer":true,"peer_port":11434,"local_port":10006},{"stage":"response_header","state":"start","seconds":0.027247},{"stage":"response_header","state":"done","seconds":0.728323,"status":200}],"seconds":0.729}
+      ]
+    },
+    {
+      "label": "abort_trace",
+      "exit_code": 0,
+      "diagnostic_completion_not_gate_success": true,
+      "metadata": {
+        "diagnostic_only": true,
+        "model_digest": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+        "planned_probes": 18
+      },
+      "completion": {
+        "diagnostic_complete": true,
+        "model_digest_unchanged": true,
+        "release_approved": false
+      },
+      "trials": [
+        {"case_id":"mixed","repeat":1,"mode":"production","started_utc":"2026-09-14T02:49:32.632325+00:00","result":"returned","expected_selection":true,"selection_status":"selected","events":[{"stage":"tcp_connect","state":"start","seconds":0.010812},{"stage":"tcp_connect","state":"done","seconds":0.011336,"loopback_peer":true,"peer_port":11434,"local_port":2974},{"stage":"response_header","state":"start","seconds":0.011369},{"stage":"connection_close","state":"called","seconds":1.494214},{"stage":"response_header","state":"done","seconds":1.494237,"status":200}],"seconds":1.495},
+        {"case_id":"mixed","repeat":1,"mode":"standard_connection","started_utc":"2026-09-14T02:49:34.151130+00:00","result":"returned","expected_selection":true,"selection_status":"selected","events":[{"stage":"tcp_connect","state":"start","seconds":0.011},{"stage":"tcp_connect","state":"done","seconds":0.011344,"loopback_peer":true,"peer_port":11434,"local_port":2980},{"stage":"response_header","state":"start","seconds":0.011371},{"stage":"connection_close","state":"called","seconds":1.337732},{"stage":"response_header","state":"done","seconds":1.337743,"status":200}],"seconds":1.338},
+        {"case_id":"unrelated_only","repeat":1,"mode":"production","started_utc":"2026-09-14T02:49:35.515490+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.011175},{"stage":"tcp_connect","state":"done","seconds":0.011821,"loopback_peer":true,"peer_port":11434,"local_port":2986},{"stage":"response_header","state":"start","seconds":0.011899},{"stage":"connection_close","state":"called","seconds":0.687076},{"stage":"response_header","state":"done","seconds":0.6871,"status":200}],"seconds":0.687},
+        {"case_id":"unrelated_only","repeat":1,"mode":"standard_connection","started_utc":"2026-09-14T02:49:36.227252+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.010269},{"stage":"tcp_connect","state":"done","seconds":0.010633,"loopback_peer":true,"peer_port":11434,"local_port":3964},{"stage":"response_header","state":"start","seconds":0.010669},{"stage":"connection_close","state":"called","seconds":0.686505},{"stage":"response_header","state":"done","seconds":0.686516,"status":200}],"seconds":0.687},
+        {"case_id":"instruction_unrelated","repeat":1,"mode":"production","started_utc":"2026-09-14T02:49:36.938732+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.01146},{"stage":"tcp_connect","state":"done","seconds":0.012002,"loopback_peer":true,"peer_port":11434,"local_port":3970},{"stage":"response_header","state":"start","seconds":0.012037},{"stage":"connection_close","state":"called","seconds":0.696266},{"stage":"response_header","state":"done","seconds":0.696286,"status":200}],"seconds":0.697},
+        {"case_id":"instruction_unrelated","repeat":1,"mode":"standard_connection","started_utc":"2026-09-14T02:49:37.660543+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.010547},{"stage":"tcp_connect","state":"done","seconds":0.024679,"loopback_peer":true,"peer_port":11434,"local_port":3976},{"stage":"response_header","state":"start","seconds":0.024728},{"stage":"connection_close","state":"called","seconds":0.717189},{"stage":"response_header","state":"done","seconds":0.717201,"status":200}],"seconds":0.717},
+        {"case_id":"mixed","repeat":2,"mode":"standard_connection","started_utc":"2026-09-14T02:49:38.402614+00:00","result":"returned","expected_selection":true,"selection_status":"selected","events":[{"stage":"tcp_connect","state":"start","seconds":0.01116},{"stage":"tcp_connect","state":"done","seconds":0.011537,"loopback_peer":true,"peer_port":11434,"local_port":3982},{"stage":"response_header","state":"start","seconds":0.011563},{"stage":"connection_close","state":"called","seconds":1.369367},{"stage":"response_header","state":"done","seconds":1.369378,"status":200}],"seconds":1.37},
+        {"case_id":"mixed","repeat":2,"mode":"production","started_utc":"2026-09-14T02:49:39.796539+00:00","result":"error","error_chain":[{"kind":"SummaryNetworkError","errno":null,"winerror":null},{"kind":"ConnectionResetError","errno":10054,"winerror":10054}],"events":[{"stage":"tcp_connect","state":"start","seconds":0.011264},{"stage":"tcp_connect","state":"done","seconds":0.011648,"loopback_peer":true,"peer_port":11434,"local_port":3988},{"stage":"response_header","state":"start","seconds":0.011678},{"stage":"connection_close","state":"called","seconds":1.307417},{"stage":"response_header","state":"error","seconds":1.307534},{"stage":"connection_close","state":"called","seconds":1.307539}],"seconds":1.308},
+        {"case_id":"unrelated_only","repeat":2,"mode":"standard_connection","started_utc":"2026-09-14T02:49:41.130484+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.013992},{"stage":"tcp_connect","state":"done","seconds":0.014408,"loopback_peer":true,"peer_port":11434,"local_port":3994},{"stage":"response_header","state":"start","seconds":0.014442},{"stage":"connection_close","state":"called","seconds":0.701568},{"stage":"response_header","state":"done","seconds":0.701581,"status":200}],"seconds":0.702},
+        {"case_id":"unrelated_only","repeat":2,"mode":"production","started_utc":"2026-09-14T02:49:41.862818+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.010612},{"stage":"tcp_connect","state":"done","seconds":0.011045,"loopback_peer":true,"peer_port":11434,"local_port":4000},{"stage":"response_header","state":"start","seconds":0.01108},{"stage":"connection_close","state":"called","seconds":0.685122},{"stage":"response_header","state":"done","seconds":0.685145,"status":200}],"seconds":0.685},
+        {"case_id":"instruction_unrelated","repeat":2,"mode":"standard_connection","started_utc":"2026-09-14T02:49:42.573183+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.010549},{"stage":"tcp_connect","state":"done","seconds":0.010887,"loopback_peer":true,"peer_port":11434,"local_port":4006},{"stage":"response_header","state":"start","seconds":0.010915},{"stage":"connection_close","state":"called","seconds":0.698833},{"stage":"response_header","state":"done","seconds":0.698846,"status":200}],"seconds":0.699},
+        {"case_id":"instruction_unrelated","repeat":2,"mode":"production","started_utc":"2026-09-14T02:49:43.299569+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.013669},{"stage":"tcp_connect","state":"done","seconds":0.034749,"loopback_peer":true,"peer_port":11434,"local_port":4012},{"stage":"response_header","state":"start","seconds":0.034822},{"stage":"connection_close","state":"called","seconds":0.723262},{"stage":"response_header","state":"done","seconds":0.723282,"status":200}],"seconds":0.724},
+        {"case_id":"mixed","repeat":3,"mode":"production","started_utc":"2026-09-14T02:49:44.047608+00:00","result":"returned","expected_selection":true,"selection_status":"selected","events":[{"stage":"tcp_connect","state":"start","seconds":0.010823},{"stage":"tcp_connect","state":"done","seconds":0.01117,"loopback_peer":true,"peer_port":11434,"local_port":4018},{"stage":"response_header","state":"start","seconds":0.011198},{"stage":"connection_close","state":"called","seconds":1.402175},{"stage":"response_header","state":"done","seconds":1.402197,"status":200}],"seconds":1.403},
+        {"case_id":"mixed","repeat":3,"mode":"standard_connection","started_utc":"2026-09-14T02:49:45.477190+00:00","result":"returned","expected_selection":true,"selection_status":"selected","events":[{"stage":"tcp_connect","state":"start","seconds":0.014711},{"stage":"tcp_connect","state":"done","seconds":0.015204,"loopback_peer":true,"peer_port":11434,"local_port":4024},{"stage":"response_header","state":"start","seconds":0.01524},{"stage":"connection_close","state":"called","seconds":1.335807},{"stage":"response_header","state":"done","seconds":1.335818,"status":200}],"seconds":1.336},
+        {"case_id":"unrelated_only","repeat":3,"mode":"production","started_utc":"2026-09-14T02:49:46.838512+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.010177},{"stage":"tcp_connect","state":"done","seconds":0.010526,"loopback_peer":true,"peer_port":11434,"local_port":4030},{"stage":"response_header","state":"start","seconds":0.010553},{"stage":"connection_close","state":"called","seconds":0.71579},{"stage":"response_header","state":"done","seconds":0.715809,"status":200}],"seconds":0.716},
+        {"case_id":"unrelated_only","repeat":3,"mode":"standard_connection","started_utc":"2026-09-14T02:49:47.578813+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.01069},{"stage":"tcp_connect","state":"done","seconds":0.011021,"loopback_peer":true,"peer_port":11434,"local_port":4036},{"stage":"response_header","state":"start","seconds":0.011045},{"stage":"connection_close","state":"called","seconds":0.665801},{"stage":"response_header","state":"done","seconds":0.665812,"status":200}],"seconds":0.666},
+        {"case_id":"instruction_unrelated","repeat":3,"mode":"production","started_utc":"2026-09-14T02:49:48.289876+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.010843},{"stage":"tcp_connect","state":"done","seconds":0.032226,"loopback_peer":true,"peer_port":11434,"local_port":4042},{"stage":"response_header","state":"start","seconds":0.032278},{"stage":"connection_close","state":"called","seconds":0.718792},{"stage":"response_header","state":"done","seconds":0.718812,"status":200}],"seconds":0.719},
+        {"case_id":"instruction_unrelated","repeat":3,"mode":"standard_connection","started_utc":"2026-09-14T02:49:49.047859+00:00","result":"returned","expected_selection":true,"selection_status":"not_found","events":[{"stage":"tcp_connect","state":"start","seconds":0.011361},{"stage":"tcp_connect","state":"done","seconds":0.0317,"loopback_peer":true,"peer_port":11434,"local_port":4048},{"stage":"response_header","state":"start","seconds":0.031761},{"stage":"connection_close","state":"called","seconds":0.718032},{"stage":"response_header","state":"done","seconds":0.718043,"status":200}],"seconds":0.718}
+      ]
+    }
+  ],
+  "gate_runs": [
+    {
+      "label": "debug_after_restart",
+      "exit_code": 0,
+      "report": {
+        "schema_version": 2,
+        "model": "qwen3:8b",
+        "provider": "local",
+        "strategy": "fact_checklist",
+        "repeat": 3,
+        "database_writes": 0,
+        "selection_attempts": 9,
+        "model_digest_unchanged": true,
+        "results": [
+          {"case_id":"mixed","repeat":1,"status":"selected","selected_indices":[0,1,2],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":6.711},
+          {"case_id":"unrelated_only","repeat":1,"status":"not_found","selected_indices":[],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":0.719},
+          {"case_id":"instruction_unrelated","repeat":1,"status":"not_found","selected_indices":[],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":0.722},
+          {"case_id":"mixed","repeat":2,"status":"selected","selected_indices":[0,1,2],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":1.365},
+          {"case_id":"unrelated_only","repeat":2,"status":"not_found","selected_indices":[],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":0.692},
+          {"case_id":"instruction_unrelated","repeat":2,"status":"not_found","selected_indices":[],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":0.707},
+          {"case_id":"mixed","repeat":3,"status":"selected","selected_indices":[0,1,2],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":1.362},
+          {"case_id":"unrelated_only","repeat":3,"status":"not_found","selected_indices":[],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":0.699},
+          {"case_id":"instruction_unrelated","repeat":3,"status":"not_found","selected_indices":[],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":0.726}
+        ],
+        "model_digest": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+        "gate": {
+          "scope": "synthetic_source_selection_only",
+          "release_approved": false,
+          "complete": true,
+          "passed": true,
+          "expected_trials": 9,
+          "recorded_trials": 9,
+          "failed_trials": 0,
+          "failed_cases": [],
+          "failures": []
+        }
+      }
+    },
+    {
+      "label": "normal_restore_initial",
+      "exit_code": 2,
+      "report": {
+        "schema_version": 2,
+        "model": "qwen3:8b",
+        "provider": "local",
+        "strategy": "fact_checklist",
+        "repeat": 3,
+        "database_writes": 0,
+        "selection_attempts": 1,
+        "model_digest_unchanged": true,
+        "results": [
+          {"case_id":"mixed","repeat":1,"status":"error","selected_indices":[],"missing_sources":null,"unexpected_sources":null,"incomplete_criteria":null,"failures":["evaluation_error"],"passed":false,"seconds":60.014}
+        ],
+        "model_digest": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+        "execution_failure": "evaluation_error",
+        "execution_detail": {
+          "phase": "selector",
+          "kind": "SummaryNetworkError",
+          "category": "timeout"
+        },
+        "gate": {
+          "scope": "synthetic_source_selection_only",
+          "release_approved": false,
+          "complete": false,
+          "passed": false,
+          "expected_trials": 9,
+          "recorded_trials": 1,
+          "failed_trials": 1,
+          "failed_cases": [
+            "mixed"
+          ],
+          "failures": [
+            "incomplete_trial_set",
+            "selection_quality_failed",
+            "execution_or_provenance_failed"
+          ]
+        }
+      }
+    },
+    {
+      "label": "normal_restore_warm",
+      "exit_code": 2,
+      "report": {
+        "schema_version": 2,
+        "model": "qwen3:8b",
+        "provider": "local",
+        "strategy": "fact_checklist",
+        "repeat": 3,
+        "database_writes": 0,
+        "selection_attempts": 1,
+        "model_digest_unchanged": true,
+        "results": [
+          {"case_id":"mixed","repeat":1,"status":"error","selected_indices":[],"missing_sources":null,"unexpected_sources":null,"incomplete_criteria":null,"failures":["evaluation_error"],"passed":false,"seconds":60.014}
+        ],
+        "model_digest": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+        "execution_failure": "evaluation_error",
+        "execution_detail": {
+          "phase": "selector",
+          "kind": "SummaryNetworkError",
+          "category": "timeout"
+        },
+        "gate": {
+          "scope": "synthetic_source_selection_only",
+          "release_approved": false,
+          "complete": false,
+          "passed": false,
+          "expected_trials": 9,
+          "recorded_trials": 1,
+          "failed_trials": 1,
+          "failed_cases": [
+            "mixed"
+          ],
+          "failures": [
+            "incomplete_trial_set",
+            "selection_quality_failed",
+            "execution_or_provenance_failed"
+          ]
+        }
+      }
+    },
+    {
+      "label": "normal_after_orphan_cleanup",
+      "exit_code": 0,
+      "report": {
+        "schema_version": 2,
+        "model": "qwen3:8b",
+        "provider": "local",
+        "strategy": "fact_checklist",
+        "repeat": 3,
+        "database_writes": 0,
+        "selection_attempts": 9,
+        "model_digest_unchanged": true,
+        "results": [
+          {"case_id":"mixed","repeat":1,"status":"selected","selected_indices":[0,1,2],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":5.625},
+          {"case_id":"unrelated_only","repeat":1,"status":"not_found","selected_indices":[],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":0.907},
+          {"case_id":"instruction_unrelated","repeat":1,"status":"not_found","selected_indices":[],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":0.952},
+          {"case_id":"mixed","repeat":2,"status":"selected","selected_indices":[0,1,2],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":1.808},
+          {"case_id":"unrelated_only","repeat":2,"status":"not_found","selected_indices":[],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":0.892},
+          {"case_id":"instruction_unrelated","repeat":2,"status":"not_found","selected_indices":[],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":0.931},
+          {"case_id":"mixed","repeat":3,"status":"selected","selected_indices":[0,1,2],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":1.785},
+          {"case_id":"unrelated_only","repeat":3,"status":"not_found","selected_indices":[],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":0.898},
+          {"case_id":"instruction_unrelated","repeat":3,"status":"not_found","selected_indices":[],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":0.968}
+        ],
+        "model_digest": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+        "gate": {
+          "scope": "synthetic_source_selection_only",
+          "release_approved": false,
+          "complete": true,
+          "passed": true,
+          "expected_trials": 9,
+          "recorded_trials": 9,
+          "failed_trials": 0,
+          "failed_cases": [],
+          "failures": []
+        }
+      }
+    }
+  ],
+  "restart": {
+    "user_approved": true,
+    "normal_mode_restored": true,
+    "files_deleted": 0,
+    "model_unload_requests": 1,
+    "original": {
+      "app_pid": 25252,
+      "server_pid": 25400
+    },
+    "debug": {
+      "app_pid": 6076,
+      "server_pid": 12692,
+      "debug_enabled": true
+    },
+    "normal": {
+      "app_pid": 32740,
+      "server_pid": 7624,
+      "runner_pid": 5720,
+      "debug_enabled": false
+    },
+    "leftover_runners_removed": [
+      {
+        "pid": 15252,
+        "parent_pid": 25400
+      },
+      {
+        "pid": 31900,
+        "parent_pid": 12692
+      }
+    ],
+    "free_physical_memory_kib": {
+      "during_overlap": 3451220,
+      "after_cleanup_and_unload": 16666280
+    },
+    "model_residency": {
+      "during_overlap": {
+        "bytes": 6574791719,
+        "vram_bytes": 3119261941
+      },
+      "after_cleanup": {
+        "bytes": 6295440588,
+        "vram_bytes": 6295440588
+      },
+      "context_length": 8192
+    },
+    "initial_restart_mistake": "Parent processes were stopped without waiting for descendant model runners. Two old runners remained until explicitly scoped cleanup.",
+    "all_old_runners_confirmed_exited": true
+  },
+  "server_logs": {
+    "initial_tail_lines": 300,
+    "initial_fixed_error_pattern_matches": 0,
+    "debug_tail_lines": 534,
+    "debug_problem_lines": 1,
+    "debug_warning": "AMD driver compatibility warning; model still used GPU; not established as reset cause.",
+    "normal_timeout_http_status": 500,
+    "normal_timeout_seconds": 60
+  },
+  "validation": {
+    "selection_tests_passed": 167,
+    "selection_test_seconds": 0.7,
+    "endpoint_and_cancellation_tests_passed": 85,
+    "endpoint_and_cancellation_seconds": 5.77,
+    "mypy_sources_passed": 137,
+    "prior_ci_id": 34799820407,
+    "prior_ci_conclusion": "success",
+    "prior_full_api_tests_passed": 1858,
+    "prior_full_api_skipped": 4,
+    "full_api_rerun_this_turn": false
+  }
+}
