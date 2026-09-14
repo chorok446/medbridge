@@ -32,7 +32,10 @@ from app.qa_eval.selection_evaluation import (  # noqa: E402
     selection_cases,
     selection_suite_gate,
 )
-from app.qa_eval.source_bundle_selection import select_source_bundles  # noqa: E402
+from app.qa_eval.source_bundle_selection import (  # noqa: E402
+    SELECTION_STRATEGIES,
+    select_source_bundles,
+)
 from app.qa_eval.source_outline import SourceOutlineError  # noqa: E402
 from app.services.summary.endpoint import SummaryNetworkError  # noqa: E402
 
@@ -45,6 +48,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--local", action="store_true", required=True, help="로컬 모델 호출 승인")
     parser.add_argument("--repeat", type=int, default=MIN_REPEAT, help="전체 사례 반복 3~5회")
     parser.add_argument("--timeout", type=float, default=60, help="한 호출 제한 0초 초과~180초")
+    parser.add_argument("--strategy", choices=SELECTION_STRATEGIES, default="baseline",
+                        help="선택 지침 비교; 기본값은 기존 baseline")
     args = parser.parse_args(argv)
     if not MIN_REPEAT <= args.repeat <= MAX_REPEAT:
         parser.error("반복은 3~5회여야 합니다.")
@@ -55,7 +60,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 async def run(args: argparse.Namespace) -> tuple[dict, int]:
     started = time.monotonic()
-    report: dict = {"schema_version": 1, "model": MODEL, "provider": "local",
+    report: dict = {"schema_version": 2, "model": MODEL, "provider": "local",
+                    "strategy": args.strategy,
                     "repeat": args.repeat, "database_writes": 0, "selection_attempts": 0,
                     "model_digest_unchanged": False, "results": []}
     try:
@@ -79,6 +85,7 @@ async def run(args: argparse.Namespace) -> tuple[dict, int]:
             try:
                 selection = await asyncio.to_thread(
                     select_source_bundles, case.request, case.lookup, groups=case.groups,
+                    strategy=args.strategy,
                     model=MODEL, deadline_seconds=min(args.timeout, remaining),
                 )
                 phase = "grading"

@@ -202,6 +202,7 @@ def test_invalid_repeat_is_rejected(repeat):
 
 @pytest.mark.parametrize("argv", [[], ["--local", "--repeat", "1"],
                                   ["--local", "--timeout", "nan"],
+                                  ["--local", "--strategy", "unknown"],
                                   ["--local", "--timeout", "181"]])
 def test_cli_requires_opt_in_and_bounded_complete_run(argv):
     with pytest.raises(SystemExit):
@@ -227,17 +228,41 @@ def mock_runtime(monkeypatch, *, regression=False, error=False):
 
 
 @pytest.mark.parametrize("regression", [False, True])
-async def test_cli_grades_real_return_values_without_sending_oracle(monkeypatch, regression):
+@pytest.mark.parametrize("strategy", ["baseline", "factual_axes", "fact_checklist"])
+async def test_cli_grades_real_return_values_without_sending_oracle(
+    monkeypatch, regression, strategy,
+):
     calls = mock_runtime(monkeypatch, regression=regression)
-    report, code = await cli.run(cli.parse_args(["--local"]))
+    report, code = await cli.run(cli.parse_args(["--local", "--strategy", strategy]))
     assert len(calls) == report["selection_attempts"] == 9
     assert code == (2 if regression else 0)
     assert report["gate"]["passed"] is not regression
     assert report["gate"]["failed_trials"] == (6 if regression else 0)
     assert report["gate"]["release_approved"] is False
+    assert report["strategy"] == strategy and report["schema_version"] == 2
     assert all(not hasattr(request, "expected_status") for request in calls)
     serialized = json.dumps(report, ensure_ascii=False)
     assert "전압" not in serialized and "source_refs" not in serialized
+
+
+@pytest.mark.parametrize("strategy", ["baseline", "factual_axes", "fact_checklist"])
+async def test_cli_routes_strategy_without_exposing_or_changing_expected_contract(
+    monkeypatch, strategy,
+):
+    mock_runtime(monkeypatch)
+    original = copy.deepcopy(selection_cases())
+    calls = []
+    def select(request, lookup, *, groups, model, deadline_seconds, strategy):
+        calls.append(strategy)
+        case = next(c for c in original if c.request == request)
+        assert lookup == case.lookup and groups == case.groups
+        assert model == cli.MODEL and 0 < deadline_seconds <= 60
+        return selection(case)
+    monkeypatch.setattr(cli, "select_source_bundles", select)
+    argv = ["--local"] if strategy == "baseline" else ["--local", "--strategy", strategy]
+    report, code = await cli.run(cli.parse_args(argv))
+    assert calls == [strategy] * 9 and code == 0
+    assert selection_cases() == original and report["gate"]["release_approved"] is False
 
 
 async def test_execution_error_is_not_skip_success_or_retried(monkeypatch):

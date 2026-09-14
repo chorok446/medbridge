@@ -36,14 +36,15 @@ def output(selected=(0,), count=3, status="selected"):
     return {"status": status, "decisions": {str(i): i in selected for i in range(count)}}
 
 
-def test_reproduce_partial_table_and_keep_verified_bundle_atomic():
+@pytest.mark.parametrize("strategy", ["baseline", "factual_axes"])
+def test_reproduce_partial_table_and_keep_verified_bundle_atomic(strategy):
     request, lookup, groups = inputs()
     # 기존 선택 계약은 첫 청크만 고른 결과도 허용하여 뒤의 행/예외를 놓칠 수 있다.
     plain = select_evidence(request, lookup, http_client=_client(output(count=4), []))
     assert [e.chunk_id for e in plain.excerpts] == ["head"]
     before = copy.deepcopy((request, lookup, groups))
     calls = []
-    result = select_source_bundles(request, lookup, groups=groups,
+    result = select_source_bundles(request, lookup, groups=groups, strategy=strategy,
                                    http_client=_client(output(), calls))
     assert result.status == "selected" and result.selected_bundle_indices == (0,)
     assert [o.evidence.chunk_id for o in result.outlines] == ["head", "tail"]
@@ -75,12 +76,13 @@ def test_reproduce_partial_table_and_keep_verified_bundle_atomic():
     assert not hasattr(result, "answer_status") and not hasattr(result, "verification_status")
 
 
-def test_canonical_group_and_source_order_preserve_global_input_order():
+@pytest.mark.parametrize("strategy", ["baseline", "factual_axes"])
+def test_canonical_group_and_source_order_preserve_global_input_order(strategy):
     request, lookup, groups = inputs()
-    first = select_source_bundles(request, lookup, groups=groups,
+    first = select_source_bundles(request, lookup, groups=groups, strategy=strategy,
                                   http_client=_client(output((0, 1, 2)), []))
     shuffled = [["stage"], ["tail", "head"], ["unrelated"]]
-    second = select_source_bundles(request, lookup, groups=shuffled,
+    second = select_source_bundles(request, lookup, groups=shuffled, strategy=strategy,
                                    http_client=_client(output((0, 1, 2)), []))
     assert first == second
     assert [o.evidence.chunk_id for o in first.outlines] == [c.chunk_id for c in request.chunks]
@@ -157,24 +159,28 @@ def test_incomplete_sources_or_out_of_scope_request_never_calls_model(mutation):
     {"status": "selected", "decisions": {"0": 1, "1": False, "2": False}},
     {**output(), "parts": ["I만 남기고 II의 예외는 뺀다."]},
 ])
-def test_model_cannot_select_parts_omit_decisions_or_add_prose(bad):
+@pytest.mark.parametrize("strategy", ["baseline", "factual_axes"])
+def test_model_cannot_select_parts_omit_decisions_or_add_prose(bad, strategy):
     request, lookup, groups = inputs()
     with pytest.raises(EvidenceSelectionError):
-        select_source_bundles(request, lookup, groups=groups, http_client=_client(bad, []))
+        select_source_bundles(request, lookup, groups=groups, strategy=strategy,
+                              http_client=_client(bad, []))
 
 
 @pytest.mark.parametrize("status", ["not_found", "insufficient_evidence", "conflicting_evidence"])
-def test_abstention_and_conflict_remain_unpromoted(status):
+@pytest.mark.parametrize("strategy", ["baseline", "factual_axes"])
+def test_abstention_and_conflict_remain_unpromoted(status, strategy):
     request, lookup, groups = inputs()
     selected = (0, 2) if status == "conflicting_evidence" else ()
-    result = select_source_bundles(request, lookup, groups=groups,
+    result = select_source_bundles(request, lookup, groups=groups, strategy=strategy,
                                    http_client=_client(output(selected, status=status), []))
     assert result.status == status
     assert len(result.outlines) == (3 if selected else 0)
 
 
 @pytest.mark.parametrize("mutation", ["request", "lookup", "groups"])
-def test_changes_during_call_discard_the_whole_selection(mutation):
+@pytest.mark.parametrize("strategy", ["baseline", "factual_axes"])
+def test_changes_during_call_discard_the_whole_selection(mutation, strategy):
     request, lookup, groups = inputs()
     def send(*args):
         if mutation == "request":
@@ -185,11 +191,12 @@ def test_changes_during_call_discard_the_whole_selection(mutation):
             groups[0].pop()
         return _client(output(), [])(*args)
     with pytest.raises(EvidenceSelectionError, match="input_changed"):
-        select_source_bundles(request, lookup, groups=groups, http_client=send)
+        select_source_bundles(request, lookup, groups=groups, strategy=strategy, http_client=send)
 
 
 @pytest.mark.parametrize("timing", ["before", "during"])
-def test_cancellation_discards_selection(timing):
+@pytest.mark.parametrize("strategy", ["baseline", "factual_axes"])
+def test_cancellation_discards_selection(timing, strategy):
     request, lookup, groups = inputs()
     signal = SummaryCancellationSignal(job_id=uuid.uuid4(), run_id=uuid.uuid4())
     calls = []
@@ -199,7 +206,7 @@ def test_cancellation_discards_selection(timing):
     if timing == "before":
         signal.cancel()
     with pytest.raises(SummaryCancelled):
-        select_source_bundles(request, lookup, groups=groups,
+        select_source_bundles(request, lookup, groups=groups, strategy=strategy,
                               cancellation_signal=signal, http_client=send)
     assert len(calls) == (0 if timing == "before" else 1)
 
@@ -217,23 +224,25 @@ def test_invalid_deadlines_never_call_model(seconds):
 
 @pytest.mark.parametrize("envelope", [{"done": False}, {"done_reason": "length"},
                                      {"error": "private native error"}])
-def test_failed_or_truncated_transport_does_not_retry(envelope):
+@pytest.mark.parametrize("strategy", ["baseline", "factual_axes"])
+def test_failed_or_truncated_transport_does_not_retry(envelope, strategy):
     request, lookup, groups = inputs()
     calls = []
     with pytest.raises((EvidenceSelectionError, SummaryNetworkError)):
-        select_source_bundles(request, lookup, groups=groups,
+        select_source_bundles(request, lookup, groups=groups, strategy=strategy,
                               http_client=_client(output(), calls, **envelope))
     assert len(calls) == 1
 
 
-def test_expired_overall_deadline_discards_completed_output(monkeypatch):
+@pytest.mark.parametrize("strategy", ["baseline", "factual_axes"])
+def test_expired_overall_deadline_discards_completed_output(monkeypatch, strategy):
     from app.qa_eval.source_bundle_selection import ProviderRequestBudget
     request, lookup, groups = inputs()
     def send(*args):
         monkeypatch.setattr(ProviderRequestBudget, "remaining_seconds", lambda self: 0)
         return _client(output(), [])(*args)
     with pytest.raises(SummaryNetworkError, match="timeout"):
-        select_source_bundles(request, lookup, groups=groups, http_client=send)
+        select_source_bundles(request, lookup, groups=groups, strategy=strategy, http_client=send)
 
 
 def test_empty_input_returns_no_selection_without_model():
@@ -243,7 +252,8 @@ def test_empty_input_returns_no_selection_without_model():
     assert result.status == "not_found" and result.outlines == () and not calls
 
 
-def test_safe_http_path_keeps_local_endpoint_deadline_and_cancellation(monkeypatch):
+@pytest.mark.parametrize("strategy", ["baseline", "factual_axes"])
+def test_safe_http_path_keeps_local_endpoint_deadline_and_cancellation(monkeypatch, strategy):
     from app.services.summary import endpoint
     request, lookup, groups = inputs()
     signal = SummaryCancellationSignal(job_id=uuid.uuid4(), run_id=uuid.uuid4())
@@ -253,6 +263,33 @@ def test_safe_http_path_keeps_local_endpoint_deadline_and_cancellation(monkeypat
         assert kwargs["cancellation_signal"] is signal and kwargs["max_response_bytes"] > 0
         return _client(output(), calls)(url, payload, key)
     monkeypatch.setattr(endpoint, "post_json", post)
-    result = select_source_bundles(request, lookup, groups=groups,
+    result = select_source_bundles(request, lookup, groups=groups, strategy=strategy,
                                    deadline_seconds=12, cancellation_signal=signal)
     assert result.selected_bundle_indices == (0,) and len(calls) == 1
+
+
+def test_candidate_changes_only_system_instruction_not_input_schema_or_budget():
+    request, lookup, groups = inputs()
+    calls = []
+    results = [select_source_bundles(request, lookup, groups=groups,
+                                     http_client=_client(output(), calls), **kwargs)
+               for kwargs in ({}, {"strategy": "baseline"}, {"strategy": "factual_axes"})]
+    assert results[0] == results[1] == results[2] and len(calls) == 3
+    assert calls[0] == calls[1]  # 기본값은 이전 대조군 그대로다.
+    baseline, candidate = copy.deepcopy(calls[1][1]), copy.deepcopy(calls[2][1])
+    base_system = baseline["messages"].pop(0)["content"]
+    candidate_system = candidate["messages"].pop(0)["content"]
+    assert candidate_system.startswith(base_system) and len(candidate_system) > len(base_system)
+    assert baseline == candidate
+    assert "24V" not in candidate_system and "장치" not in candidate_system
+    assert not hasattr(results[2], "coverage_verified")
+
+
+@pytest.mark.parametrize("strategy", ["unknown", "", None, True, []])
+def test_unknown_strategy_never_silently_falls_back_or_calls_model(strategy):
+    request, lookup, groups = inputs()
+    calls = []
+    with pytest.raises(EvidenceSelectionError, match="invalid_selection_strategy"):
+        select_source_bundles(request, lookup, groups=groups, strategy=strategy,
+                              http_client=_client(output(), calls))
+    assert not calls
