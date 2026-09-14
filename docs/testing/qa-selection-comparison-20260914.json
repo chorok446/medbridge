@@ -1,0 +1,820 @@
+{
+  "schema_version": 1,
+  "date": "2026-09-14",
+  "base_commit": "4d177bf61a627734cab38c5b49906f01e0d962a7",
+  "evaluation_commit": "4c20e165197cc5cdb1b9e000fe5a3ba9a03c1350",
+  "product_commit": "9cc6414352a658492766aa103151dc3f27783509",
+  "fixed_gate_commit": "c89d1d121e0402fa5b92ee1bb93ffb3ae3676607",
+  "gate_contract_changed": false,
+  "release_approved": false,
+  "selection_gate_passed": false,
+  "benchmark": false,
+  "database_writes": 0,
+  "private_documents_accessed": false,
+  "selection_attempts": 34,
+  "runs": [
+    {
+      "run": "selectionBaselineProcess",
+      "exit_code": 2,
+      "report": {
+        "schema_version": 2,
+        "model": "qwen3:8b",
+        "provider": "local",
+        "strategy": "baseline",
+        "repeat": 3,
+        "database_writes": 0,
+        "selection_attempts": 9,
+        "model_digest_unchanged": true,
+        "results": [
+          {
+            "case_id": "mixed",
+            "repeat": 1,
+            "status": "selected",
+            "selected_indices": [
+              0,
+              1
+            ],
+            "missing_sources": 1,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 1,
+            "failures": [
+              "missing_sources",
+              "incomplete_criteria"
+            ],
+            "passed": false,
+            "seconds": 0.657
+          },
+          {
+            "case_id": "unrelated_only",
+            "repeat": 1,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 0.296
+          },
+          {
+            "case_id": "instruction_unrelated",
+            "repeat": 1,
+            "status": "selected",
+            "selected_indices": [
+              0
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 1,
+            "incomplete_criteria": 0,
+            "failures": [
+              "status_mismatch",
+              "unexpected_sources"
+            ],
+            "passed": false,
+            "seconds": 0.291
+          },
+          {
+            "case_id": "mixed",
+            "repeat": 2,
+            "status": "selected",
+            "selected_indices": [
+              0,
+              1
+            ],
+            "missing_sources": 1,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 1,
+            "failures": [
+              "missing_sources",
+              "incomplete_criteria"
+            ],
+            "passed": false,
+            "seconds": 0.463
+          },
+          {
+            "case_id": "unrelated_only",
+            "repeat": 2,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 0.317
+          },
+          {
+            "case_id": "instruction_unrelated",
+            "repeat": 2,
+            "status": "selected",
+            "selected_indices": [
+              0
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 1,
+            "incomplete_criteria": 0,
+            "failures": [
+              "status_mismatch",
+              "unexpected_sources"
+            ],
+            "passed": false,
+            "seconds": 0.292
+          },
+          {
+            "case_id": "mixed",
+            "repeat": 3,
+            "status": "selected",
+            "selected_indices": [
+              0,
+              1
+            ],
+            "missing_sources": 1,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 1,
+            "failures": [
+              "missing_sources",
+              "incomplete_criteria"
+            ],
+            "passed": false,
+            "seconds": 0.457
+          },
+          {
+            "case_id": "unrelated_only",
+            "repeat": 3,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 0.3
+          },
+          {
+            "case_id": "instruction_unrelated",
+            "repeat": 3,
+            "status": "selected",
+            "selected_indices": [
+              0
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 1,
+            "incomplete_criteria": 0,
+            "failures": [
+              "status_mismatch",
+              "unexpected_sources"
+            ],
+            "passed": false,
+            "seconds": 0.293
+          }
+        ],
+        "model_digest": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+        "gate": {
+          "scope": "synthetic_source_selection_only",
+          "release_approved": false,
+          "complete": true,
+          "passed": false,
+          "expected_trials": 9,
+          "recorded_trials": 9,
+          "failed_trials": 6,
+          "failed_cases": [
+            "instruction_unrelated",
+            "mixed"
+          ],
+          "failures": [
+            "selection_quality_failed"
+          ]
+        }
+      }
+    },
+    {
+      "run": "selectionCandidateProcess",
+      "exit_code": 2,
+      "report": {
+        "schema_version": 2,
+        "model": "qwen3:8b",
+        "provider": "local",
+        "strategy": "factual_axes",
+        "repeat": 3,
+        "database_writes": 0,
+        "selection_attempts": 9,
+        "model_digest_unchanged": true,
+        "results": [
+          {
+            "case_id": "mixed",
+            "repeat": 1,
+            "status": "selected",
+            "selected_indices": [
+              0,
+              1
+            ],
+            "missing_sources": 1,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 1,
+            "failures": [
+              "missing_sources",
+              "incomplete_criteria"
+            ],
+            "passed": false,
+            "seconds": 0.676
+          },
+          {
+            "case_id": "unrelated_only",
+            "repeat": 1,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 0.301
+          },
+          {
+            "case_id": "instruction_unrelated",
+            "repeat": 1,
+            "status": "insufficient_evidence",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [
+              "status_mismatch"
+            ],
+            "passed": false,
+            "seconds": 0.328
+          },
+          {
+            "case_id": "mixed",
+            "repeat": 2,
+            "status": "selected",
+            "selected_indices": [
+              0,
+              1
+            ],
+            "missing_sources": 1,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 1,
+            "failures": [
+              "missing_sources",
+              "incomplete_criteria"
+            ],
+            "passed": false,
+            "seconds": 0.445
+          },
+          {
+            "case_id": "unrelated_only",
+            "repeat": 2,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 0.298
+          },
+          {
+            "case_id": "instruction_unrelated",
+            "repeat": 2,
+            "status": "insufficient_evidence",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [
+              "status_mismatch"
+            ],
+            "passed": false,
+            "seconds": 0.355
+          },
+          {
+            "case_id": "mixed",
+            "repeat": 3,
+            "status": "selected",
+            "selected_indices": [
+              0,
+              1
+            ],
+            "missing_sources": 1,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 1,
+            "failures": [
+              "missing_sources",
+              "incomplete_criteria"
+            ],
+            "passed": false,
+            "seconds": 0.445
+          },
+          {
+            "case_id": "unrelated_only",
+            "repeat": 3,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 0.334
+          },
+          {
+            "case_id": "instruction_unrelated",
+            "repeat": 3,
+            "status": "insufficient_evidence",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [
+              "status_mismatch"
+            ],
+            "passed": false,
+            "seconds": 0.331
+          }
+        ],
+        "model_digest": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+        "gate": {
+          "scope": "synthetic_source_selection_only",
+          "release_approved": false,
+          "complete": true,
+          "passed": false,
+          "expected_trials": 9,
+          "recorded_trials": 9,
+          "failed_trials": 6,
+          "failed_cases": [
+            "instruction_unrelated",
+            "mixed"
+          ],
+          "failures": [
+            "selection_quality_failed"
+          ]
+        }
+      }
+    },
+    {
+      "run": "selectionChecklistProcess",
+      "exit_code": 2,
+      "report": {
+        "schema_version": 2,
+        "model": "qwen3:8b",
+        "provider": "local",
+        "strategy": "fact_checklist",
+        "repeat": 3,
+        "database_writes": 0,
+        "selection_attempts": 2,
+        "model_digest_unchanged": true,
+        "results": [
+          {
+            "case_id": "mixed",
+            "repeat": 1,
+            "status": "selected",
+            "selected_indices": [
+              0,
+              1,
+              2
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 1.712
+          },
+          {
+            "case_id": "unrelated_only",
+            "repeat": 1,
+            "status": "error",
+            "selected_indices": [],
+            "missing_sources": null,
+            "unexpected_sources": null,
+            "incomplete_criteria": null,
+            "failures": [
+              "evaluation_error"
+            ],
+            "passed": false,
+            "seconds": 0.666
+          }
+        ],
+        "model_digest": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+        "execution_failure": "evaluation_error",
+        "execution_detail": {
+          "phase": "selector",
+          "kind": "SummaryNetworkError",
+          "category": "connect_failed"
+        },
+        "gate": {
+          "scope": "synthetic_source_selection_only",
+          "release_approved": false,
+          "complete": false,
+          "passed": false,
+          "expected_trials": 9,
+          "recorded_trials": 2,
+          "failed_trials": 1,
+          "failed_cases": [
+            "unrelated_only"
+          ],
+          "failures": [
+            "incomplete_trial_set",
+            "selection_quality_failed",
+            "execution_or_provenance_failed"
+          ]
+        }
+      }
+    },
+    {
+      "run": "selectionChecklistFinalProcess",
+      "exit_code": 2,
+      "report": {
+        "schema_version": 2,
+        "model": "qwen3:8b",
+        "provider": "local",
+        "strategy": "fact_checklist",
+        "repeat": 3,
+        "database_writes": 0,
+        "selection_attempts": 7,
+        "model_digest_unchanged": true,
+        "results": [
+          {
+            "case_id": "mixed",
+            "repeat": 1,
+            "status": "selected",
+            "selected_indices": [
+              0,
+              1,
+              2
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 1.651
+          },
+          {
+            "case_id": "unrelated_only",
+            "repeat": 1,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 0.695
+          },
+          {
+            "case_id": "instruction_unrelated",
+            "repeat": 1,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 0.763
+          },
+          {
+            "case_id": "mixed",
+            "repeat": 2,
+            "status": "selected",
+            "selected_indices": [
+              0,
+              1,
+              2
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 1.355
+          },
+          {
+            "case_id": "unrelated_only",
+            "repeat": 2,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 0.687
+          },
+          {
+            "case_id": "instruction_unrelated",
+            "repeat": 2,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 0.688
+          },
+          {
+            "case_id": "mixed",
+            "repeat": 3,
+            "status": "error",
+            "selected_indices": [],
+            "missing_sources": null,
+            "unexpected_sources": null,
+            "incomplete_criteria": null,
+            "failures": [
+              "evaluation_error"
+            ],
+            "passed": false,
+            "seconds": 1.308
+          }
+        ],
+        "model_digest": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+        "execution_failure": "evaluation_error",
+        "execution_detail": {
+          "phase": "selector",
+          "kind": "SummaryNetworkError",
+          "category": "connect_failed"
+        },
+        "gate": {
+          "scope": "synthetic_source_selection_only",
+          "release_approved": false,
+          "complete": false,
+          "passed": false,
+          "expected_trials": 9,
+          "recorded_trials": 7,
+          "failed_trials": 1,
+          "failed_cases": [
+            "mixed"
+          ],
+          "failures": [
+            "incomplete_trial_set",
+            "selection_quality_failed",
+            "execution_or_provenance_failed"
+          ]
+        }
+      }
+    },
+    {
+      "run": "selectionChecklistInstrumentedProcess",
+      "exit_code": 2,
+      "report": {
+        "schema_version": 2,
+        "model": "qwen3:8b",
+        "provider": "local",
+        "strategy": "fact_checklist",
+        "repeat": 3,
+        "database_writes": 0,
+        "selection_attempts": 6,
+        "model_digest_unchanged": true,
+        "results": [
+          {
+            "case_id": "mixed",
+            "repeat": 1,
+            "status": "selected",
+            "selected_indices": [
+              0,
+              1,
+              2
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 1.666
+          },
+          {
+            "case_id": "unrelated_only",
+            "repeat": 1,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 0.717
+          },
+          {
+            "case_id": "instruction_unrelated",
+            "repeat": 1,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 0.915
+          },
+          {
+            "case_id": "mixed",
+            "repeat": 2,
+            "status": "selected",
+            "selected_indices": [
+              0,
+              1,
+              2
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 1.369
+          },
+          {
+            "case_id": "unrelated_only",
+            "repeat": 2,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 0.711
+          },
+          {
+            "case_id": "instruction_unrelated",
+            "repeat": 2,
+            "status": "error",
+            "selected_indices": [],
+            "missing_sources": null,
+            "unexpected_sources": null,
+            "incomplete_criteria": null,
+            "failures": [
+              "evaluation_error"
+            ],
+            "passed": false,
+            "seconds": 0.707
+          }
+        ],
+        "model_digest": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+        "execution_failure": "evaluation_error",
+        "execution_detail": {
+          "phase": "selector",
+          "kind": "SummaryNetworkError",
+          "category": "connect_failed"
+        },
+        "gate": {
+          "scope": "synthetic_source_selection_only",
+          "release_approved": false,
+          "complete": false,
+          "passed": false,
+          "expected_trials": 9,
+          "recorded_trials": 6,
+          "failed_trials": 1,
+          "failed_cases": [
+            "instruction_unrelated"
+          ],
+          "failures": [
+            "incomplete_trial_set",
+            "selection_quality_failed",
+            "execution_or_provenance_failed"
+          ]
+        }
+      },
+      "diagnostic": {
+        "diagnostic_only": true,
+        "exception_chain": [
+          {
+            "kind": "SummaryNetworkError",
+            "errno": null,
+            "winerror": null,
+            "frames": [
+              {
+                "file": "<string>",
+                "line": 7,
+                "function": "diagnosed"
+              },
+              {
+                "file": "source_bundle_selection.py",
+                "line": 148,
+                "function": "select_source_bundles"
+              },
+              {
+                "file": "provider.py",
+                "line": 785,
+                "function": "_chat_native"
+              },
+              {
+                "file": "evidence_selection.py",
+                "line": 78,
+                "function": "_request_json"
+              },
+              {
+                "file": "provider.py",
+                "line": 654,
+                "function": "_request_json"
+              },
+              {
+                "file": "endpoint.py",
+                "line": 904,
+                "function": "post_json"
+              },
+              {
+                "file": "endpoint.py",
+                "line": 737,
+                "function": "_read_capped"
+              }
+            ]
+          },
+          {
+            "kind": "ConnectionResetError",
+            "errno": 10054,
+            "winerror": 10054,
+            "frames": [
+              {
+                "file": "endpoint.py",
+                "line": 671,
+                "function": "_read_capped"
+              },
+              {
+                "file": "request.py",
+                "line": 489,
+                "function": "open"
+              },
+              {
+                "file": "request.py",
+                "line": 506,
+                "function": "_open"
+              },
+              {
+                "file": "request.py",
+                "line": 466,
+                "function": "_call_chain"
+              },
+              {
+                "file": "endpoint.py",
+                "line": 564,
+                "function": "http_open"
+              },
+              {
+                "file": "request.py",
+                "line": 1323,
+                "function": "do_open"
+              },
+              {
+                "file": "endpoint.py",
+                "line": 441,
+                "function": "getresponse"
+              },
+              {
+                "file": "client.py",
+                "line": 1459,
+                "function": "getresponse"
+              },
+              {
+                "file": "client.py",
+                "line": 336,
+                "function": "begin"
+              },
+              {
+                "file": "client.py",
+                "line": 297,
+                "function": "_read_status"
+              },
+              {
+                "file": "socket.py",
+                "line": 723,
+                "function": "readinto"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "standalone_diagnostic": {
+    "exit_code": 0,
+    "result": {
+      "diagnostic_only": true,
+      "status": "not_found",
+      "passed": true,
+      "failures": [],
+      "selected_indices": []
+    }
+  },
+  "service_diagnostic": {
+    "ollama_version": "0.34.0",
+    "listener": "127.0.0.1:11434",
+    "pid": 25400,
+    "process_restarted_by_agent": false,
+    "log_tail_lines": 200,
+    "log_error_pattern_lines": 0,
+    "chat_access_lines": 10,
+    "chat_access_statuses": [
+      200
+    ],
+    "root_cause_confirmed": false
+  },
+  "limitations": [
+    "No complete passing fact_checklist suite; three interrupted runs remain failed.",
+    "Successful partial trials do not replace the exact complete trial set.",
+    "WinError 10054 observed only in instrumented run; earlier connect_failed causes not separately traced.",
+    "No held-out, private-document, GUI, installer or release-model suite evaluation."
+  ]
+}
