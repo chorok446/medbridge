@@ -239,7 +239,8 @@ async def test_cli_grades_real_return_values_without_sending_oracle(
     assert report["gate"]["passed"] is not regression
     assert report["gate"]["failed_trials"] == (6 if regression else 0)
     assert report["gate"]["release_approved"] is False
-    assert report["strategy"] == strategy and report["schema_version"] == 2
+    assert report["strategy"] == strategy and report["schema_version"] == 3
+    assert report["suite"] == "fixed"
     assert all(not hasattr(request, "expected_status") for request in calls)
     serialized = json.dumps(report, ensure_ascii=False)
     assert "전압" not in serialized and "source_refs" not in serialized

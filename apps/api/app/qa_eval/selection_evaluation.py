@@ -160,9 +160,18 @@ def grade_selection(
 
 def selection_suite_gate(trials: list[SelectionTrial], *, repeat: int) -> dict:
     """전체 사례×계획 반복을 요구한다. 평균·마지막 결과로 실패를 숨기지 않는다."""
+    return grade_trial_set(trials, repeat=repeat, case_ids=CASE_IDS)
+
+
+def grade_trial_set(
+    trials: list[SelectionTrial], *, repeat: int, case_ids: tuple[str, ...],
+) -> dict:
+    """평가 모듈이 고정한 사례 집합만 채점한다. CLI의 사례 필터로 노출하지 않는다."""
     if type(repeat) is not int or not MIN_REPEAT <= repeat <= MAX_REPEAT:
         raise ValueError("invalid_selection_repeat")
-    expected = {(case_id, i) for case_id in CASE_IDS for i in range(1, repeat + 1)}
+    if not case_ids or len(set(case_ids)) != len(case_ids) or any(not c for c in case_ids):
+        raise ValueError("invalid_selection_case_ids")
+    expected = {(case_id, i) for case_id in case_ids for i in range(1, repeat + 1)}
     actual = [(trial.case_id, trial.repeat) for trial in trials]
     complete = (all(type(t.repeat) is int for t in trials)
                 and len(actual) == len(expected) and set(actual) == expected)

@@ -19,6 +19,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.qa_eval.evidence_selection import EvidenceSelectionError  # noqa: E402
+from app.qa_eval.extended_selection_evaluation import (  # noqa: E402
+    extended_selection_cases,
+    extended_selection_suite_gate,
+)
 from app.qa_eval.ollama import (  # noqa: E402
     ModelDigestError,
     loaded_release_model_digest,
@@ -50,6 +54,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--timeout", type=float, default=60, help="한 호출 제한 0초 초과~180초")
     parser.add_argument("--strategy", choices=SELECTION_STRATEGIES, default="baseline",
                         help="선택 지침 비교; 기본값은 기존 baseline")
+    parser.add_argument("--suite", choices=("fixed", "extended"), default="fixed",
+                        help="fixed=기존 3사례, extended=기존 3+추가 5사례 전체")
     args = parser.parse_args(argv)
     if not MIN_REPEAT <= args.repeat <= MAX_REPEAT:
         parser.error("반복은 3~5회여야 합니다.")
@@ -60,20 +66,22 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 async def run(args: argparse.Namespace) -> tuple[dict, int]:
     started = time.monotonic()
-    report: dict = {"schema_version": 2, "model": MODEL, "provider": "local",
-                    "strategy": args.strategy,
+    cases, gate = ((extended_selection_cases, extended_selection_suite_gate)
+                   if args.suite == "extended" else (selection_cases, selection_suite_gate))
+    report: dict = {"schema_version": 3, "model": MODEL, "provider": "local",
+                    "strategy": args.strategy, "suite": args.suite,
                     "repeat": args.repeat, "database_writes": 0, "selection_attempts": 0,
                     "model_digest_unchanged": False, "results": []}
     try:
         digest = await release_model_digest(MODEL)
     except ModelDigestError:
-        report.update({"gate": selection_suite_gate([], repeat=args.repeat),
+        report.update({"gate": gate([], repeat=args.repeat),
                        "execution_failure": "model_not_evaluated"})
         return report, 3
     report["model_digest"] = digest
     trials = []
     for repeat in range(1, args.repeat + 1):
-        for case in selection_cases():
+        for case in cases():
             remaining = TOTAL_DEADLINE_SECONDS - (time.monotonic() - started)
             if remaining <= 0:
                 report["execution_failure"] = "suite_deadline"
@@ -124,7 +132,7 @@ async def run(args: argparse.Namespace) -> tuple[dict, int]:
         )
     except ModelDigestError:
         report["model_digest_unchanged"] = False
-    report["gate"] = selection_suite_gate(trials, repeat=args.repeat)
+    report["gate"] = gate(trials, repeat=args.repeat)
     if not report["model_digest_unchanged"] or "execution_failure" in report:
         report["gate"]["passed"] = False
         report["gate"]["failures"].append("execution_or_provenance_failed")
