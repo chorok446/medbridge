@@ -134,7 +134,8 @@ def mock_model(monkeypatch, *, failure=None):
     calls = []
     async def digest(model):
         return "test-digest"
-    def select(request, lookup, *, groups, model, deadline_seconds, strategy):
+    def select(request, lookup, *, groups, model, deadline_seconds, strategy,
+               stats, after_response):
         case = next(c for c in extended_selection_cases() if c.request == request)
         assert lookup == case.lookup and groups == case.groups
         assert model == cli.MODEL and 0 < deadline_seconds <= 60
@@ -155,7 +156,7 @@ def mock_model(monkeypatch, *, failure=None):
 
 
 @pytest.mark.parametrize("strategy", [
-    "baseline", "factual_axes", "fact_checklist", "entity_checklist",
+    "baseline", "factual_axes", "fact_checklist", "entity_checklist", "independent_checklist",
 ])
 @pytest.mark.parametrize("failure", [None, "quality"])
 async def test_all_strategies_use_same_extended_oracle_without_leaking_it(
@@ -171,7 +172,7 @@ async def test_all_strategies_use_same_extended_oracle_without_leaking_it(
     assert code == (0 if failure is None else 2)
     assert report["gate"]["failed_trials"] == (0 if failure is None else 3)
     assert report["suite"] == "extended" and report["strategy"] == strategy
-    assert report["schema_version"] == 3 and report["database_writes"] == 0
+    assert report["schema_version"] == 4 and report["database_writes"] == 0
     assert report["gate"]["release_approved"] is False
     assert extended_selection_cases() == before
     assert "운반" not in json.dumps(report, ensure_ascii=False)

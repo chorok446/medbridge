@@ -229,7 +229,7 @@ def mock_runtime(monkeypatch, *, regression=False, error=False):
 
 @pytest.mark.parametrize("regression", [False, True])
 @pytest.mark.parametrize("strategy", [
-    "baseline", "factual_axes", "fact_checklist", "entity_checklist",
+    "baseline", "factual_axes", "fact_checklist", "entity_checklist", "independent_checklist",
 ])
 async def test_cli_grades_real_return_values_without_sending_oracle(
     monkeypatch, regression, strategy,
@@ -241,7 +241,7 @@ async def test_cli_grades_real_return_values_without_sending_oracle(
     assert report["gate"]["passed"] is not regression
     assert report["gate"]["failed_trials"] == (6 if regression else 0)
     assert report["gate"]["release_approved"] is False
-    assert report["strategy"] == strategy and report["schema_version"] == 3
+    assert report["strategy"] == strategy and report["schema_version"] == 4
     assert report["suite"] == "fixed"
     assert all(not hasattr(request, "expected_status") for request in calls)
     serialized = json.dumps(report, ensure_ascii=False)
@@ -249,7 +249,7 @@ async def test_cli_grades_real_return_values_without_sending_oracle(
 
 
 @pytest.mark.parametrize("strategy", [
-    "baseline", "factual_axes", "fact_checklist", "entity_checklist",
+    "baseline", "factual_axes", "fact_checklist", "entity_checklist", "independent_checklist",
 ])
 async def test_cli_routes_strategy_without_exposing_or_changing_expected_contract(
     monkeypatch, strategy,
@@ -257,7 +257,8 @@ async def test_cli_routes_strategy_without_exposing_or_changing_expected_contrac
     mock_runtime(monkeypatch)
     original = copy.deepcopy(selection_cases())
     calls = []
-    def select(request, lookup, *, groups, model, deadline_seconds, strategy):
+    def select(request, lookup, *, groups, model, deadline_seconds, strategy,
+               stats, after_response):
         calls.append(strategy)
         case = next(c for c in original if c.request == request)
         assert lookup == case.lookup and groups == case.groups
