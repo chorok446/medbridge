@@ -7,18 +7,51 @@
 from __future__ import annotations
 
 import json
+import re
+from dataclasses import dataclass
 from pathlib import Path
 
 from app.qa_eval.gate import GateResult
 from app.qa_eval.metrics import EvalSummary
+
+_RELEASE_ARTIFACT_TYPE = "qwen3_8b_evaluation"
+_RELEASE_SCHEMA_VERSION = 1
+_RELEASE_PROVIDER = "local"
+_RELEASE_MODEL = "qwen3:8b"
+_RELEASE_ENDPOINT = "http://127.0.0.1:11434/v1"
+_COMMIT_RE = re.compile(r"[0-9a-f]{40}")
+_DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
+
+
+@dataclass(frozen=True)
+class ReleaseProvenance:
+    """출시 Qwen 평가 JSON에만 추가되는 검증된 실행 정체성."""
+
+    tested_commit: str
+    model_digest: str
+    endpoint: str
+
+    def __post_init__(self) -> None:
+        if _COMMIT_RE.fullmatch(self.tested_commit) is None:
+            raise ValueError("tested_commit은 40자리 소문자 Git SHA여야 합니다.")
+        if _DIGEST_RE.fullmatch(self.model_digest) is None:
+            raise ValueError("model_digest는 sha256: 접두사가 있는 소문자 digest여야 합니다.")
+        if self.endpoint != _RELEASE_ENDPOINT:
+            raise ValueError("출시 평가는 고정 Ollama loopback endpoint만 허용합니다.")
 
 
 def _model_slug(model: str) -> str:
     return model.replace(":", "-").replace("/", "-")
 
 
-def build_json(summary: EvalSummary, gate: GateResult, *, generated_at: str | None = None) -> dict:
-    return {
+def build_json(
+    summary: EvalSummary,
+    gate: GateResult,
+    *,
+    generated_at: str | None = None,
+    provenance: ReleaseProvenance | None = None,
+) -> dict:
+    payload: dict[str, object] = {
         "model": summary.model,
         "generatedAt": generated_at,
         "summary": {
@@ -68,6 +101,20 @@ def build_json(summary: EvalSummary, gate: GateResult, *, generated_at: str | No
             for a in summary.case_aggregates
         ],
     }
+    if provenance is not None:
+        if summary.model != _RELEASE_MODEL:
+            raise ValueError("출시 provenance는 qwen3:8b 평가에만 기록할 수 있습니다.")
+        payload.update(
+            {
+                "artifactType": _RELEASE_ARTIFACT_TYPE,
+                "schemaVersion": _RELEASE_SCHEMA_VERSION,
+                "testedCommit": provenance.tested_commit,
+                "provider": _RELEASE_PROVIDER,
+                "modelDigest": provenance.model_digest,
+                "endpoint": provenance.endpoint,
+            }
+        )
+    return payload
 
 
 def _run_diag(r) -> dict:
@@ -103,9 +150,7 @@ def build_markdown(
     if generated_at:
         lines.append(f"- 생성 시각: {generated_at}")
     lines.append(f"- 판정: **{gate.verdict}**")
-    lines.append(
-        f"- 안전 게이트(위해 노출): {'통과' if gate.explicit_safety_passed else '실패'}"
-    )
+    lines.append(f"- 안전 게이트(위해 노출): {'통과' if gate.explicit_safety_passed else '실패'}")
     lines.append(
         f"- 안전 중요 케이스 게이트(비위해 실패): "
         f"{'통과' if gate.critical_cases_passed else '실패'}"
@@ -165,16 +210,19 @@ def build_markdown(
 
 
 def write_reports(
-    out_dir: str | Path, summary: EvalSummary, gate: GateResult, *, generated_at: str | None = None
+    out_dir: str | Path,
+    summary: EvalSummary,
+    gate: GateResult,
+    *,
+    generated_at: str | None = None,
+    provenance: ReleaseProvenance | None = None,
 ) -> tuple[Path, Path]:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     slug = _model_slug(summary.model)
     json_path = out_dir / f"qa-eval-{slug}.json"
     md_path = out_dir / f"qa-eval-{slug}.md"
-    payload = build_json(summary, gate, generated_at=generated_at)
-    json_path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    payload = build_json(summary, gate, generated_at=generated_at, provenance=provenance)
+    json_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     md_path.write_text(build_markdown(summary, gate, generated_at=generated_at), encoding="utf-8")
     return json_path, md_path

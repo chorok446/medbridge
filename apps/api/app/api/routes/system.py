@@ -1,6 +1,8 @@
 """업데이트 준비·오류 보고 데이터 — Tauri 셸 전용 표면 (사용자 GUI에 원문 비노출)."""
 
+import asyncio
 import platform
+from collections import deque
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -8,11 +10,12 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import __version__
-from app.core.logging import get_logger
+from app.core.errors import AppError, ErrorCode
+from app.core.logging import get_logger, redact_diagnostic_text
 from app.core.paths import get_path_provider
 from app.db.session import get_db
 from app.models.document import Document, DocumentJob
-from app.schemas.common import CamelModel, Envelope
+from app.schemas.common import CamelModel, Envelope, utc_isoformat
 from app.services.system import runtime
 from app.utils.responses import wrap
 
@@ -29,8 +32,26 @@ class PrepareUpdateOut(CamelModel):
 async def prepare_update() -> dict:
     """업데이트 직전 호출: 새 작업 차단 → 진행 중 요청·작업 완전 종료 대기 → checkpoint+백업."""
     runtime.set_updating(True)
-    await runtime.wait_for_quiescence()
-    backup = runtime.checkpoint_and_backup()
+    try:
+        await runtime.wait_for_quiescence()
+        # 수 GB DB의 checkpoint+복사를 루프 위에서 돌리면 그동안 조회·스트림 heartbeat까지
+        # 전부 멈춘다 — 준비 구간에도 새 작업만 막고 서비스는 계속돼야 한다.
+        backup = await asyncio.to_thread(runtime.checkpoint_and_backup)
+    except runtime.QuiescenceTimeout as exc:
+        # 안전 지점에 도달하지 못했는데 updating을 유지하면 이후 업로드가 영구히 503이다.
+        runtime.set_updating(False)
+        raise AppError(
+            ErrorCode.INVALID_STATE,
+            "진행 중인 문서 작업이 있어 업데이트를 준비하지 못했습니다. "
+            "작업이 끝난 뒤 다시 시도해 주세요.",
+            status_code=409,
+            retryable=True,
+        ) from exc
+    except BaseException:
+        # 백업 실패나 요청 취소도 작업 차단을 반드시 되돌린다. 성공한 경우에만 재시작 또는
+        # 사용자의 '나중에' 선택까지 차단 상태를 유지한다.
+        runtime.set_updating(False)
+        raise
     return wrap(PrepareUpdateOut(ready=True, backup_file=backup))
 
 
@@ -61,10 +82,22 @@ async def error_report(db: AsyncSession = Depends(get_db)) -> dict:
         ).all()
     )
     recent_failures = [
-        {"failureCode": row[0], "occurredAt": row[1].isoformat() if row[1] else None}
+        {
+            "failureCode": row[0],
+            # 같은 코드에 여러 원인이 뭉쳐 있을 때 어느 계약이 깨졌는지. 코드가 정한
+            # 분류값만 저장되므로 문서 본문·모델 응답 원문은 들어가지 않는다.
+            # 이게 없으면 보고서만으로는 SUMMARY_INVALID_RESPONSE의 7가지 원인을
+            # 하나도 구분할 수 없다(로그 꼬리 200줄을 벗어나면 단서가 사라진다).
+            "failureReason": row[1],
+            "occurredAt": utc_isoformat(row[2]) if row[2] else None,
+        }
         for row in (
             await db.execute(
-                select(DocumentJob.failure_code, DocumentJob.completed_at)
+                select(
+                    DocumentJob.failure_code,
+                    DocumentJob.failure_reason,
+                    DocumentJob.completed_at,
+                )
                 .where(DocumentJob.failure_code.is_not(None))
                 .order_by(DocumentJob.created_at.desc())
                 .limit(20)
@@ -77,7 +110,12 @@ async def error_report(db: AsyncSession = Depends(get_db)) -> dict:
     log_tail: list[str] = []
     log_file = get_path_provider().logs_dir / "sidecar.log"
     if log_file.is_file():
-        log_tail = log_file.read_text(errors="replace").splitlines()[-200:]
+        # encoding을 지정하지 않으면 Windows에서 로케일 기본값(CP949)으로 읽어
+        # UTF-8로 쓴 한글 로그가 전부 깨진다 — 오류 메시지를 못 읽게 된다.
+        # 파일 전체를 read_text()하지 않는다. 회전 직전의 5 MiB 로그도 보고서 요청의
+        # Python heap에 통째로 올릴 이유가 없다.
+        with log_file.open(encoding="utf-8", errors="replace") as stream:
+            log_tail = [redact_diagnostic_text(line.rstrip("\r\n")) for line in deque(stream, 200)]
 
     report: dict[str, Any] = {
         "sidecarVersion": __version__,

@@ -3,38 +3,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { ErrorBox } from "@/components/error-box";
+import { ErrorReportButton } from "@/components/error-report-button";
 import { LocalAiSection } from "@/components/local-ai-settings";
 import { SummaryModelSection } from "@/components/summary-model-settings";
 import { UpdateManager } from "@/components/update-manager";
 import { getProfile, updateProfile } from "@/lib/api/profile";
-import { saveErrorReport, useIsTauri } from "@/lib/tauri";
-
-function ErrorReportButton() {
-  const desktop = useIsTauri();
-  const [saved, setSaved] = useState<string | null>(null);
-  if (!desktop) {
-    return <p className="text-sm text-slate-500">데스크톱 앱에서 사용할 수 있어요.</p>;
-  }
-  return (
-    <div>
-      <button
-        type="button"
-        onClick={async () => {
-          const ok = await saveErrorReport().catch(() => false);
-          setSaved(ok ? "오류 정보를 저장했습니다." : null);
-        }}
-        className="rounded border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50"
-      >
-        오류 정보 저장
-      </button>
-      {saved && (
-        <p role="status" className="mt-2 text-sm text-green-700">
-          {saved}
-        </p>
-      )}
-    </div>
-  );
-}
 
 const LEVELS = [
   { value: 0, label: "의학 입문" },
@@ -130,7 +103,7 @@ export default function SettingsPage() {
           <button
             type="submit"
             disabled={mutation.isPending}
-            className="rounded bg-blue-600 px-4 py-2.5 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+            className="rounded-md bg-blue-600 px-4 py-2.5 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
           >
             저장
           </button>

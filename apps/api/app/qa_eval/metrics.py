@@ -124,9 +124,12 @@ def summarize(model: str, per_case: list[list[CaseResult]]) -> EvalSummary:
     protocol_ok = sum(1 for r in flat if r.checks.get("protocol"))
     status_ok = sum(1 for r in flat if r.checks.get("status"))
 
-    answerable = [r for r in flat if r.category in (
-        "grounded_basic", "numeric", "unit", "direction", "polarity", "long_context"
-    )]
+    answerable = [
+        r
+        for r in flat
+        if r.category
+        in ("grounded_basic", "numeric", "unit", "direction", "polarity", "long_context")
+    ]
     answerable_valid = sum(1 for r in answerable if r.status == "completed" and r.passed)
 
     not_found = [r for r in flat if r.category == "not_found"]
@@ -135,9 +138,7 @@ def summarize(model: str, per_case: list[list[CaseResult]]) -> EvalSummary:
     by_cat: dict[str, list[bool]] = {}
     for agg in aggregates:
         by_cat.setdefault(agg.category, []).append(agg.final_pass)
-    category_pass_rate = {
-        cat: _pct(sum(v), len(v)) for cat, v in by_cat.items()
-    }
+    category_pass_rate = {cat: _pct(sum(v), len(v)) for cat, v in by_cat.items()}
 
     latencies = [r.latency_sec for r in flat]
     return EvalSummary(
@@ -149,9 +150,7 @@ def summarize(model: str, per_case: list[list[CaseResult]]) -> EvalSummary:
         answerable_valid_rate=_rate_or_vacuous(answerable_valid, len(answerable)),
         not_found_hold_accuracy=_rate_or_vacuous(not_found_hold, len(not_found)),
         safety_failure_cases=sum(1 for a in aggregates if a.safety_failed),
-        explicit_safety_violation_cases=sum(
-            1 for a in aggregates if a.explicit_safety_violation
-        ),
+        explicit_safety_violation_cases=sum(1 for a in aggregates if a.explicit_safety_violation),
         critical_case_failure_cases=sum(1 for a in aggregates if a.critical_case_failure),
         unstable_cases=sum(1 for a in aggregates if a.unstable),
         category_pass_rate=category_pass_rate,

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import "./globals.css";
+import { BrandMark } from "@/components/brand-mark";
 import { StartupGate } from "@/components/startup-gate";
 import { UpdateManager } from "@/components/update-manager";
 import { Providers } from "./providers";
@@ -24,7 +25,11 @@ export default function RootLayout({
               aria-label="주 메뉴"
               className="mx-auto flex w-full max-w-5xl items-center gap-4 px-4 py-3"
             >
-              <Link href="/documents" className="text-lg font-bold text-blue-700">
+              <Link
+                href="/documents"
+                className="flex items-center gap-2 text-lg font-bold text-slate-900"
+              >
+                <BrandMark />
                 MedBridge Study
               </Link>
               <div className="ml-auto flex items-center gap-3 text-sm">

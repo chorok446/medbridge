@@ -1,13 +1,31 @@
 # Windows 실기기 검증 테스트 키트 사용 안내
 
-`docs/testing/windows-test-kit/` 안의 7개 PDF는 실제 환자 정보가 전혀 없는 합성 파일입니다(코드로 생성). `docs/testing/windows-sprint2-validation.md`의 각 체크리스트 항목에 이 파일들을 매칭해 두었으니, 순서대로 따라가며 체크박스를 채우면 됩니다.
+실기기 artifact 안의 `windows-test-kit/`에 포함된 7개 PDF는 실제 환자 정보가 전혀
+없는 합성 파일입니다. CI가 검증 대상 installer와 같은 run에서 코드로 생성하며,
+`manifest.json`에 정확한 commit, workflow run ID, installer SHA-256과 각 PDF SHA-256을
+기록합니다. `docs/testing/windows-sprint2-validation.md`의 각 체크리스트 항목에 이
+파일들을 매칭해 두었으니 순서대로 확인하면 됩니다.
 
 ## 준비
 
-1. GitHub Actions에서 `medbridge-windows-setup` 아티팩트를 내려받아 Windows 10/11 PC에 복사
-   - https://github.com/chorok446/medbridge/actions/runs/30616849579 → Artifacts
-2. `docs/testing/windows-test-kit/` 폴더 전체를 같은 PC로 복사 (USB, 클라우드 드라이브 등)
-3. 설치 전 확인: Python·Node·Git·Docker가 없는 일반 사용자 계정에서 진행 (개발 도구 유무는 앱 동작에 영향이 없어야 함)
+1. [GitHub Actions의 CI (Windows 검증)](https://github.com/chorok446/medbridge/actions/workflows/ci.yml)에서
+   검증하려는 **정확한 40자리 commit SHA**의 성공 run을 연다.
+2. 그 run의 `medbridge-windows-setup` artifact를 내려받아 Windows 10/11 PC에 복사한다.
+   artifact에는 NSIS installer, `windows-test-kit/` PDF 7개와 `manifest.json`이 함께 있어야 한다.
+3. 설치 전에 `manifest.json`의 `testedCommit`이 검증 대상 SHA와 같은지 확인하고,
+   PowerShell `Get-FileHash -Algorithm SHA256 <setup.exe>` 결과가 manifest의
+   `installer.sha256`과 같은지 확인한다. 다르면 검증을 중단한다.
+4. Python·Node·Git·Docker가 없는 일반 사용자 계정에서 진행한다. 개발 도구 유무는 앱
+   동작에 영향이 없어야 한다.
+
+CI artifact가 없거나 만료된 경우 저장소 루트에서 아래 명령으로 PDF만 재생성할 수 있다.
+이 로컬 생성물은 installer provenance를 증명하지 않으므로 최종 출시 승인 자료로는 쓰지 않는다.
+
+```powershell
+cd apps/api
+uv sync --locked
+uv run python ../../scripts/generate-windows-test-kit.py
+```
 
 ## 항목별 실행 순서
 

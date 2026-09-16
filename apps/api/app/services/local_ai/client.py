@@ -4,11 +4,14 @@
 차단·크기/데드라인 상한)를 재사용한다. 오류 원문·stack trace는 노출하지 않는다.
 """
 
+import threading
+import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 
 from app.services.local_ai import settings as st
 from app.services.model_output import strip_thinking
+from app.services.summary.cancellation import SummaryCancellationSignal
 from app.services.summary.endpoint import (
     SummaryNetworkError,
     get_json,
@@ -22,6 +25,14 @@ STATUS_READY = "ready"
 STATUS_NOT_RUNNING = "not_running"
 STATUS_INCOMPATIBLE = "incompatible"
 STATUS_ERROR = "error"
+
+_DIGEST_LOOKUP_MAX_ATTEMPTS = 4
+_DIGEST_ATTEMPT_TIMEOUT_SEC = 1.0
+_DIGEST_RETRY_BASE_SEC = 0.05
+_DIGEST_RETRY_CAP_SEC = 0.2
+_DIGEST_LOCK_POLL_SEC = 0.025
+_DIGEST_TRANSIENT_CATEGORIES = frozenset({"timeout", "connect_failed"})
+_DIGEST_LOOKUP_LOCK = threading.Lock()
 
 
 @dataclass
@@ -37,6 +48,9 @@ class InstalledModel:
     parameter_size: str | None
     quantization_level: str | None
     modified_at: str | None
+    # Ollama manifest digest. 같은 tag가 다른 모델 내용으로 교체됐는지 판별한다.
+    # 맨 뒤 기본값으로 둬 기존 내부 테스트/호출자의 positional 계약을 유지한다.
+    digest: str | None = None
 
 
 def _parse_version(raw: str) -> tuple[int, int, int] | None:
@@ -75,13 +89,18 @@ def get_status() -> OllamaStatus:
     return OllamaStatus(STATUS_READY, version=version)
 
 
-def list_models() -> list[InstalledModel]:
+def list_models(
+    *,
+    cancellation_signal: SummaryCancellationSignal | None = None,
+    timeout: float | None = None,
+) -> list[InstalledModel]:
     """GET /api/tags → allowlist 필터 + 내부 필드만 추출. schema 위반은 건너뛴다."""
     data = get_json(
         f"{st.OLLAMA_BASE}/api/tags",
         is_local=True,
-        timeout=st.STATUS_TIMEOUT_SEC,
+        timeout=st.STATUS_TIMEOUT_SEC if timeout is None else timeout,
         max_response_bytes=st.STATUS_MAX_BYTES,
+        cancellation_signal=cancellation_signal,
     )
     if not isinstance(data, dict):
         raise SummaryNetworkError("bad_response")
@@ -105,18 +124,85 @@ def list_models() -> list[InstalledModel]:
                 parameter_size=_opt_str(details.get("parameter_size")),
                 quantization_level=_opt_str(details.get("quantization_level")),
                 modified_at=_opt_str(item.get("modified_at")),
+                digest=_opt_str(item.get("digest")),
             )
         )
     return out
+
+
+def installed_model_digest(
+    model: str, *, cancellation_signal: SummaryCancellationSignal | None = None
+) -> str | None:
+    """allowlist 모델 tag의 현재 manifest digest를 제한 시간 안에 조회한다.
+
+    Windows Ollama는 짧은 ``/api/tags`` 연결을 간헐적으로 reset한다. 단일
+    transient 실패를 모델 교체로 잘못 판정하면 대형 문서의 병렬 요약 중 어느
+    한 guard만 실패해도 전체 run이 중단된다. 전체 상태 조회 예산은 기존
+    ``STATUS_TIMEOUT_SEC``를 넘지 않고 transient 범주만 취소 가능한 backoff로
+    재시도한다. 스키마 위반과 지속 실패는 기존처럼 None으로 fail-closed된다.
+    """
+    if model not in st.ALLOWED_MODELS:
+        return None
+
+    _acquire_digest_lookup_slot(cancellation_signal)
+    try:
+        # lock 대기 때문에 후속 caller의 실제 조회 예산이 줄면 정상 catalog도
+        # provider 변경으로 오인한다. 각 caller의 4초 예산은 slot 획득 후 시작한다.
+        deadline = time.monotonic() + st.STATUS_TIMEOUT_SEC
+        for attempt in range(_DIGEST_LOOKUP_MAX_ATTEMPTS):
+            if cancellation_signal is not None:
+                cancellation_signal.raise_if_cancelled()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            try:
+                models = list_models(
+                    cancellation_signal=cancellation_signal,
+                    timeout=min(_DIGEST_ATTEMPT_TIMEOUT_SEC, remaining),
+                )
+            except SummaryNetworkError as exc:
+                if (
+                    exc.category not in _DIGEST_TRANSIENT_CATEGORIES
+                    or attempt + 1 >= _DIGEST_LOOKUP_MAX_ATTEMPTS
+                ):
+                    return None
+                remaining = deadline - time.monotonic()
+                delay = min(
+                    _DIGEST_RETRY_BASE_SEC * (2**attempt),
+                    _DIGEST_RETRY_CAP_SEC,
+                    max(0.0, remaining),
+                )
+                if delay <= 0:
+                    return None
+                if cancellation_signal is not None:
+                    if cancellation_signal.wait(delay):
+                        cancellation_signal.raise_if_cancelled()
+                else:
+                    time.sleep(delay)
+                continue
+            return next((item.digest for item in models if item.name == model), None)
+        return None
+    finally:
+        _DIGEST_LOOKUP_LOCK.release()
+
+
+def _acquire_digest_lookup_slot(
+    cancellation_signal: SummaryCancellationSignal | None,
+) -> None:
+    """Ollama의 짧은 catalog 연결이 몰리지 않게 하나씩 실행한다."""
+
+    while True:
+        if cancellation_signal is not None:
+            cancellation_signal.raise_if_cancelled()
+        if _DIGEST_LOOKUP_LOCK.acquire(timeout=_DIGEST_LOCK_POLL_SEC):
+            return
 
 
 def _opt_str(value: object) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def pull_model(
-    model: str, *, should_cancel: Callable[[], bool] | None = None
-) -> Iterator[dict]:
+def pull_model(model: str, *, should_cancel: Callable[[], bool] | None = None) -> Iterator[dict]:
     """POST /api/pull (stream=true) → NDJSON 진행 dict yield. model은 allowlist여야 한다.
 
     blob/digest/manifest/layer 같은 내부 용어는 그대로 노출하지 않고 상위에서 사용자
@@ -164,7 +250,7 @@ def test_model(model: str) -> tuple[bool, str]:
         "temperature": 0,
         "reasoning_effort": LOCAL_REASONING_EFFORT,
         "stream": False,
-        "max_tokens": 32,
+        "max_tokens": st.TEST_MAX_TOKENS,
         "messages": [
             {"role": "system", "content": st.NO_THINK_HINT},
             {"role": "user", "content": "안녕하세요라고 한 문장으로 답하세요."},

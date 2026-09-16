@@ -10,7 +10,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 #[cfg(windows)]
 #[allow(non_snake_case)]
@@ -127,10 +127,7 @@ mod process_tree {
 
         pub(super) fn assign(&self, child: &Child) -> io::Result<()> {
             let assigned = unsafe {
-                AssignProcessToJobObject(
-                    self.handle as Handle,
-                    child.as_raw_handle() as Handle,
-                )
+                AssignProcessToJobObject(self.handle as Handle, child.as_raw_handle() as Handle)
             };
             if assigned == 0 {
                 return Err(io::Error::last_os_error());
@@ -219,21 +216,16 @@ fn sidecar_status(state: tauri::State<SidecarState>) -> &'static str {
 
 /// 오류 보고서 zip 생성 — 저장 위치는 사용자가 대화상자로 선택한다.
 /// PDF 원문·토큰·DB 전체는 포함하지 않는다 (sidecar가 정제한 데이터만 사용).
+/// async 커맨드로 워커에서 돌린다 — 동기 커맨드는 메인 스레드에서 실행돼
+/// 네트워크 대기(최대 10초) 동안 창 전체(입력·렌더링)가 얼어붙는다.
 #[tauri::command]
-fn save_error_report(app: tauri::AppHandle, state: tauri::State<SidecarState>) -> Result<bool, String> {
+async fn save_error_report(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SidecarState>,
+) -> Result<bool, String> {
     use tauri_plugin_dialog::DialogExt;
 
-    let report_body = fetch_error_report(&state).unwrap_or_else(|e| {
-        // sidecar가 죽어 있어도 최소 정보는 저장한다
-        format!("{{\"error\":\"sidecar unavailable\",\"detail\":\"{e}\"}}")
-    });
-    let meta = serde_json::json!({
-        "appVersion": app.package_info().version.to_string(),
-        "os": std::env::consts::OS,
-        "arch": std::env::consts::ARCH,
-    })
-    .to_string();
-
+    // 저장 위치부터 고른다 — 취소하면 네트워크 대기를 아예 지불하지 않는다.
     let picked = app
         .dialog()
         .file()
@@ -244,26 +236,46 @@ fn save_error_report(app: tauri::AppHandle, state: tauri::State<SidecarState>) -
     };
     let path = path.into_path().map_err(|e| e.to_string())?;
 
-    let file = std::fs::File::create(&path).map_err(|e| e.to_string())?;
-    let mut z = zip::ZipWriter::new(file);
-    let opts: zip::write::SimpleFileOptions = Default::default();
-    z.start_file("report.json", opts).map_err(|e| e.to_string())?;
-    z.write_all(report_body.as_bytes()).map_err(|e| e.to_string())?;
-    z.start_file("app.json", opts).map_err(|e| e.to_string())?;
-    z.write_all(meta.as_bytes()).map_err(|e| e.to_string())?;
-    z.finish().map_err(|e| e.to_string())?;
-    Ok(true)
+    let startup_failed = matches!(*state.startup.lock().unwrap(), Startup::Failed);
+    let port = state.port;
+    let token = state.token.clone();
+    let meta = serde_json::json!({
+        "appVersion": app.package_info().version.to_string(),
+        "os": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+    })
+    .to_string();
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let report_body = fetch_error_report(startup_failed, port, &token).unwrap_or_else(|e| {
+            // sidecar가 죽어 있어도 최소 정보는 저장한다 (오류 문자열은 JSON 이스케이프)
+            serde_json::json!({"error": "sidecar unavailable", "detail": e}).to_string()
+        });
+        let file = std::fs::File::create(&path).map_err(|e| e.to_string())?;
+        let mut z = zip::ZipWriter::new(file);
+        let opts: zip::write::SimpleFileOptions = Default::default();
+        z.start_file("report.json", opts)
+            .map_err(|e| e.to_string())?;
+        z.write_all(report_body.as_bytes())
+            .map_err(|e| e.to_string())?;
+        z.start_file("app.json", opts).map_err(|e| e.to_string())?;
+        z.write_all(meta.as_bytes()).map_err(|e| e.to_string())?;
+        z.finish().map_err(|e| e.to_string())?;
+        Ok(true)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
-fn fetch_error_report(state: &SidecarState) -> Result<String, String> {
+fn fetch_error_report(startup_failed: bool, port: u16, token: &str) -> Result<String, String> {
     // 시작 자체가 실패한 상태에서는 원인이 이미 명확하므로, 원시 소켓 오류 대신
     // 사람이 읽을 수 있는 안내를 우선 반환한다 (죽은 sidecar에 연결 시도하지 않음).
-    if matches!(*state.startup.lock().unwrap(), Startup::Failed) {
+    if startup_failed {
         return Err("sidecar를 시작하지 못해 오류 정보를 가져올 수 없습니다.".into());
     }
-    let url = format!("{}/api/system/error-report", sidecar_base_url(state.port));
+    let url = format!("{}/api/system/error-report", sidecar_base_url(port));
     ureq::get(&url)
-        .set("X-MedBridge-Token", &state.token)
+        .set("X-MedBridge-Token", token)
         .timeout(Duration::from_secs(10))
         .call()
         .map_err(|e| e.to_string())?
@@ -326,10 +338,22 @@ fn spawn_sidecar(
     };
 
     // 번들된 OCR 리소스 경로 전달 (없으면 sidecar가 PATH fallback)
+    //
+    // resource_dir()는 Windows에서 확장 길이 접두사(\\?\)가 붙은 경로를 돌려준다. 그대로
+    // 넘기면 sidecar가 TESSDATA_PREFIX로 쓰고, tesseract는 거기에 "/eng.traineddata"를
+    // 이어 붙인다. Win32는 \\?\ 경로를 정규화하지 않아 섞인 슬래시 때문에 파일을 못 열고,
+    // 결과적으로 OCR 페이지가 전량 "Failed loading language" 로 실패한다(실기기 45/45).
+    // sidecar도 방어적으로 벗기지만, 애초에 붙여 보내지 않는다.
     if let Ok(resource_dir) = app.path().resource_dir() {
         let ocr_dir = resource_dir.join("resources").join("ocr");
         if ocr_dir.is_dir() {
-            cmd.env("MEDBRIDGE_OCR_DIR", &ocr_dir);
+            let value = ocr_dir.to_string_lossy();
+            let plain = value
+                .strip_prefix(r"\\?\UNC\")
+                .map(|rest| format!(r"\\{rest}"))
+                .or_else(|| value.strip_prefix(r"\\?\").map(str::to_string))
+                .unwrap_or_else(|| value.to_string());
+            cmd.env("MEDBRIDGE_OCR_DIR", plain);
         }
     }
     cmd.env("MEDBRIDGE_APP_DATA_DIR", &app_data_dir)
@@ -337,7 +361,11 @@ fn spawn_sidecar(
         .env("MEDBRIDGE_BOUND_PORT", port.to_string())
         .env(
             "APP_ENV",
-            if cfg!(debug_assertions) { "development" } else { "production" },
+            if cfg!(debug_assertions) {
+                "development"
+            } else {
+                "production"
+            },
         )
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -358,7 +386,11 @@ fn spawn_sidecar(
 
 /// sidecar가 실제로 우리 포트에 떠서 /health에 정상 응답할 때까지 대기.
 /// 다른 프로세스가 포트를 선점한 경우 응답 검증에서 걸러진다.
-fn wait_for_sidecar(port: u16, child: &Mutex<Option<Child>>, timeout: Duration) -> Result<(), String> {
+fn wait_for_sidecar(
+    port: u16,
+    child: &Mutex<Option<Child>>,
+    timeout: Duration,
+) -> Result<(), String> {
     let deadline = std::time::Instant::now() + timeout;
     let addr = format!("127.0.0.1:{port}");
     while std::time::Instant::now() < deadline {
@@ -454,13 +486,51 @@ pub fn run() {
                 let handle = app.handle().clone();
                 std::thread::spawn(move || {
                     let state = handle.state::<SidecarState>();
-                    let result =
-                        wait_for_sidecar(port, &state.child, Duration::from_secs(120));
+                    // 마이그레이션 적용 기동은 수 GB DB의 백업 복사 + VACUUM을 포함해
+                    // 느린 디스크에서 수 분이 걸릴 수 있다 — 120초로 자르면 그 기기는
+                    // 업데이트 직후 매번 '시작 실패'가 뜨고 마이그레이션이 영영 끝나지
+                    // 않는다. 죽은 sidecar는 try_wait로 즉시 감지되므로 넉넉히 잡는다.
+                    let result = wait_for_sidecar(port, &state.child, Duration::from_secs(600));
                     match result {
                         Ok(()) => {
                             // 포트만 기록한다 — 토큰은 절대 로그에 남기지 않는다.
                             println!("sidecar ready at {}", sidecar_base_url(port));
                             *state.startup.lock().unwrap() = Startup::Ready;
+
+                            // readiness는 한 번의 성공일 뿐 생존 보장이 아니다. 대형 문서
+                            // OCR·요약 중 OOM/충돌로 sidecar가 종료되면 저장된 enum만
+                            // 반환하던 이전 코드는 앱을 영원히 ready로 보이게 했다.
+                            loop {
+                                std::thread::sleep(Duration::from_secs(1));
+                                let stopped = match state.child.lock() {
+                                    Ok(mut child) => match child.as_mut() {
+                                        Some(child) => match child.try_wait() {
+                                            Ok(Some(status)) => Some(format!(
+                                                "sidecar exited after ready: {status}"
+                                            )),
+                                            Ok(None) => None,
+                                            Err(error) => Some(format!(
+                                                "sidecar status check failed after ready: {error}"
+                                            )),
+                                        },
+                                        // 정상 앱 종료는 kill_sidecar가 child를 먼저 꺼낸다.
+                                        None => break,
+                                    },
+                                    Err(_) => Some(
+                                        "sidecar process state lock was poisoned after ready"
+                                            .to_string(),
+                                    ),
+                                };
+                                let Some(reason) = stopped else {
+                                    continue;
+                                };
+                                eprintln!("{reason}");
+                                *state.startup.lock().unwrap() = Startup::Failed;
+                                // 프런트는 상태를 계속 폴링하지만 이벤트도 보내 즉시 복구
+                                // 화면으로 전환할 수 있는 확장 지점을 유지한다.
+                                let _ = handle.emit("sidecar-failed", ());
+                                break;
+                            }
                         }
                         Err(e) => {
                             eprintln!("sidecar startup failed (port {port}): {e}");
@@ -538,12 +608,17 @@ mod tests {
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         guard.configure_command(&mut command);
-        let mut child = command.spawn().expect("long-running Windows process must start");
+        let mut child = command
+            .spawn()
+            .expect("long-running Windows process must start");
         guard
             .assign(&child)
             .expect("process must be assignable to the Job Object");
         assert!(
-            child.try_wait().expect("process state must be readable").is_none(),
+            child
+                .try_wait()
+                .expect("process state must be readable")
+                .is_none(),
             "test process exited before KILL_ON_JOB_CLOSE could be exercised"
         );
 

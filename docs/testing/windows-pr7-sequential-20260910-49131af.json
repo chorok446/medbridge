@@ -1,0 +1,1076 @@
+{
+  "schema_version": 1,
+  "installed_build": "49131af",
+  "worktree_head": "f757f070547fa9351ae6d3a805da571dc7e34d4f",
+  "scope": "Same short synthetic question, one new thread, ten sequential GUI submissions; not diverse quality or leak-proof testing.",
+  "baseline": {
+    "observed_at": "2026-09-10T03:48:51.017578+09:00",
+    "baseline_before": "2026-09-09 18:47:31",
+    "existing_fingerprints": {
+      "documents": {
+        "rows": 12,
+        "sha256": "c3a70a020aa70b9318ad45063d61edbe52be8d9f82716ea1c3e4cc7386541022"
+      },
+      "document_pages": {
+        "rows": 4339,
+        "sha256": "042fba7ec097311e0edc63e11f09154df7bf919511d1ed6bcda72cb490cc06c7"
+      },
+      "document_blocks": {
+        "rows": 364819,
+        "sha256": "a5f391b6db39fe6ab4a1147b6bb63212c79e14ee4e9660940fee95811132372b"
+      },
+      "summary_settings": {
+        "rows": 1,
+        "sha256": "81ff5a90db10b3a83102e2ff05e5a1443c01f1bd8b5c12404cb3ea180e2b2421"
+      },
+      "qa_threads": {
+        "rows": 17,
+        "sha256": "1719178a0566abf7fa75db2f3eb894352e15241cac6d47e846bdb366c0efc4a7"
+      },
+      "qa_messages": {
+        "rows": 66,
+        "sha256": "7cac24d207f657f9756045a24154379b8f0b51e943c5923c0ab38aee76d860cd"
+      },
+      "qa_claims": {
+        "rows": 189,
+        "sha256": "16e76fb41641300a8c6b1be72f45f177c2aa599ba684ce47850b2956afd2a9f5"
+      }
+    },
+    "new_threads": 0,
+    "answers": [],
+    "active_qa": 0,
+    "job_states": {
+      "document_jobs": [
+        {
+          "status": "FAILED",
+          "count": 21
+        },
+        {
+          "status": "SUCCEEDED",
+          "count": 47
+        }
+      ],
+      "summary_runs": [
+        {
+          "status": "CANCELLED",
+          "count": 2
+        },
+        {
+          "status": "FAILED",
+          "count": 2
+        },
+        {
+          "status": "SUCCEEDED",
+          "count": 1
+        }
+      ]
+    },
+    "foreign_key_violations": 0
+  },
+  "final": {
+    "observed_at": "2026-09-10T04:08:08.909651+09:00",
+    "baseline_before": "2026-09-09 18:47:31",
+    "existing_fingerprints": {
+      "documents": {
+        "rows": 12,
+        "sha256": "c3a70a020aa70b9318ad45063d61edbe52be8d9f82716ea1c3e4cc7386541022"
+      },
+      "document_pages": {
+        "rows": 4339,
+        "sha256": "042fba7ec097311e0edc63e11f09154df7bf919511d1ed6bcda72cb490cc06c7"
+      },
+      "document_blocks": {
+        "rows": 364819,
+        "sha256": "a5f391b6db39fe6ab4a1147b6bb63212c79e14ee4e9660940fee95811132372b"
+      },
+      "summary_settings": {
+        "rows": 1,
+        "sha256": "81ff5a90db10b3a83102e2ff05e5a1443c01f1bd8b5c12404cb3ea180e2b2421"
+      },
+      "qa_threads": {
+        "rows": 17,
+        "sha256": "1719178a0566abf7fa75db2f3eb894352e15241cac6d47e846bdb366c0efc4a7"
+      },
+      "qa_messages": {
+        "rows": 66,
+        "sha256": "7cac24d207f657f9756045a24154379b8f0b51e943c5923c0ab38aee76d860cd"
+      },
+      "qa_claims": {
+        "rows": 189,
+        "sha256": "16e76fb41641300a8c6b1be72f45f177c2aa599ba684ce47850b2956afd2a9f5"
+      }
+    },
+    "new_threads": 1,
+    "answers": [
+      {
+        "status": "completed",
+        "error_code": null,
+        "created_at": "2026-09-09 18:50:40.046840",
+        "stream_started_at": "2026-09-09 18:50:40.045729",
+        "completed_at": "2026-09-09 18:50:59.601449",
+        "provider_name": "openai_compatible",
+        "model_name": "qwen3:8b",
+        "sequence_number": 2,
+        "content": "심장은 온몸에 혈액을 보내는 근육 기관이라고 설명합니다 (원문: 심장은 온몸에 혈액을 보내는 근육 기관이다).[c0]",
+        "last_stream_seq": 1,
+        "question": "이 문서에서 심장은 어떤 기관이라고 설명하나요?",
+        "draft_chars": 0,
+        "claims": [
+          {
+            "text": "심장은 온몸에 혈액을 보내는 근육 기관이라고 설명합니다 (원문: 심장은 온몸에 혈액을 보내는 근육 기관이다).",
+            "status": "supported",
+            "pages": [
+              1,
+              2
+            ]
+          }
+        ],
+        "all_refs_present": true,
+        "duplicates": 0,
+        "duration_sec": 19.55572
+      },
+      {
+        "status": "completed",
+        "error_code": null,
+        "created_at": "2026-09-09 18:52:54.793433",
+        "stream_started_at": "2026-09-09 18:52:54.793433",
+        "completed_at": "2026-09-09 18:52:58.062980",
+        "provider_name": "openai_compatible",
+        "model_name": "qwen3:8b",
+        "sequence_number": 4,
+        "content": "심장은 온몸에 혈액을 보내는 근육 기관이라고 설명합니다 (원문: 심장은 온몸에 혈액을 보내는 근육 기관이다).[c0]",
+        "last_stream_seq": 1,
+        "question": "이 문서에서 심장은 어떤 기관이라고 설명하나요?",
+        "draft_chars": 0,
+        "claims": [
+          {
+            "text": "심장은 온몸에 혈액을 보내는 근육 기관이라고 설명합니다 (원문: 심장은 온몸에 혈액을 보내는 근육 기관이다).",
+            "status": "supported",
+            "pages": [
+              1,
+              2
+            ]
+          }
+        ],
+        "all_refs_present": true,
+        "duplicates": 0,
+        "duration_sec": 3.269547
+      },
+      {
+        "status": "completed",
+        "error_code": null,
+        "created_at": "2026-09-09 18:54:17.921365",
+        "stream_started_at": "2026-09-09 18:54:17.920350",
+        "completed_at": "2026-09-09 18:54:42.132318",
+        "provider_name": "openai_compatible",
+        "model_name": "qwen3:8b",
+        "sequence_number": 6,
+        "content": "심장은 온몸에 혈액을 보내는 근육 기관이라고 설명합니다 (원문: 심장은 온몸에 혈액을 보내는 근육 기관이다).[c0]",
+        "last_stream_seq": 1,
+        "question": "이 문서에서 심장은 어떤 기관이라고 설명하나요?",
+        "draft_chars": 0,
+        "claims": [
+          {
+            "text": "심장은 온몸에 혈액을 보내는 근육 기관이라고 설명합니다 (원문: 심장은 온몸에 혈액을 보내는 근육 기관이다).",
+            "status": "supported",
+            "pages": [
+              1,
+              2
+            ]
+          }
+        ],
+        "all_refs_present": true,
+        "duplicates": 0,
+        "duration_sec": 24.211968
+      },
+      {
+        "status": "completed",
+        "error_code": null,
+        "created_at": "2026-09-09 18:55:33.876819",
+        "stream_started_at": "2026-09-09 18:55:33.875723",
+        "completed_at": "2026-09-09 18:56:04.280571",
+        "provider_name": "openai_compatible",
+        "model_name": "qwen3:8b",
+        "sequence_number": 8,
+        "content": "심장은 온몸에 혈액을 보내는 근육 기관이라고 설명합니다 (원문: 심장은 온몸에 혈액을 보내는 근육 기관이다).[c0]",
+        "last_stream_seq": 1,
+        "question": "이 문서에서 심장은 어떤 기관이라고 설명하나요?",
+        "draft_chars": 0,
+        "claims": [
+          {
+            "text": "심장은 온몸에 혈액을 보내는 근육 기관이라고 설명합니다 (원문: 심장은 온몸에 혈액을 보내는 근육 기관이다).",
+            "status": "supported",
+            "pages": [
+              1,
+              2
+            ]
+          }
+        ],
+        "all_refs_present": true,
+        "duplicates": 0,
+        "duration_sec": 30.404848
+      },
+      {
+        "status": "completed",
+        "error_code": null,
+        "created_at": "2026-09-09 18:57:01.183494",
+        "stream_started_at": "2026-09-09 18:57:01.183494",
+        "completed_at": "2026-09-09 18:57:26.793954",
+        "provider_name": "openai_compatible",
+        "model_name": "qwen3:8b",
+        "sequence_number": 10,
+        "content": "심장은 온몸에 혈액을 보내는 근육 기관이라고 설명합니다 (원문: 심장은 온몸에 혈액을 보내는 근육 기관이다).[c0]",
+        "last_stream_seq": 1,
+        "question": "이 문서에서 심장은 어떤 기관이라고 설명하나요?",
+        "draft_chars": 0,
+        "claims": [
+          {
+            "text": "심장은 온몸에 혈액을 보내는 근육 기관이라고 설명합니다 (원문: 심장은 온몸에 혈액을 보내는 근육 기관이다).",
+            "status": "supported",
+            "pages": [
+              1,
+              2
+            ]
+          }
+        ],
+        "all_refs_present": true,
+        "duplicates": 0,
+        "duration_sec": 25.61046
+      },
+      {
+        "status": "completed",
+        "error_code": null,
+        "created_at": "2026-09-09 19:01:45.209559",
+        "stream_started_at": "2026-09-09 19:01:45.209559",
+        "completed_at": "2026-09-09 19:02:10.357108",
+        "provider_name": "openai_compatible",
+        "model_name": "qwen3:8b",
+        "sequence_number": 12,
+        "content": "심장은 온몸에 혈액을 보내는 근육 기관이라고 설명합니다 (원문: 심장은 온몸에 혈액을 보내는 근육 기관이다).[c0]",
+        "last_stream_seq": 1,
+        "question": "이 문서에서 심장은 어떤 기관이라고 설명하나요?",
+        "draft_chars": 0,
+        "claims": [
+          {
+            "text": "심장은 온몸에 혈액을 보내는 근육 기관이라고 설명합니다 (원문: 심장은 온몸에 혈액을 보내는 근육 기관이다).",
+            "status": "supported",
+            "pages": [
+              1,
+              2
+            ]
+          }
+        ],
+        "all_refs_present": true,
+        "duplicates": 0,
+        "duration_sec": 25.147549
+      },
+      {
+        "status": "completed",
+        "error_code": null,
+        "created_at": "2026-09-09 19:03:11.933038",
+        "stream_started_at": "2026-09-09 19:03:11.933038",
+        "completed_at": "2026-09-09 19:03:37.102210",
+        "provider_name": "openai_compatible",
+        "model_name": "qwen3:8b",
+        "sequence_number": 14,
+        "content": "심장은 온몸에 혈액을 보내는 근육 기관이라고 설명합니다 (원문: 심장은 온몸에 혈액을 보내는 근육 기관이다).[c0]",
+        "last_stream_seq": 1,
+        "question": "이 문서에서 심장은 어떤 기관이라고 설명하나요?",
+        "draft_chars": 0,
+        "claims": [
+          {
+            "text": "심장은 온몸에 혈액을 보내는 근육 기관이라고 설명합니다 (원문: 심장은 온몸에 혈액을 보내는 근육 기관이다).",
+            "status": "supported",
+            "pages": [
+              1,
+              2
+            ]
+          }
+        ],
+        "all_refs_present": true,
+        "duplicates": 0,
+        "duration_sec": 25.169172
+      },
+      {
+        "status": "completed",
+        "error_code": null,
+        "created_at": "2026-09-09 19:04:20.160807",
+        "stream_started_at": "2026-09-09 19:04:20.160807",
+        "completed_at": "2026-09-09 19:04:45.383806",
+        "provider_name": "openai_compatible",
+        "model_name": "qwen3:8b",
+        "sequence_number": 16,
+        "content": "심장은 온몸에 혈액을 보내는 근육 기관이라고 설명합니다 (원문: 심장은 온몸에 혈액을 보내는 근육 기관이다).[c0]",
+        "last_stream_seq": 1,
+        "question": "이 문서에서 심장은 어떤 기관이라고 설명하나요?",
+        "draft_chars": 0,
+        "claims": [
+          {
+            "text": "심장은 온몸에 혈액을 보내는 근육 기관이라고 설명합니다 (원문: 심장은 온몸에 혈액을 보내는 근육 기관이다).",
+            "status": "supported",
+            "pages": [
+              1,
+              2
+            ]
+          }
+        ],
+        "all_refs_present": true,
+        "duplicates": 0,
+        "duration_sec": 25.222999
+      },
+      {
+        "status": "completed",
+        "error_code": null,
+        "created_at": "2026-09-09 19:05:38.281882",
+        "stream_started_at": "2026-09-09 19:05:38.281882",
+        "completed_at": "2026-09-09 19:05:57.337930",
+        "provider_name": "openai_compatible",
+        "model_name": "qwen3:8b",
+        "sequence_number": 18,
+        "content": "심장은 온몸에 혈액을 보내는 근육 기관이라고 설명합니다 (원문: 심장은 온몸에 혈액을 보내는 근육 기관이다).[c0]",
+        "last_stream_seq": 1,
+        "question": "이 문서에서 심장은 어떤 기관이라고 설명하나요?",
+        "draft_chars": 0,
+        "claims": [
+          {
+            "text": "심장은 온몸에 혈액을 보내는 근육 기관이라고 설명합니다 (원문: 심장은 온몸에 혈액을 보내는 근육 기관이다).",
+            "status": "supported",
+            "pages": [
+              1,
+              2
+            ]
+          }
+        ],
+        "all_refs_present": true,
+        "duplicates": 0,
+        "duration_sec": 19.056048
+      },
+      {
+        "status": "completed",
+        "error_code": null,
+        "created_at": "2026-09-09 19:07:33.926753",
+        "stream_started_at": "2026-09-09 19:07:33.926753",
+        "completed_at": "2026-09-09 19:07:54.315942",
+        "provider_name": "openai_compatible",
+        "model_name": "qwen3:8b",
+        "sequence_number": 20,
+        "content": "심장은 온몸에 혈액을 보내는 근육 기관이라고 설명합니다 (원문: 심장은 온몸에 혈액을 보내는 근육 기관이다).[c0]",
+        "last_stream_seq": 1,
+        "question": "이 문서에서 심장은 어떤 기관이라고 설명하나요?",
+        "draft_chars": 0,
+        "claims": [
+          {
+            "text": "심장은 온몸에 혈액을 보내는 근육 기관이라고 설명합니다 (원문: 심장은 온몸에 혈액을 보내는 근육 기관이다).",
+            "status": "supported",
+            "pages": [
+              1,
+              2
+            ]
+          }
+        ],
+        "all_refs_present": true,
+        "duplicates": 0,
+        "duration_sec": 20.389189
+      }
+    ],
+    "active_qa": 0,
+    "job_states": {
+      "document_jobs": [
+        {
+          "status": "FAILED",
+          "count": 21
+        },
+        {
+          "status": "SUCCEEDED",
+          "count": 47
+        }
+      ],
+      "summary_runs": [
+        {
+          "status": "CANCELLED",
+          "count": 2
+        },
+        {
+          "status": "FAILED",
+          "count": 2
+        },
+        {
+          "status": "SUCCEEDED",
+          "count": 1
+        }
+      ]
+    },
+    "foreign_key_violations": 0
+  },
+  "completion_boundaries": [
+    {
+      "completed_count": 1,
+      "observed_at": "2026-09-10T03:51:13.252621+09:00",
+      "active_qa": 0,
+      "foreign_key_violations": 0,
+      "existing_fingerprints_match": true
+    },
+    {
+      "completed_count": 2,
+      "observed_at": "2026-09-10T03:53:27.229604+09:00",
+      "active_qa": 0,
+      "foreign_key_violations": 0,
+      "existing_fingerprints_match": true
+    },
+    {
+      "completed_count": 3,
+      "observed_at": "2026-09-10T03:54:51.381025+09:00",
+      "active_qa": 0,
+      "foreign_key_violations": 0,
+      "existing_fingerprints_match": true
+    },
+    {
+      "completed_count": 4,
+      "observed_at": "2026-09-10T03:56:16.913375+09:00",
+      "active_qa": 0,
+      "foreign_key_violations": 0,
+      "existing_fingerprints_match": true
+    },
+    {
+      "completed_count": 5,
+      "observed_at": "2026-09-10T03:57:36.800342+09:00",
+      "active_qa": 0,
+      "foreign_key_violations": 0,
+      "existing_fingerprints_match": true
+    },
+    {
+      "completed_count": 6,
+      "observed_at": "2026-09-10T04:02:32.489475+09:00",
+      "active_qa": 0,
+      "foreign_key_violations": 0,
+      "existing_fingerprints_match": true
+    },
+    {
+      "completed_count": 7,
+      "observed_at": "2026-09-10T04:03:39.563144+09:00",
+      "active_qa": 0,
+      "foreign_key_violations": 0,
+      "existing_fingerprints_match": true
+    },
+    {
+      "completed_count": 8,
+      "observed_at": "2026-09-10T04:04:55.937976+09:00",
+      "active_qa": 0,
+      "foreign_key_violations": 0,
+      "existing_fingerprints_match": true
+    },
+    {
+      "completed_count": 9,
+      "observed_at": "2026-09-10T04:06:35.296642+09:00",
+      "active_qa": 0,
+      "foreign_key_violations": 0,
+      "existing_fingerprints_match": true
+    },
+    {
+      "completed_count": 10,
+      "observed_at": "2026-09-10T04:08:08.909651+09:00",
+      "active_qa": 0,
+      "foreign_key_violations": 0,
+      "existing_fingerprints_match": true
+    }
+  ],
+  "memory": {
+    "method": "Boundary snapshots of MedBridge, sidecar and WebView2 descendants; excludes Ollama/GPU. Before is document list; after samples are maximized PDF/Q&A. Not continuous peaks.",
+    "samples": [
+      {
+        "phase": "before",
+        "observedAt": "2026-09-09T18:49:19.0896575Z",
+        "processCount": 9,
+        "workingSetBytes": 566665216,
+        "privateBytes": 324489216,
+        "processes": [
+          {
+            "name": "medbridge.exe",
+            "workingSetBytes": 37543936,
+            "privateBytes": 7983104
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 136237056,
+            "privateBytes": 42622976
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 13426688,
+            "privateBytes": 2985984
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 78962688,
+            "privateBytes": 79908864
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 39682048,
+            "privateBytes": 12496896
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 20733952,
+            "privateBytes": 8790016
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 97738752,
+            "privateBytes": 45281280
+          },
+          {
+            "name": "medbridge-sidecar.exe",
+            "workingSetBytes": 8679424,
+            "privateBytes": 1372160
+          },
+          {
+            "name": "medbridge-sidecar.exe",
+            "workingSetBytes": 133660672,
+            "privateBytes": 123047936
+          }
+        ]
+      },
+      {
+        "phase": "after-1",
+        "observedAt": "2026-09-09T18:51:56.2512058Z",
+        "processCount": 9,
+        "workingSetBytes": 612536320,
+        "privateBytes": 404762624,
+        "processes": [
+          {
+            "name": "medbridge.exe",
+            "workingSetBytes": 38273024,
+            "privateBytes": 8081408
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 143654912,
+            "privateBytes": 43503616
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 13426688,
+            "privateBytes": 2985984
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 83382272,
+            "privateBytes": 137142272
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 39931904,
+            "privateBytes": 12660736
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 20770816,
+            "privateBytes": 8744960
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 125374464,
+            "privateBytes": 63426560
+          },
+          {
+            "name": "medbridge-sidecar.exe",
+            "workingSetBytes": 8679424,
+            "privateBytes": 1372160
+          },
+          {
+            "name": "medbridge-sidecar.exe",
+            "workingSetBytes": 139042816,
+            "privateBytes": 126844928
+          }
+        ]
+      },
+      {
+        "phase": "after-2",
+        "observedAt": "2026-09-09T18:53:58.1255053Z",
+        "processCount": 9,
+        "workingSetBytes": 611115008,
+        "privateBytes": 419532800,
+        "processes": [
+          {
+            "name": "medbridge.exe",
+            "workingSetBytes": 38227968,
+            "privateBytes": 8019968
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 143622144,
+            "privateBytes": 43446272
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 13426688,
+            "privateBytes": 2985984
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 83435520,
+            "privateBytes": 152326144
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 40038400,
+            "privateBytes": 12775424
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 20770816,
+            "privateBytes": 8744960
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 124960768,
+            "privateBytes": 64221184
+          },
+          {
+            "name": "medbridge-sidecar.exe",
+            "workingSetBytes": 8679424,
+            "privateBytes": 1372160
+          },
+          {
+            "name": "medbridge-sidecar.exe",
+            "workingSetBytes": 137953280,
+            "privateBytes": 125640704
+          }
+        ]
+      },
+      {
+        "phase": "after-3",
+        "observedAt": "2026-09-09T18:54:58.7467887Z",
+        "processCount": 9,
+        "workingSetBytes": 612593664,
+        "privateBytes": 399511552,
+        "processes": [
+          {
+            "name": "medbridge.exe",
+            "workingSetBytes": 38227968,
+            "privateBytes": 8019968
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 144179200,
+            "privateBytes": 43995136
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 13426688,
+            "privateBytes": 2985984
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 83456000,
+            "privateBytes": 131018752
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 40058880,
+            "privateBytes": 12820480
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 20770816,
+            "privateBytes": 8744960
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 125677568,
+            "privateBytes": 64913408
+          },
+          {
+            "name": "medbridge-sidecar.exe",
+            "workingSetBytes": 8679424,
+            "privateBytes": 1372160
+          },
+          {
+            "name": "medbridge-sidecar.exe",
+            "workingSetBytes": 138117120,
+            "privateBytes": 125640704
+          }
+        ]
+      },
+      {
+        "phase": "after-4",
+        "observedAt": "2026-09-09T18:56:24.1549549Z",
+        "processCount": 9,
+        "workingSetBytes": 614678528,
+        "privateBytes": 388706304,
+        "processes": [
+          {
+            "name": "medbridge.exe",
+            "workingSetBytes": 38227968,
+            "privateBytes": 8015872
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 144076800,
+            "privateBytes": 43806720
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 13430784,
+            "privateBytes": 2990080
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 83066880,
+            "privateBytes": 118337536
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 40026112,
+            "privateBytes": 12828672
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 20770816,
+            "privateBytes": 8744960
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 128217088,
+            "privateBytes": 66936832
+          },
+          {
+            "name": "medbridge-sidecar.exe",
+            "workingSetBytes": 8679424,
+            "privateBytes": 1372160
+          },
+          {
+            "name": "medbridge-sidecar.exe",
+            "workingSetBytes": 138182656,
+            "privateBytes": 125673472
+          }
+        ]
+      },
+      {
+        "phase": "after-5",
+        "observedAt": "2026-09-09T18:57:44.3992954Z",
+        "processCount": 9,
+        "workingSetBytes": 614117376,
+        "privateBytes": 391421952,
+        "processes": [
+          {
+            "name": "medbridge.exe",
+            "workingSetBytes": 38215680,
+            "privateBytes": 7987200
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 144363520,
+            "privateBytes": 44126208
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 13426688,
+            "privateBytes": 2985984
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 83427328,
+            "privateBytes": 122413056
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 39825408,
+            "privateBytes": 12500992
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 20779008,
+            "privateBytes": 8744960
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 127139840,
+            "privateBytes": 65650688
+          },
+          {
+            "name": "medbridge-sidecar.exe",
+            "workingSetBytes": 8679424,
+            "privateBytes": 1372160
+          },
+          {
+            "name": "medbridge-sidecar.exe",
+            "workingSetBytes": 138260480,
+            "privateBytes": 125640704
+          }
+        ]
+      },
+      {
+        "phase": "after-6",
+        "observedAt": "2026-09-09T19:02:40.5437792Z",
+        "processCount": 9,
+        "workingSetBytes": 617680896,
+        "privateBytes": 406519808,
+        "processes": [
+          {
+            "name": "medbridge.exe",
+            "workingSetBytes": 38227968,
+            "privateBytes": 8011776
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 144183296,
+            "privateBytes": 43888640
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 13426688,
+            "privateBytes": 2985984
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 85483520,
+            "privateBytes": 135897088
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 39919616,
+            "privateBytes": 12705792
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 20779008,
+            "privateBytes": 8744960
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 128679936,
+            "privateBytes": 67272704
+          },
+          {
+            "name": "medbridge-sidecar.exe",
+            "workingSetBytes": 8679424,
+            "privateBytes": 1372160
+          },
+          {
+            "name": "medbridge-sidecar.exe",
+            "workingSetBytes": 138301440,
+            "privateBytes": 125640704
+          }
+        ]
+      },
+      {
+        "phase": "after-7",
+        "observedAt": "2026-09-09T19:03:47.9332960Z",
+        "processCount": 9,
+        "workingSetBytes": 619413504,
+        "privateBytes": 404819968,
+        "processes": [
+          {
+            "name": "medbridge.exe",
+            "workingSetBytes": 38215680,
+            "privateBytes": 7987200
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 144113664,
+            "privateBytes": 43843584
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 13426688,
+            "privateBytes": 2985984
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 84922368,
+            "privateBytes": 132096000
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 39997440,
+            "privateBytes": 12738560
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 20779008,
+            "privateBytes": 8744960
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 130912256,
+            "privateBytes": 69410816
+          },
+          {
+            "name": "medbridge-sidecar.exe",
+            "workingSetBytes": 8679424,
+            "privateBytes": 1372160
+          },
+          {
+            "name": "medbridge-sidecar.exe",
+            "workingSetBytes": 138366976,
+            "privateBytes": 125640704
+          }
+        ]
+      },
+      {
+        "phase": "after-8",
+        "observedAt": "2026-09-09T19:05:03.9563855Z",
+        "processCount": 9,
+        "workingSetBytes": 617594880,
+        "privateBytes": 402444288,
+        "processes": [
+          {
+            "name": "medbridge.exe",
+            "workingSetBytes": 38215680,
+            "privateBytes": 7987200
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 143794176,
+            "privateBytes": 43503616
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 13430784,
+            "privateBytes": 2990080
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 85016576,
+            "privateBytes": 132038656
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 39931904,
+            "privateBytes": 12623872
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 20779008,
+            "privateBytes": 8744960
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 129282048,
+            "privateBytes": 67543040
+          },
+          {
+            "name": "medbridge-sidecar.exe",
+            "workingSetBytes": 8679424,
+            "privateBytes": 1372160
+          },
+          {
+            "name": "medbridge-sidecar.exe",
+            "workingSetBytes": 138465280,
+            "privateBytes": 125640704
+          }
+        ]
+      },
+      {
+        "phase": "after-9",
+        "observedAt": "2026-09-09T19:06:59.0599367Z",
+        "processCount": 9,
+        "workingSetBytes": 620572672,
+        "privateBytes": 404226048,
+        "processes": [
+          {
+            "name": "medbridge.exe",
+            "workingSetBytes": 38232064,
+            "privateBytes": 8015872
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 145223680,
+            "privateBytes": 44908544
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 13426688,
+            "privateBytes": 2985984
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 85012480,
+            "privateBytes": 130666496
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 39899136,
+            "privateBytes": 12541952
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 20774912,
+            "privateBytes": 8740864
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 130568192,
+            "privateBytes": 69083136
+          },
+          {
+            "name": "medbridge-sidecar.exe",
+            "workingSetBytes": 8679424,
+            "privateBytes": 1372160
+          },
+          {
+            "name": "medbridge-sidecar.exe",
+            "workingSetBytes": 138756096,
+            "privateBytes": 125911040
+          }
+        ]
+      },
+      {
+        "phase": "after-10",
+        "observedAt": "2026-09-09T19:08:16.0528935Z",
+        "processCount": 9,
+        "workingSetBytes": 621035520,
+        "privateBytes": 405782528,
+        "processes": [
+          {
+            "name": "medbridge.exe",
+            "workingSetBytes": 38215680,
+            "privateBytes": 7987200
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 144990208,
+            "privateBytes": 44642304
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 13426688,
+            "privateBytes": 2985984
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 85164032,
+            "privateBytes": 130945024
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 40030208,
+            "privateBytes": 12750848
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 20774912,
+            "privateBytes": 8740864
+          },
+          {
+            "name": "msedgewebview2.exe",
+            "workingSetBytes": 130838528,
+            "privateBytes": 69308416
+          },
+          {
+            "name": "medbridge-sidecar.exe",
+            "workingSetBytes": 8679424,
+            "privateBytes": 1372160
+          },
+          {
+            "name": "medbridge-sidecar.exe",
+            "workingSetBytes": 138915840,
+            "privateBytes": 127049728
+          }
+        ]
+      }
+    ]
+  }
+}

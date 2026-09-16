@@ -1,0 +1,24 @@
+{
+  "installerCommit": "d564828952ccddb110ed3abcd3b5f844f0881bcd",
+  "observation": "GUI stop button after 13.8 seconds; before any retry or forced exit",
+  "active": 0,
+  "answer": {
+    "status": "interrupted",
+    "error_code": "CONNECTION_LOST",
+    "created_at": "2026-09-09 11:09:48.758192",
+    "stream_started_at": "2026-09-09 11:09:48.758192",
+    "completed_at": "2026-09-09 11:10:02.730812",
+    "cancel_requested_at": "2026-09-09 11:10:02.690925",
+    "interrupted_at": "2026-09-09 11:10:02.730812",
+    "model_name": "qwen3:8b",
+    "question": "심장은 온몸에 혈액을 보내는 근육 기관이다라는 문서의 문장을 구성하는 단어를 각각 설명하고 문단 1부터 문단 12까지 순서대로 원문을 인용해 주세요.",
+    "content": "연결이 끊겨 답변이 중단되었습니다.",
+    "draft_chars": 0,
+    "last_stream_seq": 0,
+    "duration_sec": 13.97262,
+    "claims": [],
+    "exact_ordered_12": false,
+    "duplicate_text_and_sources": 0,
+    "known_unsupported_terms": []
+  }
+}

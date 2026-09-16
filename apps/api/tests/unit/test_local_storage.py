@@ -1,6 +1,7 @@
 """LocalFileStorage — 원자적 저장·경로 순회 방지·정리."""
 
 import uuid
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,68 @@ class TestSaveAndRead:
         store.save_original(key, b"v1")
         store.save_original(key, b"v2")
         assert store.read_original(key) == b"v2"
+
+    def test_staged_upload_is_promoted_without_leftover(
+        self, store: LocalFileStorage, tmp_path: Path
+    ):
+        key = object_key(uuid.uuid4())
+        staged = store.create_staged_upload()
+        assert staged.path.parent.resolve() == (tmp_path / ".staging").resolve()
+        assert "original" not in staged.path.name
+
+        staged.write(b"%PDF-staged")
+        store.promote_staged(key, staged)
+
+        assert store.read_original(key) == b"%PDF-staged"
+        assert not staged.path.exists()
+
+    def test_duplicate_or_failed_upload_can_discard_staging(self, store: LocalFileStorage):
+        staged = store.create_staged_upload()
+        staged.write(b"%PDF-temporary")
+        path = staged.path
+
+        store.discard_staged(staged)
+        store.discard_staged(staged)  # 보상 처리는 idempotent해야 한다
+
+        assert not path.exists()
+
+    def test_forged_staging_path_is_rejected(self, store: LocalFileStorage, tmp_path: Path):
+        staged = store.create_staged_upload()
+        forged = replace(staged, path=tmp_path / "outside.tmp")
+        try:
+            with pytest.raises(AppError):
+                store.promote_staged(object_key(uuid.uuid4()), forged)
+        finally:
+            store.discard_staged(staged)
+
+    def test_startup_cleanup_removes_only_owned_staging_files(
+        self, store: LocalFileStorage, tmp_path: Path
+    ):
+        store.staging_root.mkdir(parents=True, exist_ok=True)
+        stale = store.staging_root / "upload-stale.tmp"
+        unrelated = store.staging_root / "keep-me.txt"
+        stale.write_bytes(b"partial-pdf")
+        unrelated.write_bytes(b"diagnostic")
+
+        assert store.cleanup_staged() == 1
+        assert not stale.exists()
+        assert unrelated.read_bytes() == b"diagnostic"
+
+    def test_startup_cleanup_does_not_follow_staging_symlink(
+        self, store: LocalFileStorage, tmp_path: Path
+    ):
+        store.staging_root.mkdir(parents=True, exist_ok=True)
+        outside = tmp_path / "outside-private.pdf"
+        outside.write_bytes(b"must survive")
+        link = store.staging_root / "upload-forged.tmp"
+        try:
+            link.symlink_to(outside)
+        except OSError:
+            pytest.skip("현재 Windows 계정은 symlink 생성 권한이 없습니다")
+
+        assert store.cleanup_staged() == 0
+        assert outside.read_bytes() == b"must survive"
+        assert link.is_symlink()
 
 
 class TestPathTraversal:

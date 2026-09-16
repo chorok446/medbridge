@@ -23,7 +23,8 @@ export function StatusBadge({
       {isActive(status) && (
         <span
           aria-hidden
-          className="inline-block h-2 w-2 animate-pulse rounded-full bg-current"
+          // 점의 깜빡임이 멈춰도 "진행 중"은 라벨 글자와 진행률이 말한다.
+          className="inline-block h-2 w-2 animate-pulse rounded-full bg-current motion-reduce:animate-none"
         />
       )}
       {STATUS_LABELS[status]}

@@ -32,15 +32,22 @@ export function askQuestion(
   documentId: string,
   threadId: string,
   question: string,
+  learnerLevel?: string,
 ): Promise<QaThreadDetail> {
   return api<QaThreadDetail>(`/api/documents/${documentId}/qa/threads/${threadId}/messages`, {
     method: "POST",
-    body: JSON.stringify({ question }),
+    body: JSON.stringify(learnerLevel ? { question, learnerLevel } : { question }),
   });
 }
 
-export function retryAnswer(documentId: string, threadId: string): Promise<QaThreadDetail> {
+export function retryAnswer(
+  documentId: string,
+  threadId: string,
+  learnerLevel?: string,
+): Promise<QaThreadDetail> {
+  // 수준은 서버에 저장되지 않는다 — 재시도 때도 화면이 현재 선택값을 다시 보낸다.
   return api<QaThreadDetail>(`/api/documents/${documentId}/qa/threads/${threadId}/retry`, {
     method: "POST",
+    body: JSON.stringify(learnerLevel ? { learnerLevel } : {}),
   });
 }

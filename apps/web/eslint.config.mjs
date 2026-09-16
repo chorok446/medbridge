@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // dev/build에서 패키지 원본을 복사한 생성물. 앱 소스는 계속 검사한다.
+    "public/pdfjs/**",
   ]),
 ]);
 

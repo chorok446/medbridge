@@ -4,8 +4,8 @@
 어느 단계도 모델 context를 넘지 않도록 fan-in을 고정 상한으로 묶는다.
 
 재사용 키(input_hash)는 "같은 입력 + 같은 실행 조건이면 같은 결과"를 뜻한다. 문서
-revision·청크 해시·모델·프롬프트·스키마·학습자 수준·언어가 하나라도 다르면 다른 해시가
-되어 이전 결과를 섞어 쓰지 않는다.
+revision·청크 해시·모델·provider 지문(endpoint/local-native/digest/생성 설정)·프롬프트·
+스키마·학습자 수준·언어가 하나라도 다르면 다른 해시가 되어 이전 결과를 섞어 쓰지 않는다.
 """
 
 import hashlib
@@ -22,6 +22,7 @@ def build_context_key(
     *,
     provider_name: str,
     model_name: str,
+    provider_fingerprint: str,
     prompt_version: str,
     schema_version: int,
     learner_level: str,
@@ -35,6 +36,7 @@ def build_context_key(
             [
                 provider_name,
                 model_name,
+                provider_fingerprint,
                 prompt_version,
                 str(schema_version),
                 learner_level,

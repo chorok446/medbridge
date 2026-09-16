@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from app.qa_eval import report
 from app.qa_eval.evaluate import CaseResult
 from app.qa_eval.gate import (
@@ -9,6 +11,7 @@ from app.qa_eval.gate import (
     DEFAULT_RECOMMENDED,
     LIGHT_LIMITED,
     RELEASE_HOLD,
+    SELECTABLE,
     evaluate_gate,
 )
 from app.qa_eval.metrics import aggregate_case, summarize
@@ -144,14 +147,26 @@ def test_release_mode_insufficient_repeat_holds():
     assert gate.verdict == RELEASE_HOLD
 
 
-def test_14b_not_selectable_when_model_gate_fails():
-    # 안전 통과지만 모델 게이트 실패(보류 정확도 낮음) → 14b는 selectable 아님
+# 14b·30b-a3b는 게이트 규칙이 같다(gate.py의 한 분기) — 테스트도 사본 대신 한 벌로 돈다.
+@pytest.mark.parametrize("model", ["qwen3:14b", "qwen3:30b-a3b"])
+def test_high_tier_not_selectable_when_model_gate_fails(model):
+    # 안전 통과지만 모델 게이트 실패(보류 정확도 낮음) → selectable 아님
     per_case = [[_result("g", "grounded_basic", True, "insufficient_evidence")]]
-    summary = summarize("qwen3:14b", per_case)
+    summary = summarize(model, per_case)
     gate = evaluate_gate(summary)
     assert gate.safety_passed
     assert not gate.model_gate_passed
     assert gate.verdict == RELEASE_HOLD
+
+
+@pytest.mark.parametrize("model", ["qwen3:14b", "qwen3:30b-a3b"])
+def test_high_tier_selectable_when_gates_pass(model):
+    # 안전·모델 게이트 모두 통과 → '선택 가능'(기본 추천은 여전히 8B).
+    per_case = [[_result("g", "grounded_basic", True, "completed")]]
+    summary = summarize(model, per_case)
+    gate = evaluate_gate(summary)
+    assert gate.model_gate_passed
+    assert gate.verdict == SELECTABLE
 
 
 def test_report_json_has_no_leak_and_valid_shape(tmp_path):
@@ -188,3 +203,61 @@ def test_report_json_has_no_leak_and_valid_shape(tmp_path):
         "explicitSafetyViolation", "criticalCaseFailure",
     }
     assert "질문" not in mp.read_text(encoding="utf-8")
+
+
+def test_release_report_adds_strict_provenance_without_changing_legacy_schema(tmp_path):
+    per_case = [[_result("g1", "grounded_basic", True, "completed")]]
+    summary = summarize("qwen3:8b", per_case)
+    gate = evaluate_gate(summary)
+    legacy = report.build_json(summary, gate, generated_at="2026-08-25T00:00:00Z")
+    provenance = report.ReleaseProvenance(
+        tested_commit="a" * 40,
+        model_digest="sha256:" + "b" * 64,
+        endpoint="http://127.0.0.1:11434/v1",
+    )
+
+    release = report.build_json(
+        summary,
+        gate,
+        generated_at="2026-08-25T00:00:00Z",
+        provenance=provenance,
+    )
+
+    assert set(release) == set(legacy) | {
+        "artifactType",
+        "schemaVersion",
+        "testedCommit",
+        "provider",
+        "modelDigest",
+        "endpoint",
+    }
+    assert release["artifactType"] == "qwen3_8b_evaluation"
+    assert release["schemaVersion"] == 1
+    assert release["testedCommit"] == "a" * 40
+    assert release["provider"] == "local"
+    assert release["model"] == "qwen3:8b"
+    assert release["modelDigest"] == "sha256:" + "b" * 64
+    assert release["endpoint"] == "http://127.0.0.1:11434/v1"
+    assert "artifactType" not in legacy
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("tested_commit", "A" * 40),
+        ("tested_commit", "a" * 39),
+        ("model_digest", "b" * 64),
+        ("model_digest", "sha256:" + "B" * 64),
+        ("endpoint", "http://localhost:11434/v1"),
+    ],
+)
+def test_release_provenance_rejects_noncanonical_identity(field, value):
+    values = {
+        "tested_commit": "a" * 40,
+        "model_digest": "sha256:" + "b" * 64,
+        "endpoint": "http://127.0.0.1:11434/v1",
+    }
+    values[field] = value
+
+    with pytest.raises(ValueError):
+        report.ReleaseProvenance(**values)

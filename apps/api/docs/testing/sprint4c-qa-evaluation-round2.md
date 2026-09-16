@@ -31,7 +31,7 @@ notFoundHoldAccuracy 1.0, safetyFailureCases 2, unstableCases 3, verdict `releas
 - 스트리밍 경로는 **malformed JSON을 관대하게 처리**한다(파싱 불가 줄은 skip). 따라서 잘못된
   JSON은 예외를 일으키지 않는다 → 모델이 파싱 가능한 claim/final을 못 내면 `insufficient_evidence`.
 - `failed`(=`QA_STREAM_FAILED`)는 **오직 `stream_lines`가 예외를 던질 때만** 발생한다
-  (네트워크 오류, connect 15s / idle 30s / total 180s timeout, 크기 초과). 즉 `failed`는
+  (네트워크 오류, connect 15s / idle 180s / total 600s timeout, 크기 초과). 즉 `failed`는
   의미 실패가 아니라 스트림/인프라 수준 실패다.
 
 ## 3. 각 실패 run 분류

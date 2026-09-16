@@ -1,0 +1,126 @@
+{
+  "schema_version": 1,
+  "evaluated_at": "2026-09-12",
+  "scope": "evaluation_only_no_product_integration",
+  "evaluation_commit": "0cbf176ae2946d8f2e6b4c5d9a7eb9345e4e195e",
+  "product_commit": "9cc6414352a658492766aa103151dc3f27783509",
+  "validation": {
+    "new_tests_passed": 46,
+    "new_tests_seconds": 1.49,
+    "full_api_passed": 1690,
+    "full_api_skipped": 4,
+    "full_api_seconds": 160.68,
+    "ruff": "passed",
+    "mypy": "passed",
+    "mypy_source_files": 133
+  },
+  "source": "existing_read_only_isolated_copy",
+  "complete": true,
+  "model_calls": 0,
+  "database_writes": 0,
+  "records": [
+    {
+      "question": "long",
+      "chunks": 32,
+      "input_chars": 2186,
+      "output_chars": 2186,
+      "labelled_sequences": 2,
+      "labelled_units": 6,
+      "verbatim_outlines": 30,
+      "preservation_errors": 0,
+      "outline_ms": 0.882,
+      "groups": [
+        {
+          "group": "type_table",
+          "expected_blocks": 9,
+          "covered_blocks": 9,
+          "chunks": 2,
+          "labelled_sequences": 0,
+          "labelled_units": 0,
+          "exact_original_grade_row_matches": null
+        },
+        {
+          "group": "stage_section",
+          "expected_blocks": 5,
+          "covered_blocks": 5,
+          "chunks": 1,
+          "labelled_sequences": 0,
+          "labelled_units": 0,
+          "exact_original_grade_row_matches": null
+        },
+        {
+          "group": "functional_table",
+          "expected_blocks": 5,
+          "covered_blocks": 5,
+          "chunks": 1,
+          "labelled_sequences": 1,
+          "labelled_units": 4,
+          "exact_original_grade_row_matches": 4
+        }
+      ]
+    },
+    {
+      "question": "short",
+      "chunks": 32,
+      "input_chars": 2186,
+      "output_chars": 2186,
+      "labelled_sequences": 2,
+      "labelled_units": 6,
+      "verbatim_outlines": 30,
+      "preservation_errors": 0,
+      "outline_ms": 0.83,
+      "groups": [
+        {
+          "group": "type_table",
+          "expected_blocks": 9,
+          "covered_blocks": 9,
+          "chunks": 2,
+          "labelled_sequences": 0,
+          "labelled_units": 0,
+          "exact_original_grade_row_matches": null
+        },
+        {
+          "group": "stage_section",
+          "expected_blocks": 5,
+          "covered_blocks": 5,
+          "chunks": 1,
+          "labelled_sequences": 0,
+          "labelled_units": 0,
+          "exact_original_grade_row_matches": null
+        },
+        {
+          "group": "functional_table",
+          "expected_blocks": 5,
+          "covered_blocks": 5,
+          "chunks": 1,
+          "labelled_sequences": 1,
+          "labelled_units": 4,
+          "exact_original_grade_row_matches": 4
+        }
+      ]
+    },
+    {
+      "question": "definition",
+      "chunks": 32,
+      "input_chars": 2090,
+      "output_chars": 2090,
+      "labelled_sequences": 1,
+      "labelled_units": 5,
+      "verbatim_outlines": 31,
+      "preservation_errors": 0,
+      "outline_ms": 0.694,
+      "groups": []
+    }
+  ],
+  "limitations": [
+    "Preservation is relative to stored retrieved chunk text, not PDF binary or OCR correctness.",
+    "Labelled units are character spans, not semantically verified grade-condition pairs.",
+    "Type and stage source groups remain verbatim; relevance selection is not implemented.",
+    "All retrieved chunks remain in original order; outputs are not final answers.",
+    "Page and bbox metadata describe the whole source chunk, not individual units.",
+    "Offsets use Python Unicode code points; they are not UTF-16 or byte offsets.",
+    "Grade row matches compare existing original blocks after whitespace/NFC normalization only.",
+    "Timing is a single local observation, not a performance benchmark.",
+    "No new model evaluation, GUI, installer, clean-PC or new large-PDF soak test."
+  ]
+}

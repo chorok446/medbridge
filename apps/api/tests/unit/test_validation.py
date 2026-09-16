@@ -51,6 +51,18 @@ class TestInspectPdf:
         result = validation.inspect_pdf(data)
         assert result.page_count == 3
         assert result.sha256 == validation.compute_sha256(data)
+        assert result.file_size == len(data)
+
+    def test_valid_pdf_path_uses_file_handle(self, tmp_path):
+        data = make_pdf(pages=2)
+        path = tmp_path / "large-style.pdf"
+        path.write_bytes(data)
+
+        result = validation.inspect_pdf_path(path)
+
+        assert result.page_count == 2
+        assert result.sha256 == hashlib.sha256(data).hexdigest()
+        assert result.file_size == path.stat().st_size
 
     def test_encrypted_pdf_rejected(self):
         with pytest.raises(AppError) as exc:

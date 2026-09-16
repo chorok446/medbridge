@@ -3,7 +3,6 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import correlation_id_var, get_logger
@@ -13,26 +12,16 @@ from app.models.enums import JobStatus, JobType, ProcessingStatus
 from app.services.documents.state_machine import transition
 from app.services.extraction import engine as engine_mod
 from app.services.extraction.pipeline import run_extraction
+from app.services.tasks.jobs import latest_job
 
 logger = get_logger(__name__)
 
 _ATTEMPTS_EXHAUSTED_CODE = "EXTRACTION_MAX_ATTEMPTS"
-_ATTEMPTS_EXHAUSTED_MESSAGE = (
-    "문서 내용을 읽는 작업이 반복해서 중단되었습니다. 다시 시도해 주세요."
-)
+_ATTEMPTS_EXHAUSTED_MESSAGE = "문서 내용을 읽는 작업이 반복해서 중단되었습니다. 다시 시도해 주세요."
 
 
 async def _latest_job(session: AsyncSession, document_id: uuid.UUID) -> DocumentJob | None:
-    stmt = (
-        select(DocumentJob)
-        .where(
-            DocumentJob.document_id == document_id,
-            DocumentJob.job_type == JobType.EXTRACT_DOCUMENT,
-        )
-        .order_by(DocumentJob.created_at.desc())
-        .limit(1)
-    )
-    return (await session.execute(stmt)).scalars().first()
+    return await latest_job(session, document_id, JobType.EXTRACT_DOCUMENT)
 
 
 def mark_extraction_attempts_exhausted(doc: Document, job: DocumentJob) -> None:

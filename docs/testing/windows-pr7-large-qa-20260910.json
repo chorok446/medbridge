@@ -1,0 +1,878 @@
+{
+  "installed_commit": "49131afa747c51d4e44005820e14cb4da00c2896",
+  "code_base_commit": "f757f070547fa9351ae6d3a805da571dc7e34d4f",
+  "implementation_commit": "d977f28457ffabb9658e8b561f56752c8b848686",
+  "diagnostic_provenance": "커밋 전 같은 구현의 탐색 진단. 고정 커밋 전체 출시 평가가 아님",
+  "verdict": "release_hold",
+  "note": "실제 문서 원문·파일명·ID·모델 원문 응답을 제외한 메타데이터",
+  "installed_gui": {
+    "observed_at": "2026-09-10T04:13:52.980296+09:00",
+    "document_label": "large-1",
+    "new_threads": 1,
+    "answers": [
+      {
+        "status": "insufficient_evidence",
+        "error_code": null,
+        "created_at": "2026-09-09 19:11:09.398931",
+        "stream_started_at": "2026-09-09 19:11:09.398931",
+        "completed_at": "2026-09-09 19:11:14.148185",
+        "provider_name": "openai_compatible",
+        "model_name": "qwen3:8b",
+        "sequence_number": 2,
+        "document_revision": 17,
+        "chunk_revision": 17,
+        "retrieval_mode": null,
+        "last_stream_seq": 0,
+        "content_chars": 41,
+        "content_sha256": "192ce3fe96b112735b97029b3cac4dc567b2c7ba6cdd064faf7d2f1b33bb06d0",
+        "draft_chars": 0,
+        "claims": [],
+        "duration_sec": 4.749254
+      },
+      {
+        "status": "completed",
+        "error_code": null,
+        "created_at": "2026-09-09 19:13:10.809984",
+        "stream_started_at": "2026-09-09 19:13:10.808816",
+        "completed_at": "2026-09-09 19:13:19.727688",
+        "provider_name": "openai_compatible",
+        "model_name": "qwen3:8b",
+        "sequence_number": 4,
+        "document_revision": 17,
+        "chunk_revision": 17,
+        "retrieval_mode": null,
+        "last_stream_seq": 2,
+        "content_chars": 325,
+        "content_sha256": "fa74e10014a44afa8cb3954ac2069210536ffa32e17df4d3e4f7e33542f7f4b5",
+        "draft_chars": 0,
+        "claims": [
+          {
+            "status": "supported",
+            "text_chars": 160,
+            "text_sha256": "e026924ab9fc1dc0d519bd3d6c931188fdb004f806341be77379b7918f2bd84a",
+            "pages": [
+              20
+            ],
+            "reference_count": 15,
+            "all_reference_blocks_and_coordinates_match": true
+          },
+          {
+            "status": "supported",
+            "text_chars": 156,
+            "text_sha256": "0545ec1086efc4f2278bd7b208bed73052946c7cb4cc9493e2f65486dec3d461",
+            "pages": [
+              20
+            ],
+            "reference_count": 15,
+            "all_reference_blocks_and_coordinates_match": true
+          }
+        ],
+        "duration_sec": 8.918872
+      }
+    ],
+    "active_qa": 0,
+    "foreign_key_violations": 0
+  },
+  "manual_review": {
+    "question": "심부전의 정의를 설명하는 원문 한 문장과 출처를 보여주세요.",
+    "answer_1": "insufficient_evidence",
+    "answer_2": "주제 불일치: 심부전을 호흡부전으로 설명. completed/supported 상태를 통과로 인정하지 않음",
+    "expected_source_page": 138
+  },
+  "retrieval_before": [
+    {
+      "question": "심부전의 정의를 설명하는 원문 한 문장과 출처를 보여주세요.",
+      "mode": "keyword",
+      "chunks": [
+        {
+          "page_start": 280,
+          "page_end": 280,
+          "chars": 293,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 11,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 283,
+          "page_end": 283,
+          "chars": 300,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 11,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 95,
+          "page_end": 95,
+          "chars": 200,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 8,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 718,
+          "page_end": 718,
+          "chars": 41,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 8,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 20,
+          "page_end": 20,
+          "chars": 627,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 7,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 422,
+          "page_end": 422,
+          "chars": 128,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 7,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 916,
+          "page_end": 916,
+          "chars": 174,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 7,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 3,
+          "page_end": 3,
+          "chars": 48,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 6,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        }
+      ]
+    }
+  ],
+  "retrieval_after": [
+    {
+      "question": "심부전의 정의를 설명하는 원문 한 문장과 출처를 보여주세요.",
+      "mode": "keyword",
+      "chunks": [
+        {
+          "page_start": 138,
+          "page_end": 138,
+          "chars": 15,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 0,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 138,
+          "page_end": 138,
+          "chars": 13,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 0,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 138,
+          "page_end": 228,
+          "chars": 10,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 0,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 138,
+          "page_end": 138,
+          "chars": 14,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 0,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 138,
+          "page_end": 138,
+          "chars": 3,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 0,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 138,
+          "page_end": 138,
+          "chars": 45,
+          "contains_definition_phrase": true,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 0,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 138,
+          "page_end": 138,
+          "chars": 47,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 2,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 138,
+          "page_end": 138,
+          "chars": 280,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 1,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 0,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 145,
+          "page_end": 145,
+          "chars": 66,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 0,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 145,
+          "page_end": 145,
+          "chars": 35,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 0,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 145,
+          "page_end": 145,
+          "chars": 40,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 0,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 145,
+          "page_end": 145,
+          "chars": 45,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 4,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 145,
+          "page_end": 145,
+          "chars": 71,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 0,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 145,
+          "page_end": 145,
+          "chars": 22,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 2,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 145,
+          "page_end": 145,
+          "chars": 268,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 3,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 145,
+          "page_end": 145,
+          "chars": 59,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 0,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 145,
+          "page_end": 145,
+          "chars": 7,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 0,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 145,
+          "page_end": 145,
+          "chars": 47,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 0,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 145,
+          "page_end": 145,
+          "chars": 42,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 0,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 145,
+          "page_end": 145,
+          "chars": 11,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 0,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 101,
+          "page_end": 101,
+          "chars": 17,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 0,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 101,
+          "page_end": 101,
+          "chars": 15,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 0,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 101,
+          "page_end": 101,
+          "chars": 52,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 0,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 101,
+          "page_end": 101,
+          "chars": 28,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 0,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 101,
+          "page_end": 433,
+          "chars": 5,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 0,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 101,
+          "page_end": 101,
+          "chars": 416,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 0,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 101,
+          "page_end": 101,
+          "chars": 89,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 2,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 101,
+          "page_end": 101,
+          "chars": 292,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 0,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 104,
+          "page_end": 104,
+          "chars": 6,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 0,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 104,
+          "page_end": 104,
+          "chars": 9,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 0,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 104,
+          "page_end": 104,
+          "chars": 14,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 0,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        },
+        {
+          "page_start": 104,
+          "page_end": 104,
+          "chars": 7,
+          "contains_definition_phrase": false,
+          "query_term_counts": {
+            "심부전의": 0,
+            "정의를": 0,
+            "설명하는": 0,
+            "원문": 0,
+            "한": 0,
+            "문장과": 0,
+            "출처를": 0,
+            "보여주세요.": 0
+          }
+        }
+      ]
+    }
+  ],
+  "local_model_diagnostic": {
+    "generated_at": "2026-09-09T19:32:17.172039+00:00",
+    "question": "심부전의 정의를 설명하는 원문 한 문장과 출처를 보여주세요.",
+    "scope": "read-only retrieval + streaming provider + claim verification; no GUI or persistence",
+    "model_digest_before": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+    "model_digest_after": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+    "retrieval_seconds": 0.040120000000570144,
+    "retrieved_chunks": 32,
+    "context_chars": 2090,
+    "runs": [
+      {
+        "run": 1,
+        "seconds": 4.760200300000179,
+        "status": "insufficient_evidence",
+        "final_hint": "",
+        "rejection_reasons": [],
+        "answer_sha256": "192ce3fe96b112735b97029b3cac4dc567b2c7ba6cdd064faf7d2f1b33bb06d0",
+        "claims": [],
+        "raw_claim_count": 0
+      },
+      {
+        "run": 2,
+        "seconds": 6.7534459999997125,
+        "status": "insufficient_evidence",
+        "final_hint": "answered",
+        "rejection_reasons": [
+          "not_lexically_grounded",
+          "not_lexically_grounded"
+        ],
+        "answer_sha256": "192ce3fe96b112735b97029b3cac4dc567b2c7ba6cdd064faf7d2f1b33bb06d0",
+        "claims": [],
+        "raw_claim_count": 2
+      },
+      {
+        "run": 3,
+        "seconds": 6.831270499999846,
+        "status": "insufficient_evidence",
+        "final_hint": "answered",
+        "rejection_reasons": [
+          "not_lexically_grounded",
+          "not_lexically_grounded"
+        ],
+        "answer_sha256": "192ce3fe96b112735b97029b3cac4dc567b2c7ba6cdd064faf7d2f1b33bb06d0",
+        "claims": [],
+        "raw_claim_count": 2
+      }
+    ]
+  },
+  "preservation": {
+    "observed_at": "2026-09-10T04:35:48.725230+09:00",
+    "baseline_before": "2026-09-09 18:47:31",
+    "baseline": {
+      "documents": {
+        "rows": 12,
+        "sha256": "c3a70a020aa70b9318ad45063d61edbe52be8d9f82716ea1c3e4cc7386541022"
+      },
+      "document_pages": {
+        "rows": 4339,
+        "sha256": "042fba7ec097311e0edc63e11f09154df7bf919511d1ed6bcda72cb490cc06c7"
+      },
+      "document_blocks": {
+        "rows": 364819,
+        "sha256": "a5f391b6db39fe6ab4a1147b6bb63212c79e14ee4e9660940fee95811132372b"
+      },
+      "summary_settings": {
+        "rows": 1,
+        "sha256": "81ff5a90db10b3a83102e2ff05e5a1443c01f1bd8b5c12404cb3ea180e2b2421"
+      },
+      "qa_threads": {
+        "rows": 17,
+        "sha256": "1719178a0566abf7fa75db2f3eb894352e15241cac6d47e846bdb366c0efc4a7"
+      },
+      "qa_messages": {
+        "rows": 66,
+        "sha256": "7cac24d207f657f9756045a24154379b8f0b51e943c5923c0ab38aee76d860cd"
+      },
+      "qa_claims": {
+        "rows": 189,
+        "sha256": "16e76fb41641300a8c6b1be72f45f177c2aa599ba684ce47850b2956afd2a9f5"
+      }
+    },
+    "final": {
+      "documents": {
+        "rows": 12,
+        "sha256": "c3a70a020aa70b9318ad45063d61edbe52be8d9f82716ea1c3e4cc7386541022"
+      },
+      "document_pages": {
+        "rows": 4339,
+        "sha256": "042fba7ec097311e0edc63e11f09154df7bf919511d1ed6bcda72cb490cc06c7"
+      },
+      "document_blocks": {
+        "rows": 364819,
+        "sha256": "a5f391b6db39fe6ab4a1147b6bb63212c79e14ee4e9660940fee95811132372b"
+      },
+      "summary_settings": {
+        "rows": 1,
+        "sha256": "81ff5a90db10b3a83102e2ff05e5a1443c01f1bd8b5c12404cb3ea180e2b2421"
+      },
+      "qa_threads": {
+        "rows": 17,
+        "sha256": "1719178a0566abf7fa75db2f3eb894352e15241cac6d47e846bdb366c0efc4a7"
+      },
+      "qa_messages": {
+        "rows": 66,
+        "sha256": "7cac24d207f657f9756045a24154379b8f0b51e943c5923c0ab38aee76d860cd"
+      },
+      "qa_claims": {
+        "rows": 189,
+        "sha256": "16e76fb41641300a8c6b1be72f45f177c2aa599ba684ce47850b2956afd2a9f5"
+      }
+    },
+    "active_qa": 0,
+    "foreign_key_violations": 0,
+    "job_states": {
+      "document_jobs": [
+        {
+          "status": "FAILED",
+          "count": 21
+        },
+        {
+          "status": "SUCCEEDED",
+          "count": 47
+        }
+      ],
+      "summary_runs": [
+        {
+          "status": "CANCELLED",
+          "count": 2
+        },
+        {
+          "status": "FAILED",
+          "count": 2
+        },
+        {
+          "status": "SUCCEEDED",
+          "count": 1
+        }
+      ]
+    }
+  }
+}

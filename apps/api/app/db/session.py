@@ -1,7 +1,8 @@
 from collections.abc import AsyncIterator
 
-from sqlalchemy import event
+from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import Session, with_loader_criteria
 
 from app.core.config import get_settings
 
@@ -12,6 +13,35 @@ _session_factory: async_sessionmaker[AsyncSession] | None = None
 # 명시한다. 로컬 AI 활성화는 이 대기 뒤에도 SQLITE_BUSY이면 한 번만 전체 트랜잭션을
 # 재시도한다.
 SQLITE_BUSY_TIMEOUT_MS = 5_000
+
+
+@event.listens_for(Session, "do_orm_execute")
+def _only_active_document_chunks(execute_state) -> None:
+    """모든 ORM 청크 조회를 문서의 활성 generation으로 한정한다.
+
+    generation 작성/정리 코드는 ``include_inactive_chunks`` 실행 옵션으로 명시적으로
+    우회한다. 이 중앙 필터 덕분에 검색·요약 등 기존 소비자는 완성 중인 shadow 행을
+    볼 수 없고, 활성 포인터 UPDATE 한 건으로 새 세트를 원자적으로 보게 된다.
+    """
+    if not execute_state.is_select or execute_state.execution_options.get(
+        "include_inactive_chunks", False
+    ):
+        return
+    from app.models.document import Document
+    from app.models.search import DocumentChunk
+
+    active_generation = (
+        select(Document.active_chunk_generation_id)
+        .where(Document.id == DocumentChunk.document_id)
+        .scalar_subquery()
+    )
+    execute_state.statement = execute_state.statement.options(
+        with_loader_criteria(
+            DocumentChunk,
+            lambda chunk: chunk.generation_id.is_(active_generation),
+            include_aliases=True,
+        )
+    )
 
 
 def _set_sqlite_pragmas(dbapi_connection, _record) -> None:

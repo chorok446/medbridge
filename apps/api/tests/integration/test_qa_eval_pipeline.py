@@ -6,14 +6,18 @@
 
 from pathlib import Path
 
+import pytest
+
 from app.db.session import get_session_factory
 from app.qa_eval import manifest
+from app.qa_eval.run_case import materialize_and_verify_local_runtime
 from app.qa_eval.runner import run_evaluation
+from app.services.qa import factory as qa_factory
 
 DATASET = Path(__file__).resolve().parents[1] / "fixtures" / "qa_evaluation"
 
 
-async def test_grounded_case_passes_through_real_path():
+async def test_grounded_cases_check_complete_and_partial_answers_through_real_path():
     ds = manifest.load_dataset(DATASET)
     summary, gate, per_case = await run_evaluation(
         get_session_factory(), ds,
@@ -21,6 +25,7 @@ async def test_grounded_case_passes_through_real_path():
         categories=["grounded_basic"], repeat=1, timeout_sec=60,
     )
     assert per_case, "grounded_basic 케이스가 있어야 한다"
+    incomplete = []
     for results in per_case:
         r = results[0]
         assert r.checks["protocol"], r.reason
@@ -28,9 +33,20 @@ async def test_grounded_case_passes_through_real_path():
         assert r.checks["ownership"], "출처는 이 문서 소유여야 한다"
         assert r.claim_count >= 1
         assert not r.safety_violations
-        assert r.passed, f"{r.case_id} 전체 통과 기대: {r.reason}"
-    assert summary.safety_failure_cases == 0
-    assert gate.safety_passed
+        if r.case_id == "grounded_quote_without_expansion":
+            # 모의 provider는 청크 앞 200자만 내므로 12개 문단을 완성하지 못한다.
+            # 완료 상태여도 문단 누락은 실제 저장→평가→게이트 경로에서 차단돼야 한다.
+            assert not r.passed
+            assert r.failed_checks == ["expected_numbers"]
+            assert r.critical_case_failure
+            incomplete.append(r.case_id)
+        else:
+            assert r.passed, f"{r.case_id} 전체 통과 기대: {r.reason}"
+    assert incomplete == ["grounded_quote_without_expansion"]
+    assert summary.safety_failure_cases == 1
+    assert summary.critical_case_failure_cases == 1
+    assert summary.explicit_safety_violation_cases == 0
+    assert not gate.safety_passed
 
 
 async def test_not_found_holds_answer():
@@ -59,3 +75,64 @@ async def test_summary_and_gate_shape():
     assert summary.total_runs == summary.total_cases * 2
     assert 0.0 <= summary.protocol_success_rate <= 1.0
     assert gate.verdict  # 판정 문자열이 존재
+
+
+async def test_run_boundary_wraps_every_case_run():
+    ds = manifest.load_dataset(DATASET)
+    events = []
+
+    async def boundary(stage, case_id, run_index):
+        events.append((stage, case_id, run_index))
+
+    summary, _gate, _ = await run_evaluation(
+        get_session_factory(),
+        ds,
+        model_label="deterministic",
+        provider_mode="deterministic",
+        categories=["grounded_basic"],
+        repeat=2,
+        timeout_sec=60,
+        run_boundary=boundary,
+    )
+
+    assert len(events) == summary.total_runs * 2
+    assert [stage for stage, _case_id, _run_index in events] == [
+        expected
+        for _ in range(summary.total_runs)
+        for expected in ("before", "after")
+    ]
+
+
+async def test_run_boundary_failure_aborts_evaluation():
+    ds = manifest.load_dataset(DATASET)
+
+    async def boundary(stage, _case_id, _run_index):
+        if stage == "after":
+            raise RuntimeError("model digest changed")
+
+    with pytest.raises(RuntimeError, match="digest"):
+        await run_evaluation(
+            get_session_factory(),
+            ds,
+            model_label="deterministic",
+            provider_mode="deterministic",
+            categories=["grounded_basic"],
+            repeat=1,
+            timeout_sec=60,
+            run_boundary=boundary,
+        )
+
+
+async def test_local_runtime_identity_is_verified_after_settings_are_materialized(monkeypatch):
+    class EvalSettings:
+        qa_provider = "auto"
+
+    monkeypatch.setattr(qa_factory, "get_settings", lambda: EvalSettings())
+
+    provider = await materialize_and_verify_local_runtime(
+        get_session_factory(), model="qwen3:8b"
+    )
+
+    assert provider.provider_name == "openai_compatible"
+    assert provider.model_name == "qwen3:8b"
+    assert provider.is_local is True

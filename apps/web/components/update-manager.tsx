@@ -136,7 +136,10 @@ export function UpdateManager({ autoCheck = false }: { autoCheck?: boolean }) {
 
       {phase.name === "available" && (
         <div
-          role="dialog"
+          // dialog가 아니라 페이지 흐름 안의 안내 카드다. 초점 트랩도 backdrop도
+          // 없는데 dialog라고 알리면, 스크린리더는 "대화상자가 열렸다"고 말하면서
+          // 초점은 그대로 두어 사용자가 뒷배경을 계속 탐색하게 만든다(WCAG 4.1.2).
+          role="group"
           aria-label="업데이트 안내"
           className="rounded-lg border border-blue-200 bg-blue-50 p-4"
         >
@@ -156,7 +159,7 @@ export function UpdateManager({ autoCheck = false }: { autoCheck?: boolean }) {
             <button
               type="button"
               onClick={startUpdate}
-              className="rounded bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+              className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
             >
               지금 업데이트
             </button>

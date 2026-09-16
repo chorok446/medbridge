@@ -12,7 +12,10 @@ import pytest
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows Job Objects are Windows-only")
-def test_windows_sidecar_hook_joins_job_and_kills_descendants(tmp_path: Path) -> None:
+@pytest.mark.parametrize("pid_write_delay", [0, 0.2], ids=["normal", "slow-pid-write"])
+def test_windows_sidecar_hook_joins_job_and_kills_descendants(
+    tmp_path: Path, pid_write_delay: float
+) -> None:
     """The frozen-Python hook joins the named job before spawning descendants."""
     import ctypes
     from ctypes import wintypes
@@ -112,7 +115,14 @@ def test_windows_sidecar_hook_joins_job_and_kills_descendants(tmp_path: Path) ->
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            Path(sys.argv[1]).write_text(str(child.pid), encoding="ascii")
+            pid_file = Path(sys.argv[1])
+            pending_pid_file = pid_file.with_suffix(".pending")
+            with pending_pid_file.open("w", encoding="ascii") as pid_stream:
+                # Expose an empty file long enough to exercise the reader race.
+                time.sleep(float(sys.argv[2]))
+                pid_stream.write(str(child.pid))
+            # Existence signals readiness only after the complete PID is closed.
+            pending_pid_file.replace(pid_file)
             while True:
                 time.sleep(1)
             """
@@ -121,7 +131,7 @@ def test_windows_sidecar_hook_joins_job_and_kills_descendants(tmp_path: Path) ->
         env["MEDBRIDGE_WINDOWS_JOB_NAME"] = job_name
         api_root = Path(__file__).resolve().parents[2]
         parent = subprocess.Popen(
-            [sys.executable, "-c", script, str(child_pid_file)],
+            [sys.executable, "-c", script, str(child_pid_file), str(pid_write_delay)],
             cwd=api_root,
             env=env,
             text=True,

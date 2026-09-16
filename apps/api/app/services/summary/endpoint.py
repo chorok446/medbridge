@@ -14,17 +14,72 @@ docs/security/summary-provider-network-security.md 참조.
 """
 
 import codecs
+import http.client
 import ipaddress
 import json as _json
+import math
 import socket
+import threading
 import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Iterator
+from email.utils import parsedate_to_datetime
+from functools import partial
 from urllib.parse import urlsplit
+
+from app.services.summary.cancellation import (
+    SummaryCancellationSignal,
+    SummaryCancelled,
+)
 
 # 안전 로컬 호스트명 (정확히 일치해야 함 — localhost.evil.example 등은 제외)
 _LOCAL_HOSTNAMES = frozenset({"localhost", "localhost.localdomain"})
+
+# 컨텍스트 초과 표지는 **경로마다 다르다**. 하나로 합치면 한쪽에서 오분류가 난다.
+#
+# (1) HTTP 400 본문: 서버가 기계적으로 만든 문구다. 컨텍스트를 명시적으로 가리키는
+#     것만 인정한다. "too long"·"too large" 같은 일반 문구는 컨텍스트와 무관한 400에도
+#     흔해서(예: string_above_max_length, Request payload too large), 그것까지 초과로
+#     보면 외부 유료 API를 분할 재시도로 20배 낭비하고 "메모리를 확보하라"는 무의미한
+#     안내를 띄운다.
+HTTP_CONTEXT_OVERFLOW_HINTS = (
+    "context_length_exceeded",
+    "context length",
+    "context window",
+    "exceeds the context",
+    "maximum context",
+    "available context",
+)
+
+# (2) 모델이 HTTP 200으로 돌려준 error 객체: Ollama는 프롬프트를 조용히 자르므로 유일한
+#     단서가 모델의 자연어 문구다. 실측된 영어 표현에 더해, 한국어로 답하도록 지시된
+#     모델이 내는 한국어 표현도 함께 본다 — 영어만 보면 한국어 응답에서 적응 분할이
+#     한 번도 발동하지 않는다.
+#     맨 "context"는 넣지 않는다("I cannot summarize this without more context").
+MODEL_CONTEXT_OVERFLOW_HINTS = (
+    *HTTP_CONTEXT_OVERFLOW_HINTS,
+    "too long",
+    "too large",
+    "excessive repetition",
+    "너무 깁니다",
+    "너무 길어",
+    "너무 많습니다",
+    "입력이 길",
+    # 단독 "컨텍스트"는 넣지 않는다 — 맨 "context"를 뺀 것과 같은 이유다.
+    # "요약하려면 더 많은 컨텍스트가 필요합니다"는 초과가 아니라 그 반대인데,
+    # 초과로 오판하면 그룹을 깊이 3까지 쪼개 20회 넘는 호출을 태우고 끝내
+    # "메모리를 확보하라"는 실행 불가 안내가 뜬다.
+    "컨텍스트 길이",
+    "컨텍스트 창",
+    "컨텍스트를 초과",
+    "컨텍스트 초과",
+    "최대 컨텍스트",
+)
+
+# HTTP 오류 본문에서 초과 여부만 판별하려고 읽는 최대 바이트. 본문은 분류에만 쓰고
+# 로그·사용자 메시지에는 절대 남기지 않는다(모델이 원문을 되비출 수 있다).
+_ERROR_BODY_SNIFF_BYTES = 8 * 1024
 
 # 오류 범주 — 사용자에게는 이 범주에 대응하는 안전한 메시지만 보여준다.
 NET_ERROR_MESSAGES = {
@@ -37,6 +92,12 @@ NET_ERROR_MESSAGES = {
     "model_not_found": "모델을 찾을 수 없습니다. 모델 이름을 확인해 주세요.",
     "server_error": "모델 서비스에서 오류가 발생했습니다.",
     "bad_response": "모델 응답 형식이 올바르지 않습니다.",
+    # 서버가 요청마다 num_ctx를 지정하므로 "컨텍스트를 늘리라"고 안내하면 사용자가
+    # 설정을 바꿔도 아무 효과가 없다. 실제로 유효한 조치만 안내한다.
+    "context_overflow": (
+        "문서 한 조각이 이 모델이 한 번에 볼 수 있는 크기를 넘었습니다. "
+        "메모리가 더 넉넉한 상태에서 다시 시도하거나 더 작은 모델을 사용해 주세요."
+    ),
     "response_too_large": "모델 응답이 너무 큽니다.",
     "redirect_blocked": "안전하지 않은 리디렉션이 차단되었습니다.",
     "timeout": "모델 응답 시간이 초과되었습니다.",
@@ -44,11 +105,31 @@ NET_ERROR_MESSAGES = {
 
 
 class SummaryNetworkError(Exception):
-    """요약 네트워크 오류 — category만 노출하고 원문 오류·비밀은 담지 않는다."""
+    """요약 네트워크 오류 — category만 노출하고 원문 오류·비밀은 담지 않는다.
 
-    def __init__(self, category: str) -> None:
-        super().__init__(category)
+    `reason`은 같은 category 안에서 **어느 계약이 깨졌는지**를 가리키는 짧은 분류값이다.
+    `bad_response` 하나에 HTTP 400·JSON 파싱 실패·finish_reason 절단·필드 타입 위반·
+    길이 초과·group id 불일치가 전부 뭉쳐 있어 로그만으로는 원인을 좁힐 수 없었다.
+    reason에는 문서·질문·모델 출력 원문을 절대 담지 않는다(분류값·수치만).
+    """
+
+    def __init__(
+        self,
+        category: str,
+        reason: str | None = None,
+        *,
+        oversized_text: str | None = None,
+        retry_after_seconds: float | None = None,
+    ) -> None:
+        super().__init__(category if reason is None else f"{category}:{reason}")
         self.category = category
+        self.reason = reason
+        # 계약 길이를 넘겨서 거절된 모델 출력. 실행기가 마지막 수단으로 잘라 쓰기 위한
+        # 값이라 예외에 들고 다닌다 — 문서 전체 요약을 잃는 것보다 한 그룹이 잘리는
+        # 편이 낫다. **로그·사용자 메시지에는 절대 넣지 않는다**(reason과 달리 원문이다).
+        self.oversized_text = oversized_text
+        # 429 재시도 정책만 소비하는 표준 헤더 값. 응답 본문·비밀은 포함하지 않는다.
+        self.retry_after_seconds = retry_after_seconds
 
     @property
     def user_message(self) -> str:
@@ -59,7 +140,7 @@ def _has_control_chars(value: str) -> bool:
     return any(ord(c) < 0x20 or ord(c) == 0x7F for c in value)
 
 
-def _is_loopback_hostname(host: str) -> bool:
+def is_loopback_hostname(host: str) -> bool:
     h = host.lower().rstrip(".")
     if h in _LOCAL_HOSTNAMES:
         return True
@@ -68,6 +149,46 @@ def _is_loopback_hostname(host: str) -> bool:
     except ValueError:
         return False
     return ip.is_loopback
+
+
+def is_ollama_native_endpoint(endpoint: str, is_local: bool) -> bool:
+    """이 endpoint가 앱이 붙인 Ollama인가 — native `/api/chat`을 써도 되는지.
+
+    `is_local`은 "loopback이다"라는 뜻이지 "Ollama다"가 아니다. LM Studio·llama.cpp
+    server·vLLM 같은 로컬 OpenAI 호환 서버는 `/api/chat`을 제공하지 않으므로,
+    포트·경로까지 확인해 Ollama일 때만 참을 낸다.
+
+    비교는 문자열이 아니라 **정규화된 (loopback, 포트, 경로)**로 한다.
+    `validate_endpoint`는 호스트명을 IP로 바꾸지 않으므로, 같은 Ollama를 가리키는
+    `http://localhost:11434/v1`이 저장돼 있으면 문자열 일치로는 걸러지지 않는다.
+
+    요약과 QA가 같은 설정 행에서 만들어지므로 판정도 한곳에서 한다 — 두 벌로 두면
+    한쪽만 native로 옮기는 일이 다시 생긴다(실제로 QA가 그렇게 남아 있었다).
+    """
+    from urllib.parse import urlsplit
+
+    from app.services.local_ai.settings import OLLAMA_BASE
+
+    if not is_local:
+        return False
+    try:
+        parts = urlsplit(endpoint)
+        ollama = urlsplit(OLLAMA_BASE)
+        port = parts.port
+        host = parts.hostname or ""
+    except ValueError:
+        return False
+    return (
+        is_loopback_hostname(host)
+        and port == ollama.port
+        and (parts.path or "").rstrip("/") in ("", "/v1")
+    )
+
+
+def ollama_native_chat_url(endpoint: str) -> str:
+    """OpenAI 호환 base(.../v1)에서 Ollama native chat 주소를 만든다."""
+    base = endpoint[: -len("/v1")] if endpoint.endswith("/v1") else endpoint
+    return f"{base}/api/chat"
 
 
 def _ip_is_blocked_for_external(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
@@ -127,13 +248,13 @@ def validate_endpoint(raw: str | None, *, is_local: bool) -> str:
 
     if is_local:
         # 로컬: http/https 모두 허용하되 loopback 호스트만
-        if not _is_loopback_hostname(hostname):
+        if not is_loopback_hostname(hostname):
             raise SummaryNetworkError("unsafe_address")
     else:
         # 외부: HTTPS만. 명백한 loopback 호스트명은 즉시 거부(해석은 요청 시 재검증).
         if parts.scheme != "https":
             raise SummaryNetworkError("unsafe_address")
-        if _is_loopback_hostname(hostname):
+        if is_loopback_hostname(hostname):
             raise SummaryNetworkError("unsafe_address")
 
     host_norm = hostname.lower()
@@ -184,7 +305,290 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """3xx redirect를 추적하지 않는다 — 내부 주소 우회·API 키 유출 방지."""
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D401
+        # stdlib은 redirect_request가 반환한 뒤에야 fp를 닫는다. 여기서
+        # 예외로 차단하므로 응답을 먼저 닫아 socket 누수를 막는다.
+        fp.close()
         raise SummaryNetworkError("redirect_blocked")
+
+
+class _RequestCancelled(Exception):
+    """Callable 기반 stream 취소를 예외 없는 iterator 종료로 전달한다."""
+
+
+class _RequestAbortController:
+    """사용자 취소와 wall deadline을 구분하면서 같은 socket abort를 조정한다."""
+
+    def __init__(self, cancellation_signal: SummaryCancellationSignal | None) -> None:
+        self.cancellation_signal = cancellation_signal
+        self._deadline_expired = threading.Event()
+        self._request_cancelled = threading.Event()
+        self._lock = threading.Lock()
+        self._abort_callbacks: dict[int, Callable[[], None]] = {}
+        self._next_callback_id = 0
+        self._unregister_user = (
+            cancellation_signal.register_abort(self._abort_callbacks_now)
+            if cancellation_signal is not None
+            else None
+        )
+
+    def register_abort(self, callback: Callable[[], None]) -> Callable[[], None]:
+        invoke_now = False
+        callback_id: int | None = None
+        with self._lock:
+            if self.is_aborted():
+                invoke_now = True
+            else:
+                callback_id = self._next_callback_id
+                self._next_callback_id += 1
+                self._abort_callbacks[callback_id] = callback
+        if invoke_now:
+            _invoke_best_effort(callback)
+
+        def unregister() -> None:
+            if callback_id is None:
+                return
+            with self._lock:
+                self._abort_callbacks.pop(callback_id, None)
+
+        return unregister
+
+    def expire_deadline(self) -> None:
+        self._deadline_expired.set()
+        self._abort_callbacks_now()
+
+    def cancel_request(self) -> None:
+        """SummaryCancellationSignal 없이도 blocking stream socket을 중단한다."""
+
+        self._request_cancelled.set()
+        self._abort_callbacks_now()
+
+    def is_aborted(self) -> bool:
+        return (
+            self._request_cancelled.is_set()
+            or self._deadline_expired.is_set()
+            or bool(
+                self.cancellation_signal is not None and self.cancellation_signal.is_cancelled()
+            )
+        )
+
+    def raise_if_aborted(self) -> None:
+        if self.cancellation_signal is not None:
+            self.cancellation_signal.raise_if_cancelled()
+        if self._request_cancelled.is_set():
+            raise _RequestCancelled
+        if self._deadline_expired.is_set():
+            raise SummaryNetworkError("timeout")
+
+    def close(self) -> None:
+        unregister_user = self._unregister_user
+        self._unregister_user = None
+        if unregister_user is not None:
+            unregister_user()
+        with self._lock:
+            self._abort_callbacks.clear()
+
+    def _abort_callbacks_now(self) -> None:
+        with self._lock:
+            callbacks = tuple(self._abort_callbacks.values())
+            self._abort_callbacks.clear()
+        for callback in callbacks:
+            _invoke_best_effort(callback)
+
+
+def _invoke_best_effort(callback: Callable[[], None]) -> None:
+    try:
+        callback()
+    except Exception:  # noqa: BLE001 — socket은 이미 닫혔을 수 있다
+        pass
+
+
+class _CancellationConnectionMixin:
+    """DNS/TCP/TLS와 응답 헤더 대기를 작업 취소에 연결한다."""
+
+    def __init__(self, *args, abort_controller: _RequestAbortController, **kwargs) -> None:
+        self._abort_controller = abort_controller
+        self._unregister_connection_abort: Callable[[], None] | None = None
+        self._pending_socket: object | None = None
+        self._pending_socket_lock = threading.Lock()
+        super().__init__(*args, **kwargs)
+        # HTTPConnection.__init__이 socket.create_connection을 instance attribute로
+        # 설치한다. stdlib HTTP/TLS/tunnel 흐름은 그대로 쓰되, DNS 이후
+        # 생성된 socket을 connect 전부터 abort callback에 노출하는 구현으로
+        # 교체한다.
+        self._create_connection = self._create_connection_with_abort
+
+    def connect(self) -> None:
+        self._abort_controller.raise_if_aborted()
+        self._unregister_connection_abort = self._abort_controller.register_abort(
+            self._abort_connection_sockets
+        )
+        try:
+            # callback을 connect 전에 설치해 pending TCP socket, proxy CONNECT,
+            # TLS handshake, response header 대기를 하나의 wall deadline으로 끊는다.
+            super().connect()  # type: ignore[misc]
+            self._abort_controller.raise_if_aborted()
+            self._clear_pending_socket()
+        except BaseException:
+            self._close_pending_socket()
+            self._release_connection_abort()
+            # pending socket abort/TLS handshake abort가 AttributeError·OSError 등으로
+            # 표면화되어도 이미 확정된 취소/deadline 제어 흐름을 유지한다.
+            self._abort_controller.raise_if_aborted()
+            raise
+
+    def getresponse(self):
+        try:
+            return super().getresponse()  # type: ignore[misc]
+        finally:
+            # 헤더가 반환된 뒤에는 _read_capped가 response 자체에 새 abort callback을
+            # 설치한다. 중간에 취소되면 Event가 유지돼 새 callback이 즉시 실행된다.
+            self._release_connection_abort()
+
+    def close(self) -> None:
+        self._release_connection_abort()
+        self._close_pending_socket()
+        super().close()  # type: ignore[misc]
+
+    def _create_connection_with_abort(
+        self,
+        address,
+        timeout=socket._GLOBAL_DEFAULT_TIMEOUT,  # type: ignore[attr-defined]
+        source_address=None,
+    ):
+        """socket.create_connection 호환 구현으로 pending connect도 즉시 중단한다.
+
+        ``HTTPConnection.connect``는 ``socket.create_connection``이 반환한 뒤에야
+        ``self.sock``을 할당한다. 그 전에 취소 callback이 한 번 실행되면
+        원래 구현은 이후의 blocking connect를 요청 timeout까지 남긴다.
+        생성한 socket을 먼저 pending으로 공개하고 취소 여부를 다시
+        확인한다. 성공 socket도 caller가 ``self.sock``에 할당할 때까지
+        pending에 두어 반환값-할당 경합 구간을 없앴다.
+        """
+
+        host, port = address
+        self._abort_controller.raise_if_aborted()
+        addresses = socket.getaddrinfo(host, port, 0, socket.SOCK_STREAM)
+        # DNS를 OS 호출 중에 끊을 수는 없지만, 그 사이 취소되면
+        # socket을 만들거나 연결하지 않는다.
+        self._abort_controller.raise_if_aborted()
+
+        last_error: OSError | None = None
+        for address_family, socktype, protocol, _canonical_name, socket_address in addresses:
+            self._abort_controller.raise_if_aborted()
+            sock = socket.socket(address_family, socktype, protocol)
+            self._set_pending_socket(sock)
+            try:
+                # 생성 직전에 callback이 한 번 실행된 경합도 Event를
+                # 다시 확인해 이 socket을 connect에 넘기지 않는다.
+                self._abort_controller.raise_if_aborted()
+                if timeout is not socket._GLOBAL_DEFAULT_TIMEOUT:  # type: ignore[attr-defined]
+                    sock.settimeout(timeout)
+                if source_address:
+                    sock.bind(source_address)
+                self._abort_controller.raise_if_aborted()
+                sock.connect(socket_address)
+                self._abort_controller.raise_if_aborted()
+                last_error = None
+                return sock
+            except (SummaryCancelled, SummaryNetworkError):
+                self._clear_pending_socket(sock)
+                sock.close()
+                raise
+            except OSError as exc:
+                # deadline/cancel callback이 pending socket을 닫아 connect를 깨운
+                # OSError면 원래 연결 실패로 오분류하지 않는다.
+                try:
+                    self._abort_controller.raise_if_aborted()
+                finally:
+                    self._clear_pending_socket(sock)
+                    sock.close()
+                last_error = exc
+
+        if last_error is not None:
+            raise last_error
+        raise OSError("getaddrinfo returns an empty list")
+
+    def _set_pending_socket(self, sock: object) -> None:
+        with self._pending_socket_lock:
+            self._pending_socket = sock
+
+    def _clear_pending_socket(self, expected: object | None = None) -> None:
+        with self._pending_socket_lock:
+            if expected is None or self._pending_socket is expected:
+                self._pending_socket = None
+
+    def _close_pending_socket(self) -> None:
+        with self._pending_socket_lock:
+            pending = self._pending_socket
+            self._pending_socket = None
+        connected = getattr(self, "sock", None)
+        if pending is not None and pending is not connected:
+            _invoke_best_effort(pending.close)  # type: ignore[attr-defined]
+
+    def _abort_connection_sockets(self) -> None:
+        with self._pending_socket_lock:
+            pending = self._pending_socket
+        connected = getattr(self, "sock", None)
+        seen: set[int] = set()
+        for sock in (connected, pending):
+            if sock is None or id(sock) in seen:
+                continue
+            seen.add(id(sock))
+            _abort_socket(sock)
+
+    def _release_connection_abort(self) -> None:
+        unregister = self._unregister_connection_abort
+        self._unregister_connection_abort = None
+        if unregister is not None:
+            unregister()
+
+
+class _CancellableHTTPConnection(_CancellationConnectionMixin, http.client.HTTPConnection):
+    pass
+
+
+class _CancellableHTTPSConnection(_CancellationConnectionMixin, http.client.HTTPSConnection):
+    pass
+
+
+class _CancellableHTTPHandler(urllib.request.HTTPHandler):
+    def __init__(self, abort_controller: _RequestAbortController) -> None:
+        super().__init__()
+        self._abort_controller = abort_controller
+
+    def http_open(self, req):
+        connection = partial(
+            _CancellableHTTPConnection,
+            abort_controller=self._abort_controller,
+        )
+        return self.do_open(connection, req)
+
+
+class _CancellableHTTPSHandler(urllib.request.HTTPSHandler):
+    def __init__(self, abort_controller: _RequestAbortController) -> None:
+        super().__init__()
+        self._abort_controller = abort_controller
+
+    def https_open(self, req):
+        connection = partial(
+            _CancellableHTTPSConnection,
+            abort_controller=self._abort_controller,
+        )
+        return self.do_open(connection, req, context=self._context)  # type: ignore[attr-defined]
+
+
+def _build_opener(
+    cancellation_signal: SummaryCancellationSignal | None = None,
+) -> urllib.request.OpenerDirector:
+    abort_controller = _RequestAbortController(cancellation_signal)
+    handlers: list[urllib.request.BaseHandler] = [
+        _NoRedirect(),
+        _CancellableHTTPHandler(abort_controller),
+        _CancellableHTTPSHandler(abort_controller),
+    ]
+    opener = urllib.request.build_opener(*handlers)
+    opener._summary_abort_controller = abort_controller  # type: ignore[attr-defined]
+    return opener
 
 
 def _auth_headers(api_key: str, accept: str) -> dict[str, str]:
@@ -207,6 +611,7 @@ def get_json(
     is_local: bool,
     timeout: float,
     max_response_bytes: int,
+    cancellation_signal: SummaryCancellationSignal | None = None,
 ) -> dict:
     """검증된 endpoint로 GET(JSON). post_json과 동일한 안전 정책(정책 재검증·redirect
     차단·크기/데드라인 상한). 인증 헤더는 보내지 않는다(Ollama 로컬 조회용)."""
@@ -217,8 +622,14 @@ def get_json(
         headers={"Accept": "application/json", "Accept-Encoding": "identity"},
         method="GET",
     )
-    opener = urllib.request.build_opener(_NoRedirect())
-    raw = _read_capped(opener, req, timeout=timeout, max_response_bytes=max_response_bytes)
+    opener = _build_opener(cancellation_signal)
+    raw = _read_capped(
+        opener,
+        req,
+        timeout=timeout,
+        max_response_bytes=max_response_bytes,
+        cancellation_signal=cancellation_signal,
+    )
     try:
         return _json.loads(raw.decode("utf-8"))
     except (ValueError, UnicodeDecodeError) as exc:
@@ -231,41 +642,235 @@ def _read_capped(
     *,
     timeout: float,
     max_response_bytes: int,
+    cancellation_signal: SummaryCancellationSignal | None = None,
 ) -> bytearray:
-    """열기·크기/데드라인 상한 읽기·오류 범주화를 공유한다(post_json/get_json)."""
+    """열기·크기/절대 데드라인 읽기·오류 범주화를 공유한다(post_json/get_json).
+
+    urllib의 ``timeout``은 연결 뒤 본문 전체가 아니라 개별 blocking socket 작업에
+    적용된다. 헤더를 받는 데 쓴 시간을 제외하고 본문용 기한을 새로 만들면 느린 서버가
+    총 요청 상한을 넘길 수 있으므로, ``open`` 직전에 하나의 절대 기한을 만들고 모든
+    후속 읽기의 socket timeout을 남은 시간으로 줄인다.
+    """
+    deadline = time.monotonic() + timeout
+    raw = bytearray()
+    controller_candidate = getattr(opener, "_summary_abort_controller", None)
+    abort_controller: _RequestAbortController
+    if isinstance(controller_candidate, _RequestAbortController):
+        abort_controller = controller_candidate
+    else:
+        # 테스트/custom opener도 body 취소와 deadline을 같은 계약으로 받는다. 다만 custom
+        # handler가 이 controller를 모르므로 opener.open 내부 header abort는 production
+        # _build_opener 경로에서만 가능하다.
+        abort_controller = _RequestAbortController(cancellation_signal)
+    deadline_timer = threading.Timer(timeout, abort_controller.expire_deadline)
+    deadline_timer.daemon = True
+    deadline_timer.start()
     try:
-        with opener.open(req, timeout=timeout) as resp:  # noqa: S310 (검증된 endpoint)
-            length = resp.headers.get("Content-Length")
-            if length is not None:
-                try:
-                    if int(length) > max_response_bytes:
+        abort_controller.raise_if_aborted()
+        open_timeout = _remaining_before_deadline(deadline)
+        with opener.open(req, timeout=open_timeout) as resp:  # noqa: S310 (검증된 endpoint)
+            unregister_abort = _register_response_abort(resp, abort_controller)
+            try:
+                # open()은 연결과 응답 헤더 수신까지 포함한다. 개별 socket 작업이 제한 안에서
+                # 끝났더라도 그 합계가 절대 기한을 넘었으면 늦게 도착한 응답을 사용하지 않는다.
+                abort_controller.raise_if_aborted()
+                _remaining_before_deadline(deadline)
+                length = resp.headers.get("Content-Length")
+                if length is not None:
+                    try:
+                        if int(length) > max_response_bytes:
+                            raise SummaryNetworkError("response_too_large")
+                    except ValueError:
+                        pass  # 거짓 Content-Length는 무시하고 streaming 상한으로 막는다
+                while True:
+                    abort_controller.raise_if_aborted()
+                    remaining = _remaining_before_deadline(deadline)
+                    _set_response_socket_timeout(resp, remaining)
+                    # HTTPResponse.read(size)는 Content-Length를 채울 때까지 내부 recv를
+                    # 반복한다. 서버가 timeout보다 짧은 간격으로 한 바이트씩 흘리면 각 recv의
+                    # socket timeout이 계속 리셋돼 이 루프로 돌아오지 못한다. read1은 한 번의
+                    # raw read 뒤 제어를 돌려줘 절대 기한을 매 조각마다 다시 확인할 수 있다.
+                    read_size = min(65536, max_response_bytes + 1 - len(raw))
+                    try:
+                        piece = _read_response_chunk(resp, read_size)
+                    except Exception:
+                        # 취소 callback의 socket.shutdown()이 blocking recv를 OSError/EOF로
+                        # 깨운 경우 네트워크 실패가 아니라 정상 취소 제어 흐름으로 올린다.
+                        abort_controller.raise_if_aborted()
+                        raise
+                    # 조각이 돌아왔더라도 완료 시각이 기한 뒤거나 취소 뒤면 폐기한다.
+                    abort_controller.raise_if_aborted()
+                    _remaining_before_deadline(deadline)
+                    if not piece:
+                        break
+                    raw.extend(piece)
+                    if len(raw) > max_response_bytes:
                         raise SummaryNetworkError("response_too_large")
-                except ValueError:
-                    pass  # 거짓 Content-Length는 무시하고 streaming 상한으로 막는다
-            deadline = time.monotonic() + timeout
-            raw = bytearray()
-            while True:
-                if time.monotonic() > deadline:
-                    raise SummaryNetworkError("timeout")
-                piece = resp.read(65536)
-                if not piece:
-                    break
-                raw.extend(piece)
-                if len(raw) > max_response_bytes:
-                    raise SummaryNetworkError("response_too_large")
+            finally:
+                unregister_abort()
+    except SummaryCancelled:
+        raise
     except SummaryNetworkError:
         raise
     except urllib.error.HTTPError as exc:
-        raise _classify_http_status(exc.code) from None
+        try:
+            abort_controller.raise_if_aborted()
+            raise _classify_http_error(
+                exc,
+                deadline=deadline,
+                abort_controller=abort_controller,
+            ) from None
+        finally:
+            exc.close()
     except TimeoutError as exc:
+        abort_controller.raise_if_aborted()
         raise SummaryNetworkError("timeout") from exc
+    except urllib.error.URLError as exc:
+        abort_controller.raise_if_aborted()
+        if isinstance(exc.reason, (TimeoutError, socket.timeout)):
+            raise SummaryNetworkError("timeout") from exc
+        raise SummaryNetworkError("connect_failed") from exc
     except OSError as exc:
+        abort_controller.raise_if_aborted()
         if isinstance(exc, socket.timeout):
             raise SummaryNetworkError("timeout") from exc
         raise SummaryNetworkError("connect_failed") from exc
+    except Exception:
+        # 부분 status/header를 파싱하던 socket을 취소하면 http.client.BadStatusLine 등
+        # OSError가 아닌 파서 예외가 날 수 있다. 취소 신호가 원인이면 동일 제어 흐름으로
+        # 정규화하고, 취소가 아니면 원래 예외를 숨기지 않는다.
+        abort_controller.raise_if_aborted()
+        raise
+    finally:
+        deadline_timer.cancel()
+        abort_controller.close()
     if len(raw) > max_response_bytes:
         raise SummaryNetworkError("response_too_large")
     return raw
+
+
+def _response_socket(response: object):
+    """stdlib urllib/HTTPError 래퍼가 감싼 socket을 제한 깊이로 찾는다.
+
+    성공 응답은 환경에 따라 ``HTTPResponse.fp.raw._sock``이거나
+    ``addinfourl.fp.fp.raw._sock``이고, HTTPError는 다시 한 겹 더 감싼다. 한 경로만
+    하드코딩하면 Windows에서 fallback close가 BufferedReader lock을 기다려 취소 API가
+    본문 timeout만큼 멈춘다. 공개되지 않은 객체 그래프 전체를 훑지 않고 알려진 래퍼
+    속성 세 개만 최대 5단계 따라간다.
+    """
+
+    pending: list[tuple[object, int]] = [(response, 0)]
+    seen: set[int] = set()
+    while pending:
+        current, depth = pending.pop(0)
+        identity = id(current)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        if callable(getattr(current, "settimeout", None)) or callable(
+            getattr(current, "shutdown", None)
+        ):
+            return current
+        if depth >= 5:
+            continue
+        for attribute in ("fp", "raw", "_sock"):
+            try:
+                child = getattr(current, attribute)
+            except (AttributeError, OSError, ValueError):
+                continue
+            if child is not None:
+                pending.append((child, depth + 1))
+    return None
+
+
+def _abort_response(response: object) -> None:
+    """다른 thread의 blocking recv를 안전하게 깨운다.
+
+    production urllib 경로에서는 socket.shutdown이 Windows/POSIX 모두 현재 recv를 깨우고,
+    worker가 이어서 context manager를 빠져나오며 응답을 닫는다. socket을 노출하지 않는
+    테스트/커스텀 transport만 response.close()로 fallback한다. BufferedReader.close를
+    먼저 부르면 읽기 thread의 내부 lock을 기다려 취소 API가 멈출 수 있어 shutdown이 먼저다.
+    """
+
+    sock = _response_socket(response)
+    if sock is not None:
+        if _abort_socket(sock):
+            return
+    close = getattr(response, "close", None)
+    if callable(close):
+        close()
+
+
+def _abort_socket(sock: object) -> bool:
+    """blocking socket 작업을 플랫폼 공통으로 깨우고 성공 여부를 반환한다."""
+
+    try:
+        sock.shutdown(socket.SHUT_RDWR)  # type: ignore[attr-defined]
+    except (OSError, AttributeError, TypeError, ValueError):
+        pass
+    # Windows의 urllib HTTPResponse는 socket.makefile() 뒤 원래 socket 객체를
+    # ``closed``로 표시하되 BufferedReader가 descriptor를 계속 소유한다. 이 상태의
+    # shutdown/close는 blocking recv를 깨우지 않는다. 취소 전용 경로에서 descriptor를
+    # detach해 OS handle을 닫아야 현재 read1이 즉시 OSError로 돌아온다.
+    detach = getattr(sock, "detach", None)
+    if not callable(detach):
+        return False
+    try:
+        descriptor = detach()
+        if not isinstance(descriptor, int) or descriptor < 0:
+            return False
+        socket.close(descriptor)
+        return True
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def _register_response_abort(
+    response: object,
+    abort_controller: _RequestAbortController,
+) -> Callable[[], None]:
+    return abort_controller.register_abort(lambda: _abort_response(response))
+
+
+def _remaining_before_deadline(deadline: float) -> float:
+    """절대 기한까지 남은 양수 초. 기한에 닿았거나 넘으면 안전하게 중단한다."""
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise SummaryNetworkError("timeout")
+    return remaining
+
+
+def _set_response_socket_timeout(response: object, timeout: float) -> None:
+    """urllib 응답의 실제 socket timeout을 best-effort로 남은 시간에 맞춘다.
+
+    urllib는 이 socket을 공개 API로 노출하지 않는다. 표준 HTTPResponse 경로에서는
+    ``fp.raw._sock``을 사용할 수 있고, 테스트 transport나 다른 handler처럼 이 경로가
+    없는 경우에는 open()에 넘긴 timeout과 사후 절대 기한 검사로 계속 방어한다.
+    """
+    sock = _response_socket(response)
+    if sock is None:
+        return
+    try:
+        sock.settimeout(timeout)
+    except (AttributeError, OSError, TypeError, ValueError):
+        pass
+
+
+def _read_response_chunk(response: object, size: int) -> bytes:
+    """한 raw read 경계만 소비한다; 비표준 file-like 객체만 ``read``로 fallback한다.
+
+    실제 urllib ``HTTPResponse``와 ``HTTPError``는 ``read1``을 제공한다. 테스트용 opener나
+    커스텀 handler가 그 계약을 구현하지 않은 경우에도 기존 호환성을 유지하되, production
+    HTTP 경로에서는 slow-drip이 절대 기한 확인을 우회할 수 없게 한다.
+    """
+    read1 = getattr(response, "read1", None)
+    if callable(read1):
+        return read1(size)
+    fp_read1 = getattr(getattr(response, "fp", None), "read1", None)
+    if callable(fp_read1):
+        return fp_read1(size)
+    read = response.read  # type: ignore[attr-defined]
+    return read(size)
 
 
 def post_json(
@@ -276,6 +881,7 @@ def post_json(
     is_local: bool,
     timeout: float,
     max_response_bytes: int,
+    cancellation_signal: SummaryCancellationSignal | None = None,
 ) -> dict:
     """검증된 endpoint로 JSON POST. redirect 차단·크기 제한·정책 재검증을 적용한다.
 
@@ -294,12 +900,85 @@ def post_json(
         headers=_auth_headers(api_key, "application/json"),
         method="POST",
     )
-    opener = urllib.request.build_opener(_NoRedirect())
-    raw = _read_capped(opener, req, timeout=timeout, max_response_bytes=max_response_bytes)
+    opener = _build_opener(cancellation_signal)
+    raw = _read_capped(
+        opener,
+        req,
+        timeout=timeout,
+        max_response_bytes=max_response_bytes,
+        cancellation_signal=cancellation_signal,
+    )
     try:
         return _json.loads(raw.decode("utf-8"))
     except (ValueError, UnicodeDecodeError) as exc:
         raise SummaryNetworkError("bad_response") from exc
+
+
+# finish_reason 값을 로그에 남길 때 모델이 준 임의 문자열을 그대로 쓰지 않는다.
+KNOWN_FINISH_REASONS = frozenset({"length", "content_filter", "tool_calls", "function_call"})
+
+
+def parse_chat_content(data: dict) -> str:
+    """OpenAI 호환 chat/completions envelope에서 완결된 텍스트 content를 꺼낸다.
+
+    length/content_filter 등 stop이 아닌 finish_reason은 완결된 JSON 계약이 아니므로
+    파싱 전에 명시적으로 거부한다. 요약·Q&A 두 파서가 이 한 곳을 공유한다 —
+    갈라지면 같은 절단 응답이 한쪽에서만 원인 불명(bad_response)으로 남는다.
+    """
+    from app.services.model_output import strip_thinking
+
+    try:
+        choice = data["choices"][0]
+        content = choice["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise SummaryNetworkError("bad_response", "envelope_shape") from exc
+    finish_reason = choice.get("finish_reason")
+    if finish_reason not in (None, "stop"):
+        # 토큰 상한 절단(length)인지 다른 중단인지 구분해 둔다 — 대응이 다르다.
+        safe = finish_reason if finish_reason in KNOWN_FINISH_REASONS else "other"
+        raise SummaryNetworkError("bad_response", f"finish_{safe}")
+    if not isinstance(content, str):
+        raise SummaryNetworkError("bad_response", "content_not_text")
+    # thinking 흔적은 UI·저장·로그에 남기지 않는다(JSON 파싱 전에 제거).
+    return strip_thinking(content)
+
+
+_STREAM_CANCEL_POLL_SECONDS = 0.05
+
+
+def _start_stream_cancel_watcher(
+    should_cancel: Callable[[], bool] | None,
+    abort_controller: _RequestAbortController,
+) -> tuple[threading.Event, threading.Thread | None, list[Exception]]:
+    """polling cancel token을 request abort로 바꾸는 daemon watcher를 시작한다."""
+
+    stop = threading.Event()
+    failures: list[Exception] = []
+    if should_cancel is None:
+        return stop, None, failures
+
+    def watch() -> None:
+        while not stop.is_set():
+            try:
+                if should_cancel():
+                    abort_controller.cancel_request()
+                    return
+            except Exception as exc:  # noqa: BLE001 — caller callback 예외를 본 thread로 전달
+                failures.append(exc)
+                abort_controller.cancel_request()
+                return
+            if stop.wait(_STREAM_CANCEL_POLL_SECONDS):
+                return
+
+    watcher = threading.Thread(target=watch, name="summary-stream-cancel", daemon=True)
+    watcher.start()
+    return stop, watcher, failures
+
+
+def _stop_timer(timer: threading.Timer) -> None:
+    timer.cancel()
+    if timer.is_alive() and timer is not threading.current_thread():
+        timer.join(timeout=0.2)
 
 
 def stream_lines(
@@ -321,6 +1000,12 @@ def stream_lines(
     크기 상한)을 적용하되, 취소 가능하고 idle/total deadline을 강제한다. should_cancel()이
     True면 즉시 응답을 닫고 종료한다. UTF-8 멀티바이트가 청크 경계에서 나뉘어도 안전하다.
     """
+    # 취소가 이미 확정됐으면 endpoint 검증의 DNS 조회조차 시작하지 않는다.
+    # should_cancel은 pull/Q&A에서 threading.Event 기반이므로 이 확인은
+    # 부작용 없이 즉시 끝난다.
+    if should_cancel is not None and should_cancel():
+        return
+
     _assert_url_allowed(url, is_local=is_local)
 
     body = _json.dumps(payload).encode("utf-8")
@@ -330,41 +1015,113 @@ def stream_lines(
         headers=_auth_headers(api_key, "text/event-stream"),
         method="POST",
     )
-    opener = urllib.request.build_opener(_NoRedirect())
+    opener = _build_opener()
+    controller_candidate = getattr(opener, "_summary_abort_controller", None)
+    abort_controller = (
+        controller_candidate
+        if isinstance(controller_candidate, _RequestAbortController)
+        else _RequestAbortController(None)
+    )
     resp = None
+    unregister_response_abort: Callable[[], None] | None = None
     decoder = codecs.getincrementaldecoder("utf-8")()
     buffer = ""
     total = 0
-    deadline = time.monotonic() + total_deadline
+    started_at = time.monotonic()
+    connect_deadline_at = started_at + connect_timeout
+    total_deadline_at = started_at + total_deadline
+    connect_timer = threading.Timer(connect_timeout, abort_controller.expire_deadline)
+    total_timer = threading.Timer(total_deadline, abort_controller.expire_deadline)
+    connect_timer.daemon = True
+    total_timer.daemon = True
+    connect_timer.start()
+    total_timer.start()
+    watcher_stop, watcher, watcher_failures = _start_stream_cancel_watcher(
+        should_cancel, abort_controller
+    )
     try:
         try:
-            resp = opener.open(req, timeout=connect_timeout)  # noqa: S310 (검증된 endpoint)
+            abort_controller.raise_if_aborted()
+            open_timeout = min(
+                _remaining_before_deadline(connect_deadline_at),
+                _remaining_before_deadline(total_deadline_at),
+            )
+            resp = opener.open(req, timeout=open_timeout)  # noqa: S310 (검증된 endpoint)
+            connect_timer.cancel()
+            abort_controller.raise_if_aborted()
+            _remaining_before_deadline(connect_deadline_at)
+            _remaining_before_deadline(total_deadline_at)
+            unregister_response_abort = _register_response_abort(resp, abort_controller)
+            abort_controller.raise_if_aborted()
         except SummaryNetworkError:
+            abort_controller.raise_if_aborted()
+            _remaining_before_deadline(min(connect_deadline_at, total_deadline_at))
             raise
         except urllib.error.HTTPError as exc:
-            raise _classify_http_status(exc.code) from None
+            connect_timer.cancel()
+            try:
+                abort_controller.raise_if_aborted()
+                _remaining_before_deadline(connect_deadline_at)
+                _remaining_before_deadline(total_deadline_at)
+                classified = _classify_http_status(
+                    exc.code,
+                    retry_after_seconds=_parse_retry_after(exc.headers.get("Retry-After")),
+                )
+                abort_controller.raise_if_aborted()
+                raise classified from None
+            finally:
+                _invoke_best_effort(exc.close)
         except TimeoutError as exc:
+            abort_controller.raise_if_aborted()
+            _remaining_before_deadline(min(connect_deadline_at, total_deadline_at))
             raise SummaryNetworkError("timeout") from exc
-        except OSError as exc:
+        except urllib.error.URLError as exc:
+            abort_controller.raise_if_aborted()
+            _remaining_before_deadline(min(connect_deadline_at, total_deadline_at))
+            if isinstance(exc.reason, (TimeoutError, socket.timeout)):
+                raise SummaryNetworkError("timeout") from exc
             raise SummaryNetworkError("connect_failed") from exc
-
-        # 개별 읽기는 idle_timeout, 전체는 total_deadline으로 제한
-        try:
-            resp.fp.raw._sock.settimeout(idle_timeout)  # type: ignore[attr-defined]
+        except OSError as exc:
+            abort_controller.raise_if_aborted()
+            _remaining_before_deadline(min(connect_deadline_at, total_deadline_at))
+            if isinstance(exc, socket.timeout):
+                raise SummaryNetworkError("timeout") from exc
+            raise SummaryNetworkError("connect_failed") from exc
         except Exception:
-            pass
+            abort_controller.raise_if_aborted()
+            _remaining_before_deadline(min(connect_deadline_at, total_deadline_at))
+            raise
+
+        length = resp.headers.get("Content-Length")
+        if length is not None:
+            try:
+                if int(length) > max_total_bytes:
+                    raise SummaryNetworkError("response_too_large")
+            except ValueError:
+                pass
 
         while True:
-            if should_cancel is not None and should_cancel():
-                return
-            if time.monotonic() > deadline:
+            abort_controller.raise_if_aborted()
+            remaining_total = _remaining_before_deadline(total_deadline_at)
+            if idle_timeout <= 0:
                 raise SummaryNetworkError("timeout")
+            _set_response_socket_timeout(resp, min(idle_timeout, remaining_total))
             try:
-                chunk = resp.read(8192)
+                read_size = min(8192, max_total_bytes + 1 - total)
+                chunk = _read_response_chunk(resp, read_size)
             except TimeoutError as exc:
+                abort_controller.raise_if_aborted()
                 raise SummaryNetworkError("timeout") from exc
             except OSError as exc:
+                abort_controller.raise_if_aborted()
+                if isinstance(exc, socket.timeout):
+                    raise SummaryNetworkError("timeout") from exc
                 raise SummaryNetworkError("connect_failed") from exc
+            except Exception:
+                abort_controller.raise_if_aborted()
+                raise
+            abort_controller.raise_if_aborted()
+            _remaining_before_deadline(total_deadline_at)
             if not chunk:
                 break
             total += len(chunk)
@@ -376,26 +1133,130 @@ def stream_lines(
                 if len(line.encode("utf-8")) > max_line_bytes:
                     raise SummaryNetworkError("response_too_large")
                 yield line
-                if should_cancel is not None and should_cancel():
-                    return
+                abort_controller.raise_if_aborted()
+            # newline이 없는 NDJSON/SSE도 개별 줄 상한을 즉시 적용한다.
+            # 총 응답 상한(8~256MiB)까지 하나의 줄을 buffer에 누적하면
+            # pull/Q&A worker의 메모리를 불필요하게 점유한다.
+            if len(buffer.encode("utf-8")) > max_line_bytes:
+                raise SummaryNetworkError("response_too_large")
         # 남은 미완결 버퍼는 폐기(불완전 줄)
+    except _RequestCancelled:
+        if watcher_failures:
+            raise watcher_failures[0] from None
+        return
     finally:
+        watcher_stop.set()
+        if watcher is not None and watcher is not threading.current_thread():
+            watcher.join(timeout=0.2)
+        _stop_timer(connect_timer)
+        _stop_timer(total_timer)
+        if unregister_response_abort is not None:
+            unregister_response_abort()
         if resp is not None:
-            try:
-                resp.close()
-            except Exception:
-                pass
+            _invoke_best_effort(resp.close)
+        abort_controller.close()
 
 
-def _classify_http_status(code: int) -> SummaryNetworkError:
+def _classify_http_error(
+    exc: urllib.error.HTTPError,
+    *,
+    deadline: float | None = None,
+    cancellation_signal: SummaryCancellationSignal | None = None,
+    abort_controller: _RequestAbortController | None = None,
+) -> SummaryNetworkError:
+    """HTTP 오류 → 범주. 400은 본문을 훑어 컨텍스트 초과인지 먼저 가른다.
+
+    OpenAI 호환 서버(LM Studio·llama.cpp server·vLLM·OpenAI)가 컨텍스트 초과를 알리는
+    유일한 명시적 신호는 400 + `context_length_exceeded` 본문이다. 이걸 bad_response로
+    뭉뚱그리면 executor의 적응 분할이 발동하지 않아 문서 전체가 즉시 실패한다.
+    본문은 이 판별에만 쓰고 어디에도 저장하지 않는다.
+    """
+    owns_abort_controller = abort_controller is None
+    if abort_controller is None:
+        abort_controller = _RequestAbortController(cancellation_signal)
+    if exc.code == 400:
+        unregister_abort = _register_response_abort(exc, abort_controller)
+        try:
+            abort_controller.raise_if_aborted()
+            raw = bytearray()
+            while len(raw) < _ERROR_BODY_SNIFF_BYTES:
+                abort_controller.raise_if_aborted()
+                if deadline is not None:
+                    remaining = _remaining_before_deadline(deadline)
+                    _set_response_socket_timeout(exc, remaining)
+                try:
+                    piece = _read_response_chunk(
+                        exc,
+                        min(65536, _ERROR_BODY_SNIFF_BYTES - len(raw)),
+                    )
+                except Exception:
+                    abort_controller.raise_if_aborted()
+                    raise
+                abort_controller.raise_if_aborted()
+                if deadline is not None:
+                    _remaining_before_deadline(deadline)
+                if not piece:
+                    break
+                raw.extend(piece)
+            body = raw.decode("utf-8", "replace").lower()
+        except (SummaryCancelled, SummaryNetworkError):
+            raise
+        except TimeoutError as timeout_exc:
+            raise SummaryNetworkError("timeout") from timeout_exc
+        except OSError as os_exc:
+            if isinstance(os_exc, socket.timeout):
+                raise SummaryNetworkError("timeout") from os_exc
+            body = ""
+        except Exception:  # noqa: BLE001 — 본문을 못 읽으면 코드만으로 분류한다
+            abort_controller.raise_if_aborted()
+            body = ""
+        finally:
+            unregister_abort()
+            if owns_abort_controller:
+                abort_controller.close()
+        if any(hint in body for hint in HTTP_CONTEXT_OVERFLOW_HINTS):
+            return SummaryNetworkError("context_overflow", "http_400_context_length")
+    if owns_abort_controller:
+        abort_controller.close()
+    return _classify_http_status(
+        exc.code, retry_after_seconds=_parse_retry_after(exc.headers.get("Retry-After"))
+    )
+
+
+def _parse_retry_after(value: str | None) -> float | None:
+    """Retry-After(delta-seconds 또는 HTTP-date)를 안전한 초 단위 값으로 바꾼다."""
+    if value is None:
+        return None
+    stripped = value.strip()
+    try:
+        seconds = float(stripped)
+    except ValueError:
+        try:
+            target = parsedate_to_datetime(stripped)
+            if target.tzinfo is None:
+                return None
+            seconds = target.timestamp() - time.time()
+        except (TypeError, ValueError, OverflowError):
+            return None
+    if seconds < 0 or not math.isfinite(seconds):
+        return None
+    return seconds
+
+
+def _classify_http_status(
+    code: int, *, retry_after_seconds: float | None = None
+) -> SummaryNetworkError:
     if code in (401,):
-        return SummaryNetworkError("auth_failed")
+        return SummaryNetworkError("auth_failed", f"http_{code}")
     if code in (403,):
-        return SummaryNetworkError("forbidden")
+        return SummaryNetworkError("forbidden", f"http_{code}")
     if code in (404,):
-        return SummaryNetworkError("model_not_found")
+        return SummaryNetworkError("model_not_found", f"http_{code}")
     if code == 429:
-        return SummaryNetworkError("rate_limited")
+        return SummaryNetworkError(
+            "rate_limited", f"http_{code}", retry_after_seconds=retry_after_seconds
+        )
     if 500 <= code <= 599:
-        return SummaryNetworkError("server_error")
-    return SummaryNetworkError("bad_response")
+        return SummaryNetworkError("server_error", f"http_{code}")
+    # 400(잘못된 파라미터 등)도 여기로 온다 — 응답 내용 위반과 구분되도록 reason을 남긴다.
+    return SummaryNetworkError("bad_response", f"http_{code}")

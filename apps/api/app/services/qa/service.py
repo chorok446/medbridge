@@ -9,14 +9,19 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import AppError, ErrorCode
 from app.core.logging import get_logger
 from app.models.document import Document
-from app.models.enums import QaMessageRole, QaMessageStatus
+from app.models.enums import (
+    QA_RETRYABLE_STATUSES,
+    QaClaimVerification,
+    QaMessageRole,
+    QaMessageStatus,
+)
 from app.models.qa import QaClaim, QaMessage, QaThread
 from app.models.user import User
 from app.services.qa import context as qa_context
@@ -60,9 +65,7 @@ async def list_threads(db: AsyncSession, doc: Document) -> list[QaThread]:
     )
 
 
-async def get_owned_thread(
-    db: AsyncSession, doc: Document, thread_id: uuid.UUID
-) -> QaThread:
+async def get_owned_thread(db: AsyncSession, doc: Document, thread_id: uuid.UUID) -> QaThread:
     thread = await db.get(QaThread, thread_id)
     # 다른 문서·사용자의 스레드 존재를 노출하지 않고 404
     if thread is None or thread.document_id != doc.id:
@@ -87,9 +90,7 @@ async def get_thread_messages(
     if msg_ids:
         claims = (
             await db.execute(
-                select(QaClaim)
-                .where(QaClaim.message_id.in_(msg_ids))
-                .order_by(QaClaim.claim_index)
+                select(QaClaim).where(QaClaim.message_id.in_(msg_ids)).order_by(QaClaim.claim_index)
             )
         ).scalars()
         for c in claims:
@@ -109,18 +110,40 @@ async def update_thread(
     return thread
 
 
-async def delete_thread(db: AsyncSession, thread: QaThread) -> None:
-    # 메시지·claim 명시 삭제(스레드 CASCADE FK가 있으나 순서 보장 위해 명시)
-    msg_ids = (
-        await db.execute(select(QaMessage.id).where(QaMessage.thread_id == thread.id))
-    ).scalars().all()
+async def _delete_thread_rows(db: AsyncSession, thread_ids: list[uuid.UUID]) -> None:
+    """claim → message → thread 순서로 명시 삭제한다(커밋은 호출자).
+
+    스레드 삭제와 문서 삭제가 이 한 곳을 공유한다 — Q&A에 테이블이 늘 때 한쪽만
+    고쳐져 개인정보(질문 원문)가 남는 사고를 막는다.
+    """
     from sqlalchemy import delete as sa_delete
 
+    if not thread_ids:
+        return
+    msg_ids = (
+        (await db.execute(select(QaMessage.id).where(QaMessage.thread_id.in_(thread_ids))))
+        .scalars()
+        .all()
+    )
     if msg_ids:
         await db.execute(sa_delete(QaClaim).where(QaClaim.message_id.in_(msg_ids)))
-    await db.execute(sa_delete(QaMessage).where(QaMessage.thread_id == thread.id))
-    await db.execute(sa_delete(QaThread).where(QaThread.id == thread.id))
+    await db.execute(sa_delete(QaMessage).where(QaMessage.thread_id.in_(thread_ids)))
+    await db.execute(sa_delete(QaThread).where(QaThread.id.in_(thread_ids)))
+
+
+async def delete_thread(db: AsyncSession, thread: QaThread) -> None:
+    await _delete_thread_rows(db, [thread.id])
     await db.commit()
+
+
+async def delete_threads_for_document(db: AsyncSession, document_id: uuid.UUID) -> None:
+    """문서의 모든 Q&A 스레드·메시지·claim 삭제(커밋은 호출자) — 문서 삭제 경로용."""
+    thread_ids = (
+        (await db.execute(select(QaThread.id).where(QaThread.document_id == document_id)))
+        .scalars()
+        .all()
+    )
+    await _delete_thread_rows(db, list(thread_ids))
 
 
 # --- 질문 → 답변 ---
@@ -136,9 +159,7 @@ class AnswerOutcome:
 async def _next_sequence(db: AsyncSession, thread_id: uuid.UUID) -> int:
     current = (
         await db.execute(
-            select(func.max(QaMessage.sequence_number)).where(
-                QaMessage.thread_id == thread_id
-            )
+            select(func.max(QaMessage.sequence_number)).where(QaMessage.thread_id == thread_id)
         )
     ).scalar_one_or_none()
     return (current or 0) + 1
@@ -151,9 +172,7 @@ async def _recent_history(
     # 들어가지 않게 한다(현재 user 질문은 QaRequest.question으로 이미 전달됨).
     conds = [
         QaMessage.thread_id == thread_id,
-        QaMessage.status.in_(
-            [QaMessageStatus.COMPLETED, QaMessageStatus.CONFLICTING_EVIDENCE]
-        )
+        QaMessage.status.in_([QaMessageStatus.COMPLETED, QaMessageStatus.CONFLICTING_EVIDENCE])
         | (QaMessage.role == QaMessageRole.USER),
     ]
     if before_seq is not None:
@@ -175,14 +194,24 @@ async def _recent_history(
     return turns
 
 
+def require_available_provider(provider, user: User, doc: Document) -> None:
+    """QA 공급자 연결 확인(501) + 외부 전송 동의 검사 — 동기·재시도·스트림 경로가 공유한다."""
+    if not provider.available:
+        raise AppError(
+            ErrorCode.INTERNAL_ERROR,
+            "질문 기능을 사용하려면 앱 설정에서 요약 모델을 연결해 주세요.",
+            status_code=501,
+        )
+    if provider_is_external(provider):
+        ensure_external_consent(user, doc)
+
+
 def _validate_question(question: str) -> str:
     q = (question or "").strip()
     if not q:
         raise AppError(ErrorCode.VALIDATION_FAILED, "질문을 입력해 주세요.", status_code=422)
     if len(q) > MAX_QUESTION_CHARS:
-        raise AppError(
-            ErrorCode.VALIDATION_FAILED, "질문이 너무 깁니다.", status_code=422
-        )
+        raise AppError(ErrorCode.VALIDATION_FAILED, "질문이 너무 깁니다.", status_code=422)
     if any(ord(c) < 0x20 and c not in "\n\t" for c in q):  # 제어문자 거부
         raise AppError(
             ErrorCode.VALIDATION_FAILED,
@@ -193,20 +222,19 @@ def _validate_question(question: str) -> str:
 
 
 async def ask(
-    db: AsyncSession, doc: Document, user: User, thread: QaThread, question: str
+    db: AsyncSession,
+    doc: Document,
+    user: User,
+    thread: QaThread,
+    question: str,
+    *,
+    learner_level: str = "nursing_student",
 ) -> AnswerOutcome:
     """질문 저장 → 검색 → 답변 생성 → 검증 → 저장. 동기 응답."""
     q = _validate_question(question)
 
     provider = await get_qa_provider(db)
-    if not provider.available:
-        raise AppError(
-            ErrorCode.INTERNAL_ERROR,
-            "질문 기능을 사용하려면 앱 설정에서 요약 모델을 연결해 주세요.",
-            status_code=501,
-        )
-    if provider_is_external(provider):
-        ensure_external_consent(user, doc)
+    require_available_provider(provider, user, doc)
 
     # 시작 revision 스냅샷
     start_content_rev = doc.content_revision
@@ -251,50 +279,34 @@ async def ask(
 
     history = await _recent_history(db, thread.id, before_seq=user_msg.sequence_number)
     return await _generate(
-        db, doc, user, thread, user_msg, assistant_msg, q, history,
-        start_content_rev, start_chunk_rev, provider,
+        db,
+        doc,
+        user,
+        thread,
+        user_msg,
+        assistant_msg,
+        q,
+        history,
+        start_content_rev,
+        start_chunk_rev,
+        provider,
+        learner_level,
     )
 
 
 async def retry_last(
-    db: AsyncSession, doc: Document, user: User, thread: QaThread
+    db: AsyncSession,
+    doc: Document,
+    user: User,
+    thread: QaThread,
+    *,
+    learner_level: str = "nursing_student",
 ) -> AnswerOutcome:
-    """마지막 실패/변경 assistant 메시지를 재시도한다(직전 user 질문으로)."""
-    messages = list(
-        (
-            await db.execute(
-                select(QaMessage)
-                .where(QaMessage.thread_id == thread.id)
-                .order_by(QaMessage.sequence_number.desc())
-            )
-        ).scalars()
-    )
-    last_assistant = next((m for m in messages if m.role == QaMessageRole.ASSISTANT), None)
-    if last_assistant is None or last_assistant.status not in (
-        QaMessageStatus.FAILED,
-        QaMessageStatus.REVISION_CHANGED,
-    ):
-        raise AppError(
-            ErrorCode.INVALID_STATE, "다시 시도할 답변이 없습니다.", status_code=409
-        )
-    # 직전 user 질문 찾기
-    last_user = next(
-        (m for m in messages if m.role == QaMessageRole.USER
-         and m.sequence_number < last_assistant.sequence_number),
-        None,
-    )
-    if last_user is None:
-        raise AppError(ErrorCode.INVALID_STATE, "다시 시도할 질문이 없습니다.", status_code=409)
+    """마지막 재시도 가능 assistant 메시지를 재시도한다(직전 user 질문으로)."""
+    last_user, last_assistant = await get_retry_messages(db, thread)
 
     provider = await get_qa_provider(db)
-    if not provider.available:
-        raise AppError(
-            ErrorCode.INTERNAL_ERROR,
-            "질문 기능을 사용하려면 앱 설정에서 요약 모델을 연결해 주세요.",
-            status_code=501,
-        )
-    if provider_is_external(provider):
-        ensure_external_consent(user, doc)
+    require_available_provider(provider, user, doc)
 
     # 실패한 assistant 메시지를 pending으로 되돌린다(부분 유니크 인덱스가 동시 재시도를 막는다).
     start_content_rev = doc.content_revision
@@ -306,6 +318,17 @@ async def retry_last(
     last_assistant.chunk_revision = start_chunk_rev
     last_assistant.provider_name = provider.provider_name
     last_assistant.model_name = provider.model_name
+    last_assistant.retrieval_mode = None
+    last_assistant.followups_json = None
+    last_assistant.draft_content = None
+    last_assistant.stream_request_id = None
+    last_assistant.stream_started_at = None
+    last_assistant.stream_updated_at = None
+    last_assistant.cancel_requested_at = None
+    last_assistant.interrupted_at = None
+    last_assistant.last_stream_seq = 0
+    last_assistant.completed_at = None
+    await db.execute(delete(QaClaim).where(QaClaim.message_id == last_assistant.id))
     try:
         await db.commit()
     except IntegrityError as exc:
@@ -318,26 +341,87 @@ async def retry_last(
 
     history = await _recent_history(db, thread.id, before_seq=last_user.sequence_number)
     return await _generate(
-        db, doc, user, thread, last_user, last_assistant, last_user.content, history,
-        start_content_rev, start_chunk_rev, provider,
+        db,
+        doc,
+        user,
+        thread,
+        last_user,
+        last_assistant,
+        last_user.content,
+        history,
+        start_content_rev,
+        start_chunk_rev,
+        provider,
+        learner_level,
     )
+
+
+async def get_retry_messages(db: AsyncSession, thread: QaThread) -> tuple[QaMessage, QaMessage]:
+    """마지막 재시도 가능 assistant와 그 질문을 반환한다.
+
+    동기/스트리밍 재시도가 같은 상태 계약과 같은 '마지막 답변' 규칙을 사용한다.
+    """
+    # 필요한 건 두 행뿐이다 — 수백 턴짜리 스레드 전체를 메모리로 끌어오지 않는다.
+    last_assistant = (
+        (
+            await db.execute(
+                select(QaMessage)
+                .where(
+                    QaMessage.thread_id == thread.id,
+                    QaMessage.role == QaMessageRole.ASSISTANT,
+                )
+                .order_by(QaMessage.sequence_number.desc())
+                .limit(1)
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if last_assistant is None or last_assistant.status not in QA_RETRYABLE_STATUSES:
+        raise AppError(ErrorCode.INVALID_STATE, "다시 시도할 답변이 없습니다.", status_code=409)
+    # 직전 user 질문 찾기
+    last_user = (
+        (
+            await db.execute(
+                select(QaMessage)
+                .where(
+                    QaMessage.thread_id == thread.id,
+                    QaMessage.role == QaMessageRole.USER,
+                    QaMessage.sequence_number < last_assistant.sequence_number,
+                )
+                .order_by(QaMessage.sequence_number.desc())
+                .limit(1)
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if last_user is None:
+        raise AppError(ErrorCode.INVALID_STATE, "다시 시도할 질문이 없습니다.", status_code=409)
+    return last_user, last_assistant
 
 
 async def _fresh_document(db: AsyncSession, document_id: uuid.UUID) -> Document | None:
     """identity map의 낡은 속성이 아니라 DB의 현재 값을 읽는다."""
     return (
-        await db.execute(
-            select(Document)
-            .where(Document.id == document_id)
-            .execution_options(populate_existing=True)
+        (
+            await db.execute(
+                select(Document)
+                .where(Document.id == document_id)
+                .execution_options(populate_existing=True)
+            )
         )
-    ).scalars().first()
+        .scalars()
+        .first()
+    )
 
 
 async def _fresh_user(db: AsyncSession) -> User | None:
     return (
-        await db.execute(select(User).limit(1).execution_options(populate_existing=True))
-    ).scalars().first()
+        (await db.execute(select(User).limit(1).execution_options(populate_existing=True)))
+        .scalars()
+        .first()
+    )
 
 
 async def _hash_of_ids(db: AsyncSession, chunk_ids: list[str]) -> str:
@@ -350,9 +434,7 @@ async def _hash_of_ids(db: AsyncSession, chunk_ids: list[str]) -> str:
     uuids = [uuid.UUID(c) for c in chunk_ids]
     rows = (
         await db.execute(
-            select(DocumentChunk.id, DocumentChunk.content_hash).where(
-                DocumentChunk.id.in_(uuids)
-            )
+            select(DocumentChunk.id, DocumentChunk.content_hash).where(DocumentChunk.id.in_(uuids))
         )
     ).all()
     return compute_chunk_hash([(str(r.id), r.content_hash) for r in rows])
@@ -371,8 +453,18 @@ async def _document_changed(
 
 
 async def _generate(
-    db, doc, user, thread, user_msg, assistant_msg, question, history,
-    start_content_rev, start_chunk_rev, provider,
+    db,
+    doc,
+    user,
+    thread,
+    user_msg,
+    assistant_msg,
+    question,
+    history,
+    start_content_rev,
+    start_chunk_rev,
+    provider,
+    learner_level="nursing_student",
 ) -> AnswerOutcome:
     import asyncio
 
@@ -391,11 +483,15 @@ async def _generate(
         # 검색 결과 없음 → 모델 호출하지 않음. 단 저장 직전 문서 상태는 확인한다.
         if await _document_changed(db, doc.id, start_content_rev, start_chunk_rev):
             return await _fail(
-                db, assistant_msg, "REVISION_CHANGED", QaMessageStatus.REVISION_CHANGED,
+                db,
+                assistant_msg,
+                "REVISION_CHANGED",
+                QaMessageStatus.REVISION_CHANGED,
                 message="문서 내용이 변경되어 답변을 다시 만들어야 합니다.",
             )
         return await _finalize(
-            db, assistant_msg,
+            db,
+            assistant_msg,
             answer="이 자료에서는 확인할 수 없습니다.",
             status=QaMessageStatus.NOT_FOUND,
             retrieval_mode=retrieval.retrieval_mode,
@@ -403,19 +499,28 @@ async def _generate(
             user_msg=user_msg,
         )
 
-    request = QaRequest(question=question, chunks=retrieval.chunks, history=history)
+    request = QaRequest(
+        question=question,
+        chunks=retrieval.chunks,
+        history=history,
+        learner_level=learner_level,
+    )
     try:
         # 외부 전송 직전 동의 재확인 — identity map의 낡은 값을 피하려고 새로 읽는다.
         if provider_is_external(provider):
             fresh_doc = await _fresh_document(db, doc.id)
             fresh_user = await _fresh_user(db)
-            if fresh_doc is None or fresh_user is None or not (
-                fresh_doc.external_evidence_enabled and fresh_user.external_ai_allowed
+            if (
+                fresh_doc is None
+                or fresh_user is None
+                or not (fresh_doc.external_evidence_enabled and fresh_user.external_ai_allowed)
             ):
                 return await _fail(db, assistant_msg, "EXTERNAL_CONSENT_MISSING")
         model_output = await asyncio.to_thread(provider.answer, request)
         # 잘못된 최상위 타입(배열·문자열 등)도 여기서 잡아 pending 고착을 막는다
-        verified = verify(model_output, retrieval.lookup, had_results=bool(retrieval.chunks))
+        verified = verify(
+            model_output, retrieval.lookup, had_results=bool(retrieval.chunks), question=question
+        )
     except Exception as exc:
         logger.warning(
             "qa_generate_failed",
@@ -440,8 +545,13 @@ async def _generate(
         or fresh_doc.chunk_revision != start_chunk_rev
         or current_hash != start_hash
     ):
-        return await _fail(db, assistant_msg, "REVISION_CHANGED", QaMessageStatus.REVISION_CHANGED,
-                           message="문서 내용이 변경되어 답변을 다시 만들어야 합니다.")
+        return await _fail(
+            db,
+            assistant_msg,
+            "REVISION_CHANGED",
+            QaMessageStatus.REVISION_CHANGED,
+            message="문서 내용이 변경되어 답변을 다시 만들어야 합니다.",
+        )
 
     status_map = {
         "completed": QaMessageStatus.COMPLETED,
@@ -449,16 +559,23 @@ async def _generate(
         "insufficient_evidence": QaMessageStatus.INSUFFICIENT_EVIDENCE,
         "conflicting_evidence": QaMessageStatus.CONFLICTING_EVIDENCE,
     }
+    # 모델의 자유 산문과 unsupported claim은 저장하지 않는다. 최종 본문은 스트림 경로와
+    # 동일하게 검증된 supported/conflicting claim만 서버가 인용 마커와 함께 조립한다.
+    safe_claims = [
+        c
+        for c in verified.claims
+        if c.verification_status in (QaClaimVerification.SUPPORTED, QaClaimVerification.CONFLICTING)
+    ]
     claim_rows = [
         QaClaim(
             message_id=assistant_msg.id,
-            claim_index=c.claim_index,
+            claim_index=claim_index,
             claim_text=c.text,
             verification_status=c.verification_status,
             source_chunk_ids_json=c.source_chunk_ids,
             source_refs_json=c.source_refs,
         )
-        for c in verified.claims
+        for claim_index, c in enumerate(safe_claims)
     ]
     # 근거가 없거나 부족하면 모델의 자유 서술을 그대로 보여주지 않는다(날조 노출 방지).
     if verified.answer_status in ("not_found", "insufficient_evidence"):
@@ -468,15 +585,21 @@ async def _generate(
             else "문서에서 충분한 근거를 찾지 못했어요. 다른 표현으로 다시 물어봐 주세요."
         )
     else:
-        safe_answer = verified.answer or "이 자료에서는 확인할 수 없습니다."
+        safe_answer = (
+            "\n".join(f"{claim.claim_text}[c{claim.claim_index}]" for claim in claim_rows)
+            or "이 자료에서는 확인할 수 없습니다."
+        )
     outcome = await _finalize(
-        db, assistant_msg,
+        db,
+        assistant_msg,
         answer=safe_answer,
         status=status_map.get(verified.answer_status, QaMessageStatus.INSUFFICIENT_EVIDENCE),
         retrieval_mode=retrieval.retrieval_mode,
         claims=claim_rows,
         user_msg=user_msg,
-        followups=verified.followups,
+        # 산문을 안전 문구로 갈아끼운 답변에는 후속 질문도 붙이지 않는다. "근거를 찾지
+        # 못했다" 바로 밑에 모델이 지어낸 다음 질문을 놓으면 날조 차단이 반만 걸린다.
+        followups=(verified.followups if safe_claims else []),
     )
     logger.info(
         "qa_answered",
@@ -492,14 +615,21 @@ async def _generate(
 
 
 async def _finalize(
-    db, assistant_msg, *, answer, status, retrieval_mode, claims, user_msg, followups=None,
+    db,
+    assistant_msg,
+    *,
+    answer,
+    status,
+    retrieval_mode,
+    claims,
+    user_msg,
+    followups=None,
 ) -> AnswerOutcome:
     assistant_msg.content = answer
     assistant_msg.status = status
     assistant_msg.retrieval_mode = retrieval_mode
     assistant_msg.completed_at = datetime.now(UTC)
-    if followups:
-        assistant_msg.error_code = None
+    assistant_msg.followups_json = list(followups) if followups else None
     for c in claims:
         db.add(c)
     # 스레드 제목이 없으면 첫 질문으로 자동 지정

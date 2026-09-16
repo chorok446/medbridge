@@ -43,13 +43,7 @@ async def start_extraction(
     from app.services.system import runtime
     from app.services.tasks.runner import get_task_runner
 
-    if runtime.is_updating():
-        raise AppError(
-            ErrorCode.INTERNAL_ERROR,
-            "업데이트를 준비하는 중입니다. 잠시 후 다시 시도해 주세요.",
-            status_code=503,
-            retryable=True,
-        )
+    runtime.reject_if_updating()
     if doc.processing_status == ProcessingStatus.EXTRACTING:
         return doc, False  # 이미 진행 중 (idempotent)
     if doc.processing_status not in EXTRACTABLE_STATES:
@@ -85,9 +79,7 @@ async def start_extraction(
 async def cancel_extraction(db: AsyncSession, doc: Document) -> Document:
     """진행 중 추출 취소 — 파이프라인은 상태 변화를 감지하고 페이지 경계에서 멈춘다."""
     if doc.processing_status != ProcessingStatus.EXTRACTING:
-        raise AppError(
-            ErrorCode.INVALID_STATE, "지금은 취소할 작업이 없습니다.", status_code=409
-        )
+        raise AppError(ErrorCode.INVALID_STATE, "지금은 취소할 작업이 없습니다.", status_code=409)
     transition(doc, ProcessingStatus.READY)
     doc.processing_progress = 0
     await db.commit()

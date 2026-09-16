@@ -92,9 +92,7 @@ def extract_page(doc: pymupdf.Document, index: int) -> PageData:
     for block_index, raw_block in enumerate(text_dict.get("blocks", [])):
         bbox = vis(raw_block["bbox"])
         if raw_block.get("type") == 1:  # 이미지 블록
-            blocks.append(
-                BlockRec(bbox=bbox, text="", block_index=block_index, block_type="image")
-            )
+            blocks.append(BlockRec(bbox=bbox, text="", block_index=block_index, block_type="image"))
             continue
         lines: list[LineRec] = []
         line_texts: list[str] = []
@@ -162,8 +160,10 @@ def extract_page(doc: pymupdf.Document, index: int) -> PageData:
             try:
                 cells = t.extract()
                 markdown = t.to_markdown()
-                col_count = t.col_count if hasattr(t, "col_count") else (
-                    max((len(r) for r in cells), default=0)
+                col_count = (
+                    t.col_count
+                    if hasattr(t, "col_count")
+                    else (max((len(r) for r in cells), default=0))
                 )
                 tables.append(
                     TableRec(

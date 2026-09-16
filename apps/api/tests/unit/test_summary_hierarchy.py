@@ -45,6 +45,41 @@ class TestBoundedPacking:
         assert groups[0].section_title == "A"
         assert groups[1].section_title == "B"
 
+    def test_merged_group_does_not_claim_one_sections_title(self):
+        """여러 절을 합친 그룹에 첫 절의 제목을 붙이면 화면이 거짓말을 한다.
+
+        절마다 1,000자 안팎인 약물 자료에서 '적응증'·'금기'·'부작용'이 한 그룹으로
+        합쳐진다. 그 그룹의 요약이 구역 요약 카드가 되고 제목은 첫 청크의 '적응증'이라,
+        사용자는 금기 내용을 적응증 항목으로 읽는다.
+
+        작은 절을 합치는 것 자체는 옳다(제목마다 끊으면 호출이 폭증한다). 합쳤다는
+        사실을 제목이 숨기지 않으면 된다.
+
+        제목을 통째로 비우는 것도 답이 아니었다 — GROUP_MIN_CHARS 때문에 실제 교재의
+        그룹은 거의 항상 여러 절을 삼키므로 '섹션별 요약' 카드 대부분이 제목을 잃고,
+        사용자는 제목 없는 문단만 보며 각 요약이 문서의 어디인지 알 수 없게 된다.
+        첫 절을 밝히되 더 있다는 사실을 함께 적는다.
+        """
+        chunks = [
+            _chunk(0, title="적응증", chars=800),
+            _chunk(1, title="금기", chars=800),
+            _chunk(2, title="부작용", chars=800),
+        ]
+        groups = build_groups(chunks)
+
+        assert len(groups) == 1, "이 크기면 한 그룹으로 합쳐지는 게 맞다"
+        title = groups[0].section_title
+        assert title is not None, "제목을 통째로 잃으면 요약이 문서의 어디인지 알 수 없다"
+        # 첫 절을 밝히되, 그 절만 있는 것처럼 보이지 않는다.
+        assert title.startswith("적응증")
+        assert title != "적응증", f"합친 그룹이 한 절의 제목을 주장한다: {title}"
+        assert "2개" in title, f"몇 개 절이 더 있는지 알려야 한다: {title}"
+
+    def test_single_section_group_keeps_its_title(self):
+        chunks = [_chunk(i, title="적응증", chars=800) for i in range(3)]
+        groups = build_groups(chunks)
+        assert groups[0].section_title == "적응증"
+
     def test_never_exceeds_char_limit_when_splitting_is_possible(self):
         chunks = [_chunk(i, title="A", chars=1000) for i in range(30)]
         groups = build_groups(chunks)
@@ -78,12 +113,26 @@ class TestBoundedPacking:
         assert [c.chunk_id for g in groups for c in g.chunks] == ["c0"]
 
     def test_real_device_scale_shrinks_group_count(self):
-        """실측 규모(4,265,890자)에서 그룹 수가 3,074개보다 크게 줄어든다."""
+        """실측 규모(4,265,890자)에서 그룹 수가 3,074개보다 크게 줄어든다.
+
+        상한은 서버가 지정하는 num_ctx(8192)에 맞춰 GROUP_MAX_CHARS=6,000자다. 그 제약
+        안에서 packing이 제 몫을 하는지 본다 — 제목마다 끊던 3,074그룹보다 크게 적어야
+        한다. 현재 코드의 실측값은 797그룹(평균 5,357자)이므로 900을 넘으면 packing이
+        60% 이상 잘게 쪼개지는 회귀다. 여유를 크게 두면(예: 1300) 그 회귀가 CI를 통과해
+        대형 문서의 map 호출이 797회 → 1,290회로 늘고 요약 시간이 배로 늘어난다.
+        """
         # 평균 536자 청크 7,965개 ≈ 4.27M자. 제목은 자주 바뀐다.
         chunks = [_chunk(i, title=f"제목 {i // 3}", chars=536) for i in range(7965)]
         groups = build_groups(chunks)
-        assert len(groups) < 900
+        assert len(groups) < 900, f"{len(groups)}그룹 — packing이 잘게 쪼개지고 있다"
         assert sum(len(g.chunks) for g in groups) == 7965
+
+    def test_groups_are_packed_close_to_the_limit(self):
+        """그룹이 절반만 차면 호출 수가 불필요하게 늘어난다 — 상한의 80% 이상을 채운다."""
+        chunks = [_chunk(i, title=f"제목 {i // 3}", chars=536) for i in range(3000)]
+        groups = build_groups(chunks)
+        average = sum(g.char_count for g in groups) / len(groups)
+        assert average >= GROUP_MAX_CHARS * 0.8, f"평균 {average:.0f}자 / 상한 {GROUP_MAX_CHARS}"
 
 
 class TestLevelPlanning:
@@ -116,6 +165,7 @@ class TestReuseKeys:
         base = dict(
             provider_name="openai_compatible",
             model_name="qwen3:8b",
+            provider_fingerprint="provider-fingerprint-a",
             prompt_version="3b-1",
             schema_version=1,
             learner_level="nursing_student",
@@ -147,6 +197,13 @@ class TestReuseKeys:
         base = map_node_input_hash(self._ctx(), pairs)
         assert base != map_node_input_hash(self._ctx(model_name="qwen3:14b"), pairs)
         assert base != map_node_input_hash(self._ctx(prompt_version="3b-2"), pairs)
+
+    def test_provider_fingerprint_change_breaks_reuse(self):
+        """같은 모델명이어도 endpoint/native/digest가 달라지면 재사용하지 않는다."""
+        pairs = [("c1", "본문")]
+        assert map_node_input_hash(self._ctx(), pairs) != map_node_input_hash(
+            self._ctx(provider_fingerprint="provider-fingerprint-b"), pairs
+        )
 
     def test_learner_level_and_language_change_break_reuse(self):
         pairs = [("c1", "본문")]

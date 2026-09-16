@@ -151,6 +151,37 @@ class TestAskFlow:
         assert "sourceChunkIds" not in raw
         assert "deterministic-qa-v1" not in raw
 
+    async def test_uncited_model_prose_is_not_stored(self, client, monkeypatch):
+        """지원 claim 하나가 있어도 인용 없는 자유 산문은 최종 답변에 섞이지 않는다."""
+        await enable_deterministic()
+        doc_id = await upload_chunked(client, fx.single_column_korean(pages=1))
+        tid = await new_thread(client, doc_id)
+        from app.services.qa import provider as prov
+
+        emitted: dict[str, str] = {}
+
+        def _mixed_output(self, request):
+            claim = request.chunks[0].text[:200].strip()
+            emitted["claim"] = claim
+            return {
+                "answer": f"{claim}[c0]\n인슐린은 모든 사람에게 항상 안전합니다.",
+                "answerStatus": "answered",
+                "claims": [
+                    {"text": claim, "sourceChunkIds": [request.chunks[0].chunk_id]}
+                ],
+            }
+
+        monkeypatch.setattr(prov.DeterministicQaProvider, "answer", _mixed_output)
+        res = await client.post(
+            f"/api/documents/{doc_id}/qa/threads/{tid}/messages",
+            json={"question": "심장은 무엇을 하나요?"},
+        )
+        assert res.status_code == 200
+        assistant = assistant_of(res.json()["data"])
+        assert assistant["content"] == f"{emitted['claim']}[c0]"
+        assert "인슐린" not in assistant["content"]
+        assert len(assistant["claims"]) == 1
+
 
 class TestValidation:
     async def test_empty_question_422(self, client):
@@ -332,13 +363,17 @@ class TestRetry:
             f"/api/documents/{doc_id}/qa/threads/{tid}/messages",
             json={"question": "심장은 무엇을 하나요?"},
         )
-        assert assistant_of(first.json()["data"])["status"] == "failed"
+        failed = assistant_of(first.json()["data"])
+        assert failed["status"] == "failed"
+        assert failed["canRetry"] is True
 
         # 공급자 복구 후 재시도
         monkeypatch.setattr(prov.DeterministicQaProvider, "answer", orig_answer)
         res = await client.post(f"/api/documents/{doc_id}/qa/threads/{tid}/retry")
         assert res.status_code == 200
-        assert assistant_of(res.json()["data"])["status"] in ("completed", "insufficient_evidence")
+        retried = assistant_of(res.json()["data"])
+        assert retried["status"] in ("completed", "insufficient_evidence")
+        assert retried["canRetry"] is False
 
 
 class TestConsent:
@@ -393,3 +428,97 @@ class TestDeleteCascade:
             msgs = (await s.execute(select(func.count()).select_from(QaMessage))).scalar_one()
             claims = (await s.execute(select(func.count()).select_from(QaClaim))).scalar_one()
         assert threads == 0 and msgs == 0 and claims == 0
+
+
+class TestFollowupsReachTheClient:
+    """모델이 만든 후속 질문은 저장되어 다시 불러도 살아 있어야 한다."""
+
+    async def test_followups_are_persisted_and_returned(self, client, monkeypatch):
+        await enable_deterministic()
+        from app.services.qa import provider as prov
+
+        original = prov.DeterministicQaProvider.answer
+
+        def with_followups(self, request):
+            out = original(self, request)
+            out["followUpSuggestions"] = ["더 자세히?", "다른 예시는?"]
+            return out
+
+        monkeypatch.setattr(prov.DeterministicQaProvider, "answer", with_followups)
+
+        doc_id = await upload_chunked(client, fx.single_column_korean(pages=2))
+        tid = await new_thread(client, doc_id)
+        await client.post(
+            f"/api/documents/{doc_id}/qa/threads/{tid}/messages",
+            json={"question": "심장은 무엇을 하나요?"},
+        )
+        # 응답이 아니라 "다시 조회"로 확인한다 — 저장되지 않으면 여기서 사라진다.
+        detail = (await client.get(f"/api/documents/{doc_id}/qa/threads/{tid}")).json()["data"]
+        assert assistant_of(detail)["followups"] == ["더 자세히?", "다른 예시는?"]
+
+    async def test_messages_without_followups_return_empty_list(self, client):
+        await enable_deterministic()
+        doc_id = await upload_chunked(client, fx.single_column_korean(pages=2))
+        tid = await new_thread(client, doc_id)
+        await client.post(
+            f"/api/documents/{doc_id}/qa/threads/{tid}/messages",
+            json={"question": "심장은 무엇을 하나요?"},
+        )
+        detail = (await client.get(f"/api/documents/{doc_id}/qa/threads/{tid}")).json()["data"]
+        assert assistant_of(detail)["followups"] == []
+
+
+class TestLearnerLevelWiring:
+    """라우트 → 서비스 → 공급자까지 여러 홉이라 배선이 끊겨도 조용하다. 끝에서 확인한다."""
+
+    async def test_requested_level_reaches_the_provider(self, client, monkeypatch):
+        await enable_deterministic()
+        from app.services.qa import provider as prov
+
+        seen: list[str] = []
+        original = prov.DeterministicQaProvider.answer
+
+        def capture(self, request):
+            seen.append(request.learner_level)
+            return original(self, request)
+
+        monkeypatch.setattr(prov.DeterministicQaProvider, "answer", capture)
+
+        doc_id = await upload_chunked(client, fx.single_column_korean(pages=2))
+        tid = await new_thread(client, doc_id)
+        await client.post(
+            f"/api/documents/{doc_id}/qa/threads/{tid}/messages",
+            json={"question": "심장은 무엇을 하나요?", "learnerLevel": "experienced_nurse"},
+        )
+        assert seen == ["experienced_nurse"]
+
+    async def test_omitted_level_uses_the_default(self, client, monkeypatch):
+        await enable_deterministic()
+        from app.services.qa import provider as prov
+
+        seen: list[str] = []
+        original = prov.DeterministicQaProvider.answer
+
+        def capture(self, request):
+            seen.append(request.learner_level)
+            return original(self, request)
+
+        monkeypatch.setattr(prov.DeterministicQaProvider, "answer", capture)
+
+        doc_id = await upload_chunked(client, fx.single_column_korean(pages=2))
+        tid = await new_thread(client, doc_id)
+        await client.post(
+            f"/api/documents/{doc_id}/qa/threads/{tid}/messages",
+            json={"question": "심장은 무엇을 하나요?"},
+        )
+        assert seen == ["nursing_student"]
+
+    async def test_unknown_level_is_rejected_at_the_edge(self, client):
+        await enable_deterministic()
+        doc_id = await upload_chunked(client, fx.single_column_korean(pages=2))
+        tid = await new_thread(client, doc_id)
+        res = await client.post(
+            f"/api/documents/{doc_id}/qa/threads/{tid}/messages",
+            json={"question": "심장은 무엇을 하나요?", "learnerLevel": "wizard"},
+        )
+        assert res.status_code == 422

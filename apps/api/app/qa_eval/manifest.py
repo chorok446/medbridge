@@ -8,25 +8,29 @@ from pathlib import Path
 
 import yaml
 
-VALID_CATEGORIES = frozenset({
-    "grounded_basic",
-    "not_found",
-    "polarity",
-    "numeric",
-    "unit",
-    "direction",
-    "conflict",
-    "prompt_injection",
-    "long_context",
-})
+VALID_CATEGORIES = frozenset(
+    {
+        "grounded_basic",
+        "not_found",
+        "polarity",
+        "numeric",
+        "unit",
+        "direction",
+        "conflict",
+        "prompt_injection",
+        "long_context",
+    }
+)
 
 # manifest의 expectedStatus. answered는 서버 상태 completed에 대응한다.
-VALID_STATUSES = frozenset({
-    "answered",
-    "not_found",
-    "insufficient_evidence",
-    "conflicting_evidence",
-})
+VALID_STATUSES = frozenset(
+    {
+        "answered",
+        "not_found",
+        "insufficient_evidence",
+        "conflicting_evidence",
+    }
+)
 
 
 class ManifestError(ValueError):
@@ -74,9 +78,7 @@ def _number_in_text(num: str, text: str) -> bool:
 def _pair_adjacent(text: str, num: str, unit: str) -> bool:
     """본문에서 '수치 단위'가 인접(사이 공백 허용)해 등장하는지 — 값-단위 짝 존재 확인."""
     core = num.replace(",", "").rstrip("%")
-    return re.search(
-        r"(?<!\d)" + re.escape(core) + r"\s*" + re.escape(unit), text
-    ) is not None
+    return re.search(r"(?<!\d)" + re.escape(core) + r"\s*" + re.escape(unit), text) is not None
 
 
 def _str_list(value: object, where: str) -> list[str]:
@@ -104,23 +106,27 @@ def parse_fixtures(raw: dict) -> dict[str, Fixture]:
         )
         norm_pages: list[list[str]] = []
         for pi, page in enumerate(pages):
-            _require(isinstance(page, list) and len(page) > 0,
-                     f"fixture '{name}' 페이지 {pi}는 블록 리스트여야 합니다.")
+            _require(
+                isinstance(page, list) and len(page) > 0,
+                f"fixture '{name}' 페이지 {pi}는 블록 리스트여야 합니다.",
+            )
             blocks = []
             for block in page:
-                _require(isinstance(block, str) and block.strip(),
-                         f"fixture '{name}' 페이지 {pi} 블록은 비어있지 않은 문자열이어야 합니다.")
+                _require(
+                    isinstance(block, str) and block.strip(),
+                    f"fixture '{name}' 페이지 {pi} 블록은 비어있지 않은 문자열이어야 합니다.",
+                )
                 blocks.append(block)
             norm_pages.append(blocks)
-        out[name] = Fixture(
-            name=name, language=str(spec.get("language", "ko")), pages=norm_pages
-        )
+        out[name] = Fixture(name=name, language=str(spec.get("language", "ko")), pages=norm_pages)
     return out
 
 
 def parse_cases(raw: dict, fixtures: dict[str, Fixture]) -> list[EvalCase]:
-    _require(isinstance(raw, dict) and isinstance(raw.get("cases"), list),
-             "manifest에 cases 리스트가 필요합니다.")
+    _require(
+        isinstance(raw, dict) and isinstance(raw.get("cases"), list),
+        "manifest에 cases 리스트가 필요합니다.",
+    )
     seen: set[str] = set()
     cases: list[EvalCase] = []
     for item in raw["cases"]:
@@ -142,23 +148,23 @@ def parse_cases(raw: dict, fixtures: dict[str, Fixture]) -> list[EvalCase]:
         status = item.get("expectedStatus")
         _require(status in VALID_STATUSES, f"[{case_id}] 알 수 없는 expectedStatus: {status}")
         polarity = item.get("expectedPolarity")
-        _require(polarity in (None, "affirmative", "negative"),
-                 f"[{case_id}] expectedPolarity는 affirmative|negative여야 합니다.")
-        max_claims = item.get("maximumAcceptedClaims")
-        _require(max_claims is None or (isinstance(max_claims, int) and max_claims >= 0),
-                 f"[{case_id}] maximumAcceptedClaims는 0 이상 정수여야 합니다.")
-        required_evidence = _str_list(
-            item.get("requiredEvidence"), f"[{case_id}] requiredEvidence"
+        _require(
+            polarity in (None, "affirmative", "negative"),
+            f"[{case_id}] expectedPolarity는 affirmative|negative여야 합니다.",
         )
+        max_claims = item.get("maximumAcceptedClaims")
+        _require(
+            max_claims is None or (isinstance(max_claims, int) and max_claims >= 0),
+            f"[{case_id}] maximumAcceptedClaims는 0 이상 정수여야 합니다.",
+        )
+        required_evidence = _str_list(item.get("requiredEvidence"), f"[{case_id}] requiredEvidence")
         # requiredEvidence는 해당 fixture 본문에 실제로 존재해야 한다(오타·drift 방지).
         for token in required_evidence:
             _require(
                 token in fixture_text,
                 f"[{case_id}] requiredEvidence '{token}'가 fixture '{fixture}' 본문에 없습니다.",
             )
-        expected_numbers = _str_list(
-            item.get("expectedNumbers"), f"[{case_id}] expectedNumbers"
-        )
+        expected_numbers = _str_list(item.get("expectedNumbers"), f"[{case_id}] expectedNumbers")
         expected_units = _str_list(item.get("expectedUnits"), f"[{case_id}] expectedUnits")
         # expectedNumbers·expectedUnits는 fixture 본문에 실제로 존재해야 한다(일관성 검증).
         for num in expected_numbers:
@@ -181,7 +187,8 @@ def parse_cases(raw: dict, fixtures: dict[str, Fixture]) -> list[EvalCase]:
             _require(
                 any(
                     _pair_adjacent(fixture_text, n, u)
-                    for n in expected_numbers for u in expected_units
+                    for n in expected_numbers
+                    for u in expected_units
                 ),
                 f"[{case_id}] unit 케이스는 fixture에 '수치 단위' 짝이 인접해 있어야 합니다.",
             )
@@ -191,24 +198,26 @@ def parse_cases(raw: dict, fixtures: dict[str, Fixture]) -> list[EvalCase]:
                 bool(item.get("safetyCritical", False)),
                 f"[{case_id}] expectedConflict 케이스는 safetyCritical=true여야 합니다.",
             )
-        cases.append(EvalCase(
-            case_id=case_id,
-            category=category,
-            document_fixture=fixture,
-            question=question,
-            expected_status=status,
-            required_evidence=required_evidence,
-            forbidden_claims=_str_list(
-                item.get("forbiddenClaims"), f"[{case_id}] forbiddenClaims"
-            ),
-            expected_numbers=expected_numbers,
-            expected_units=expected_units,
-            expected_polarity=polarity,
-            expected_conflict=bool(item.get("expectedConflict", False)),
-            maximum_accepted_claims=max_claims,
-            safety_critical=bool(item.get("safetyCritical", False)),
-            notes=str(item.get("notes", "")),
-        ))
+        cases.append(
+            EvalCase(
+                case_id=case_id,
+                category=category,
+                document_fixture=fixture,
+                question=question,
+                expected_status=status,
+                required_evidence=required_evidence,
+                forbidden_claims=_str_list(
+                    item.get("forbiddenClaims"), f"[{case_id}] forbiddenClaims"
+                ),
+                expected_numbers=expected_numbers,
+                expected_units=expected_units,
+                expected_polarity=polarity,
+                expected_conflict=bool(item.get("expectedConflict", False)),
+                maximum_accepted_claims=max_claims,
+                safety_critical=bool(item.get("safetyCritical", False)),
+                notes=str(item.get("notes", "")),
+            )
+        )
     _require(len(cases) > 0, "평가 케이스가 하나 이상 필요합니다.")
     return cases
 

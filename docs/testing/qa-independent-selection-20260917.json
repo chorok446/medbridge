@@ -1,0 +1,862 @@
+{
+  "schema_version": 1,
+  "scope": "synthetic_independent_source_selection_comparison",
+  "recorded_date": "2026-09-17",
+  "source_revision": "fbe0c35b6138274d333289a42f2211f0e604f8d6",
+  "product_revision": "9cc6414352a658492766aa103151dc3f27783509",
+  "release_approved": false,
+  "candidate_adopted": false,
+  "database_writes": 0,
+  "policy": {
+    "per_case_deadline_seconds": 60,
+    "per_run_deadline_seconds": 600,
+    "repeat": 3,
+    "retry_failed_generation": false,
+    "execution_error_stops_run": true,
+    "planned_case_attempts": 66,
+    "planned_generation_requests": 138
+  },
+  "totals": {
+    "case_attempts": 39,
+    "generation_requests_started": 52,
+    "matched_trials": 27,
+    "quality_failed_trials": 10,
+    "execution_errors": 2,
+    "passed_runs": 0
+  },
+  "environment_before": {
+    "observed_at": "2026-09-17T00:31:44.721899+09:00",
+    "ollama": {
+      "version": "0.34.1"
+    },
+    "loaded": {
+      "models": [
+        {
+          "name": "qwen3:8b",
+          "model": "qwen3:8b",
+          "size": 6295440588,
+          "digest": "500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+          "details": {
+            "parent_model": "",
+            "format": "gguf",
+            "family": "qwen3",
+            "families": [
+              "qwen3"
+            ],
+            "parameter_size": "8.2B",
+            "quantization_level": "Q4_K_M"
+          },
+          "expires_at": "2026-09-17T00:37:39.0101026+09:00",
+          "size_vram": 6295440588,
+          "context_length": 8192
+        }
+      ]
+    }
+  },
+  "environment_after": {
+    "observed_at": "2026-09-17T00:32:54.103820+09:00",
+    "ollama": {
+      "version": "0.34.1"
+    },
+    "loaded": {
+      "models": [
+        {
+          "name": "qwen3:8b",
+          "model": "qwen3:8b",
+          "size": 6295440588,
+          "digest": "500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+          "details": {
+            "parent_model": "",
+            "format": "gguf",
+            "family": "qwen3",
+            "families": [
+              "qwen3"
+            ],
+            "parameter_size": "8.2B",
+            "quantization_level": "Q4_K_M"
+          },
+          "expires_at": "2026-09-17T01:02:54.0493308+09:00",
+          "size_vram": 6295440588,
+          "context_length": 8192
+        }
+      ]
+    }
+  },
+  "validation": {
+    "related_passed": 332,
+    "api_passed": 2023,
+    "api_skipped": 4,
+    "api_warnings": 1,
+    "api_seconds": 134.48,
+    "ruff": "passed",
+    "mypy_sources": 140,
+    "mypy": "passed"
+  },
+  "runs": [
+    {
+      "started_at": "2026-09-17T00:31:44.780138+09:00",
+      "finished_at": "2026-09-17T00:32:18.724591+09:00",
+      "exit_code": 2,
+      "report": {
+        "schema_version": 4,
+        "model": "qwen3:8b",
+        "provider": "local",
+        "strategy": "fact_checklist",
+        "suite": "extended",
+        "repeat": 3,
+        "database_writes": 0,
+        "selection_attempts": 24,
+        "model_requests_started": 24,
+        "model_digest_unchanged": true,
+        "results": [
+          {
+            "case_id": "mixed",
+            "repeat": 1,
+            "status": "selected",
+            "selected_indices": [
+              0,
+              1,
+              2
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "model_requests_started": 1,
+            "seconds": 1.91
+          },
+          {
+            "case_id": "unrelated_only",
+            "repeat": 1,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "model_requests_started": 1,
+            "seconds": 0.682
+          },
+          {
+            "case_id": "instruction_unrelated",
+            "repeat": 1,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "model_requests_started": 1,
+            "seconds": 1.002
+          },
+          {
+            "case_id": "new_subject_axes",
+            "repeat": 1,
+            "status": "selected",
+            "selected_indices": [
+              1,
+              2
+            ],
+            "missing_sources": 1,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 1,
+            "failures": [
+              "missing_sources",
+              "incomplete_criteria"
+            ],
+            "passed": false,
+            "model_requests_started": 1,
+            "seconds": 1.771
+          },
+          {
+            "case_id": "narrowed_basis",
+            "repeat": 1,
+            "status": "selected",
+            "selected_indices": [
+              1
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "model_requests_started": 1,
+            "seconds": 1.72
+          },
+          {
+            "case_id": "history_resolves_subject",
+            "repeat": 1,
+            "status": "selected",
+            "selected_indices": [
+              1,
+              2
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "model_requests_started": 1,
+            "seconds": 1.784
+          },
+          {
+            "case_id": "history_not_evidence",
+            "repeat": 1,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "model_requests_started": 1,
+            "seconds": 0.727
+          },
+          {
+            "case_id": "facts_with_instruction",
+            "repeat": 1,
+            "status": "selected",
+            "selected_indices": [
+              0,
+              2
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "model_requests_started": 1,
+            "seconds": 1.802
+          },
+          {
+            "case_id": "mixed",
+            "repeat": 2,
+            "status": "selected",
+            "selected_indices": [
+              0,
+              1,
+              2,
+              3
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 1,
+            "incomplete_criteria": 0,
+            "failures": [
+              "unexpected_sources"
+            ],
+            "passed": false,
+            "model_requests_started": 1,
+            "seconds": 1.829
+          },
+          {
+            "case_id": "unrelated_only",
+            "repeat": 2,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "model_requests_started": 1,
+            "seconds": 0.676
+          },
+          {
+            "case_id": "instruction_unrelated",
+            "repeat": 2,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "model_requests_started": 1,
+            "seconds": 1.094
+          },
+          {
+            "case_id": "new_subject_axes",
+            "repeat": 2,
+            "status": "selected",
+            "selected_indices": [
+              1,
+              2
+            ],
+            "missing_sources": 1,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 1,
+            "failures": [
+              "missing_sources",
+              "incomplete_criteria"
+            ],
+            "passed": false,
+            "model_requests_started": 1,
+            "seconds": 1.757
+          },
+          {
+            "case_id": "narrowed_basis",
+            "repeat": 2,
+            "status": "selected",
+            "selected_indices": [
+              1
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "model_requests_started": 1,
+            "seconds": 1.728
+          },
+          {
+            "case_id": "history_resolves_subject",
+            "repeat": 2,
+            "status": "selected",
+            "selected_indices": [
+              1,
+              2
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "model_requests_started": 1,
+            "seconds": 1.768
+          },
+          {
+            "case_id": "history_not_evidence",
+            "repeat": 2,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "model_requests_started": 1,
+            "seconds": 0.729
+          },
+          {
+            "case_id": "facts_with_instruction",
+            "repeat": 2,
+            "status": "selected",
+            "selected_indices": [
+              0,
+              2
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "model_requests_started": 1,
+            "seconds": 1.774
+          },
+          {
+            "case_id": "mixed",
+            "repeat": 3,
+            "status": "selected",
+            "selected_indices": [
+              0,
+              1,
+              2,
+              3
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 1,
+            "incomplete_criteria": 0,
+            "failures": [
+              "unexpected_sources"
+            ],
+            "passed": false,
+            "model_requests_started": 1,
+            "seconds": 1.758
+          },
+          {
+            "case_id": "unrelated_only",
+            "repeat": 3,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "model_requests_started": 1,
+            "seconds": 0.66
+          },
+          {
+            "case_id": "instruction_unrelated",
+            "repeat": 3,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "model_requests_started": 1,
+            "seconds": 0.949
+          },
+          {
+            "case_id": "new_subject_axes",
+            "repeat": 3,
+            "status": "selected",
+            "selected_indices": [
+              1,
+              2
+            ],
+            "missing_sources": 1,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 1,
+            "failures": [
+              "missing_sources",
+              "incomplete_criteria"
+            ],
+            "passed": false,
+            "model_requests_started": 1,
+            "seconds": 1.731
+          },
+          {
+            "case_id": "narrowed_basis",
+            "repeat": 3,
+            "status": "selected",
+            "selected_indices": [
+              1
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "model_requests_started": 1,
+            "seconds": 1.74
+          },
+          {
+            "case_id": "history_resolves_subject",
+            "repeat": 3,
+            "status": "selected",
+            "selected_indices": [
+              1,
+              2
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "model_requests_started": 1,
+            "seconds": 1.75
+          },
+          {
+            "case_id": "history_not_evidence",
+            "repeat": 3,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "model_requests_started": 1,
+            "seconds": 0.717
+          },
+          {
+            "case_id": "facts_with_instruction",
+            "repeat": 3,
+            "status": "selected",
+            "selected_indices": [
+              0,
+              2
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "model_requests_started": 1,
+            "seconds": 1.793
+          }
+        ],
+        "model_digest": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+        "gate": {
+          "scope": "synthetic_source_selection_only",
+          "release_approved": false,
+          "complete": true,
+          "passed": false,
+          "expected_trials": 24,
+          "recorded_trials": 24,
+          "failed_trials": 5,
+          "failed_cases": [
+            "mixed",
+            "new_subject_axes"
+          ],
+          "failures": [
+            "selection_quality_failed"
+          ]
+        }
+      }
+    },
+    {
+      "started_at": "2026-09-17T00:32:18.724713+09:00",
+      "finished_at": "2026-09-17T00:32:34.838822+09:00",
+      "exit_code": 2,
+      "report": {
+        "schema_version": 4,
+        "model": "qwen3:8b",
+        "provider": "local",
+        "strategy": "fact_checklist",
+        "suite": "independent",
+        "repeat": 3,
+        "database_writes": 0,
+        "selection_attempts": 9,
+        "model_requests_started": 9,
+        "model_digest_unchanged": true,
+        "results": [
+          {
+            "case_id": "sensor_axes",
+            "repeat": 1,
+            "status": "selected",
+            "selected_indices": [
+              2,
+              3
+            ],
+            "missing_sources": 1,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 1,
+            "failures": [
+              "missing_sources",
+              "incomplete_criteria"
+            ],
+            "passed": false,
+            "model_requests_started": 1,
+            "seconds": 1.814
+          },
+          {
+            "case_id": "lamp_state_only",
+            "repeat": 1,
+            "status": "selected",
+            "selected_indices": [
+              1
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "model_requests_started": 1,
+            "seconds": 1.896
+          },
+          {
+            "case_id": "multi_bundle_injection_negative",
+            "repeat": 1,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "model_requests_started": 1,
+            "seconds": 1.75
+          },
+          {
+            "case_id": "sensor_axes",
+            "repeat": 2,
+            "status": "selected",
+            "selected_indices": [
+              2,
+              3
+            ],
+            "missing_sources": 1,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 1,
+            "failures": [
+              "missing_sources",
+              "incomplete_criteria"
+            ],
+            "passed": false,
+            "model_requests_started": 1,
+            "seconds": 1.763
+          },
+          {
+            "case_id": "lamp_state_only",
+            "repeat": 2,
+            "status": "selected",
+            "selected_indices": [
+              1
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "model_requests_started": 1,
+            "seconds": 1.813
+          },
+          {
+            "case_id": "multi_bundle_injection_negative",
+            "repeat": 2,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "model_requests_started": 1,
+            "seconds": 1.702
+          },
+          {
+            "case_id": "sensor_axes",
+            "repeat": 3,
+            "status": "selected",
+            "selected_indices": [
+              2,
+              3
+            ],
+            "missing_sources": 1,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 1,
+            "failures": [
+              "missing_sources",
+              "incomplete_criteria"
+            ],
+            "passed": false,
+            "model_requests_started": 1,
+            "seconds": 1.779
+          },
+          {
+            "case_id": "lamp_state_only",
+            "repeat": 3,
+            "status": "selected",
+            "selected_indices": [
+              1
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "model_requests_started": 1,
+            "seconds": 1.706
+          },
+          {
+            "case_id": "multi_bundle_injection_negative",
+            "repeat": 3,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "model_requests_started": 1,
+            "seconds": 1.776
+          }
+        ],
+        "model_digest": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+        "gate": {
+          "scope": "synthetic_source_selection_only",
+          "release_approved": false,
+          "complete": true,
+          "passed": false,
+          "expected_trials": 9,
+          "recorded_trials": 9,
+          "failed_trials": 3,
+          "failed_cases": [
+            "sensor_axes"
+          ],
+          "failures": [
+            "selection_quality_failed"
+          ]
+        }
+      }
+    },
+    {
+      "started_at": "2026-09-17T00:32:34.838918+09:00",
+      "finished_at": "2026-09-17T00:32:40.174935+09:00",
+      "exit_code": 2,
+      "report": {
+        "schema_version": 4,
+        "model": "qwen3:8b",
+        "provider": "local",
+        "strategy": "independent_checklist",
+        "suite": "extended",
+        "repeat": 3,
+        "database_writes": 0,
+        "selection_attempts": 2,
+        "model_requests_started": 5,
+        "model_digest_unchanged": true,
+        "results": [
+          {
+            "case_id": "mixed",
+            "repeat": 1,
+            "status": "insufficient_evidence",
+            "selected_indices": [],
+            "missing_sources": 3,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 2,
+            "failures": [
+              "status_mismatch",
+              "missing_sources",
+              "incomplete_criteria"
+            ],
+            "passed": false,
+            "model_requests_started": 4,
+            "seconds": 4.422
+          },
+          {
+            "case_id": "unrelated_only",
+            "repeat": 1,
+            "status": "error",
+            "selected_indices": [],
+            "missing_sources": null,
+            "unexpected_sources": null,
+            "incomplete_criteria": null,
+            "failures": [
+              "evaluation_error"
+            ],
+            "passed": false,
+            "model_requests_started": 1,
+            "seconds": 0.829
+          }
+        ],
+        "model_digest": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+        "execution_failure": "evaluation_error",
+        "execution_detail": {
+          "phase": "selector",
+          "kind": "SummaryNetworkError",
+          "category": "connect_failed"
+        },
+        "gate": {
+          "scope": "synthetic_source_selection_only",
+          "release_approved": false,
+          "complete": false,
+          "passed": false,
+          "expected_trials": 24,
+          "recorded_trials": 2,
+          "failed_trials": 2,
+          "failed_cases": [
+            "mixed",
+            "unrelated_only"
+          ],
+          "failures": [
+            "incomplete_trial_set",
+            "selection_quality_failed",
+            "execution_or_provenance_failed"
+          ]
+        }
+      }
+    },
+    {
+      "started_at": "2026-09-17T00:32:40.175031+09:00",
+      "finished_at": "2026-09-17T00:32:54.103735+09:00",
+      "exit_code": 2,
+      "report": {
+        "schema_version": 4,
+        "model": "qwen3:8b",
+        "provider": "local",
+        "strategy": "independent_checklist",
+        "suite": "independent",
+        "repeat": 3,
+        "database_writes": 0,
+        "selection_attempts": 4,
+        "model_requests_started": 14,
+        "model_digest_unchanged": true,
+        "results": [
+          {
+            "case_id": "sensor_axes",
+            "repeat": 1,
+            "status": "selected",
+            "selected_indices": [
+              2,
+              3
+            ],
+            "missing_sources": 1,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 1,
+            "failures": [
+              "missing_sources",
+              "incomplete_criteria"
+            ],
+            "passed": false,
+            "model_requests_started": 4,
+            "seconds": 3.91
+          },
+          {
+            "case_id": "lamp_state_only",
+            "repeat": 1,
+            "status": "selected",
+            "selected_indices": [
+              1
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "model_requests_started": 4,
+            "seconds": 4.418
+          },
+          {
+            "case_id": "multi_bundle_injection_negative",
+            "repeat": 1,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "model_requests_started": 4,
+            "seconds": 4.138
+          },
+          {
+            "case_id": "sensor_axes",
+            "repeat": 2,
+            "status": "error",
+            "selected_indices": [],
+            "missing_sources": null,
+            "unexpected_sources": null,
+            "incomplete_criteria": null,
+            "failures": [
+              "evaluation_error"
+            ],
+            "passed": false,
+            "model_requests_started": 2,
+            "seconds": 1.289
+          }
+        ],
+        "model_digest": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+        "execution_failure": "evaluation_error",
+        "execution_detail": {
+          "phase": "selector",
+          "kind": "SummaryNetworkError",
+          "category": "connect_failed"
+        },
+        "gate": {
+          "scope": "synthetic_source_selection_only",
+          "release_approved": false,
+          "complete": false,
+          "passed": false,
+          "expected_trials": 9,
+          "recorded_trials": 4,
+          "failed_trials": 2,
+          "failed_cases": [
+            "sensor_axes"
+          ],
+          "failures": [
+            "incomplete_trial_set",
+            "selection_quality_failed",
+            "execution_or_provenance_failed"
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "testedCommit": "2444ab906f908e4f22309fd5763205911e68138e",
+  "documentSha256": "191fb25f622107bd52154254c5c779e8a726b21f699e4e844d9815fd8e84ee7b",
+  "forceStoppedAtUtc": "2026-09-09T12:19:55.2457356Z",
+  "beforeRestart": {
+    "status": "streaming",
+    "error_code": null,
+    "created_at": "2026-09-09 12:19:54.711317",
+    "stream_started_at": "2026-09-09 12:19:54.710317",
+    "completed_at": null,
+    "cancel_requested_at": null,
+    "interrupted_at": null,
+    "model_name": "qwen3:8b",
+    "question": "심장은 온몸에 혈액을 보내는 근육 기관이다라는 문서의 문장을 구성하는 단어를 각각 설명하고 문단 1부터 문단 12까지 순서대로 원문을 인용해 주세요.",
+    "content": "",
+    "draft_chars": 0,
+    "last_stream_seq": 0,
+    "claims": [],
+    "exact_ordered_12": false,
+    "duplicate_text_and_sources": 0,
+    "known_unsupported_terms": []
+  },
+  "afterRestartBeforeRetry": {
+    "status": "interrupted",
+    "error_code": "APP_RESTARTED",
+    "created_at": "2026-09-09 12:19:54.711317",
+    "stream_started_at": "2026-09-09 12:19:54.710317",
+    "completed_at": "2026-09-09 12:20:21.781458",
+    "cancel_requested_at": null,
+    "interrupted_at": "2026-09-09 12:20:21.781458",
+    "model_name": "qwen3:8b",
+    "question": "심장은 온몸에 혈액을 보내는 근육 기관이다라는 문서의 문장을 구성하는 단어를 각각 설명하고 문단 1부터 문단 12까지 순서대로 원문을 인용해 주세요.",
+    "content": "",
+    "draft_chars": 0,
+    "last_stream_seq": 0,
+    "duration_sec": 27.071141,
+    "claims": [],
+    "exact_ordered_12": false,
+    "duplicate_text_and_sources": 0,
+    "known_unsupported_terms": []
+  }
+}

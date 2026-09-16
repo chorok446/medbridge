@@ -103,7 +103,7 @@ export function OcrPanel({ documentId, ocrPageCount }: { documentId: string; ocr
             type="button"
             onClick={() => startMutation.mutate()}
             disabled={startMutation.isPending}
-            className="mt-2 rounded bg-amber-600 px-4 py-2 font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+            className="mt-2 rounded bg-amber-700 px-4 py-2 font-medium text-white hover:bg-amber-800 disabled:opacity-50"
           >
             이미지 페이지 읽기
           </button>

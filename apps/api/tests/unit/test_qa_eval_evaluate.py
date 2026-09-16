@@ -226,3 +226,23 @@ def test_expected_number_missing_fails_usefulness():
     run = _run([_claim("심장은 혈액을 보낸다")])  # 기대 수치 120 없음
     result = evaluate_case(_case(expected_numbers=["120"]), run)
     assert not result.checks["expected_numbers"]
+
+
+def test_paragraph_quote_numbers_require_every_requested_paragraph():
+    source = "심장은 온몸에 혈액을 보내는 근육 기관이다."
+    paragraphs = [f"문단 {i}: {source}" for i in range(1, 13)]
+    case = _case(
+        expected_numbers=[str(i) for i in range(1, 13)], safety_critical=True,
+    )
+    for count in (1, 12):
+        run = CaseRun(
+            case_id="c", category="grounded_basic", status="completed",
+            terminal_type="completed", claims=[_claim(p) for p in paragraphs[:count]],
+            started=True, reached_terminal=True, owned_block_ids=OWNED,
+            doc_text="\n".join(paragraphs),
+        )
+        result = evaluate_case(case, run)
+        assert result.checks["expected_numbers"] is (count == 12)
+        assert result.passed is (count == 12)
+        assert result.critical_case_failure is (count == 1)
+        assert not result.explicit_safety_violation

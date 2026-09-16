@@ -1,0 +1,151 @@
+{
+  "schema_version": 1,
+  "scope": "bounded_selection_diagnosis_only",
+  "release_approved": false,
+  "quality_gate_run": false,
+  "model": "qwen3:8b",
+  "strategy": "independent_checklist",
+  "database_writes": 0,
+  "started_at": "2026-09-17T00:53:17.501056+09:00",
+  "planned_cases": [
+    "mixed",
+    "sensor_axes"
+  ],
+  "planned_repeat": 3,
+  "planned_case_attempts": 6,
+  "max_generation_requests": 24,
+  "per_case_deadline_seconds": 60,
+  "total_deadline_seconds": 180,
+  "stop_on_first_execution_error": true,
+  "automatic_generation_retries": 0,
+  "results": [
+    {
+      "case_id": "mixed",
+      "repeat": 1,
+      "status": "error",
+      "selected_indices": [],
+      "missing_sources": null,
+      "unexpected_sources": null,
+      "incomplete_criteria": null,
+      "failures": [
+        "diagnostic_error"
+      ],
+      "passed": false,
+      "started_at": "2026-09-17T00:53:17.569005+09:00",
+      "finished_at": "2026-09-17T00:53:20.294603+09:00",
+      "seconds": 2.726,
+      "model_requests_started": 3,
+      "steps": [
+        {
+          "step": 1,
+          "scope": "bundle",
+          "bundle_indices": [
+            0
+          ],
+          "phase": "complete",
+          "request_started": true,
+          "status": "not_found",
+          "assessments": [
+            {
+              "bundle_index": 0,
+              "target": "other",
+              "basis": "type"
+            }
+          ],
+          "conflict": false,
+          "error_chain": []
+        },
+        {
+          "step": 2,
+          "scope": "bundle",
+          "bundle_indices": [
+            1
+          ],
+          "phase": "complete",
+          "request_started": true,
+          "status": "not_found",
+          "assessments": [
+            {
+              "bundle_index": 1,
+              "target": "other",
+              "basis": "stage"
+            }
+          ],
+          "conflict": false,
+          "error_chain": []
+        },
+        {
+          "step": 3,
+          "scope": "bundle",
+          "bundle_indices": [
+            2
+          ],
+          "phase": "native_request",
+          "request_started": true,
+          "status": null,
+          "assessments": [],
+          "conflict": null,
+          "error_chain": [
+            {
+              "kind": "SummaryNetworkError",
+              "errno": null,
+              "winerror": null
+            }
+          ]
+        }
+      ],
+      "execution_detail": {
+        "phase": "selector",
+        "error_chain": [
+          {
+            "kind": "SummaryNetworkError",
+            "errno": null,
+            "winerror": null
+          }
+        ],
+        "category": "server_error"
+      }
+    }
+  ],
+  "ollama_version": "0.34.1",
+  "model_digest": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+  "execution_failure": "diagnostic_error",
+  "model_digest_unchanged": true,
+  "model_requests_started": 3,
+  "exit_code": 2,
+  "finished_at": "2026-09-17T00:53:20.351183+09:00",
+  "source_revision": "c621ba59ad542832ab7aedc669c27b3f2cadbed3",
+  "product_revision": "9cc6414352a658492766aa103151dc3f27783509",
+  "validation": {
+    "new_regression_tests": 25,
+    "related_passed": 357,
+    "api_passed": 2048,
+    "api_skipped": 4,
+    "api_warnings": 1,
+    "api_seconds": 130.03,
+    "ruff": "passed",
+    "mypy_sources": 141,
+    "mypy": "passed"
+  },
+  "observations": {
+    "server_http_status_at_failure": 500,
+    "server_failure_time_kst": "2026-09-17 00:53:20",
+    "server_request_duration_ms": 892.8161,
+    "known_runner_pid": 30940,
+    "known_runner_found_after_failure": false,
+    "any_llama_server_found_after_failure": false,
+    "ollama_app_pid": 3232,
+    "ollama_server_pid": 5428,
+    "model_still_listed_after_runner_absence": true,
+    "listed_context_length": 8192,
+    "listed_size_vram": 6295440588,
+    "listed_expires_at": "2026-09-17T01:23:20.2817349+09:00",
+    "application_error_or_wer_events_previous_10_minutes": "NoMatchingEventsFound",
+    "matching_wer_archive_directories": 0,
+    "process_exit_reason": "not_established",
+    "runtime_restart": false,
+    "model_update": false,
+    "driver_update": false,
+    "user_database_access": false
+  }
+}

@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { DocumentSearch } from "@/components/document-search";
+import { ExtractedTable } from "@/components/extracted-table";
 import { OcrPanel } from "@/components/ocr-panel";
 import { PdfViewer } from "@/components/pdf-viewer";
 import {
@@ -15,8 +16,9 @@ import {
   retryExtraction,
 } from "@/lib/api/extraction";
 import { getOcrStatus, startPageOcr } from "@/lib/api/ocr";
+import { usePdfNavigation } from "@/hooks/use-pdf-navigation";
 import type { DocumentSummary } from "@/types/api";
-import type { ExtractionBlock, Rect } from "@/types/extraction";
+import type { ExtractionBlock } from "@/types/extraction";
 
 type PanelTab = "text" | "blocks" | "tables" | "search" | "notes";
 
@@ -28,13 +30,16 @@ interface Props {
 /** 추출 결과 검수 화면 — 왼쪽 원문(PDF), 오른쪽 추출 텍스트. 블록 클릭 ↔ 원문 하이라이트. */
 export function ExtractionReview({ doc, fileUrl }: Props) {
   const queryClient = useQueryClient();
-  const [page, setPage] = useState(1);
+  const nav = usePdfNavigation();
+  const { page } = nav;
   const [tab, setTab] = useState<PanelTab>("text");
   const [includeBands, setIncludeBands] = useState(false);
-  const [highlights, setHighlights] = useState<Rect[]>([]);
-  const [flashKey, setFlashKey] = useState(0);
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
   const [showRaw, setShowRaw] = useState(false);
+  // 의학 교재의 표는 열이 대여섯 개씩 된다. 380px 칸에서는 아무리 잘 그려도 가로로
+  // 밀어가며 읽어야 해서, 표를 보는 동안만 패널을 넓히는 스위치를 준다. 원문 대조가
+  // 표 읽기의 핵심이라 PDF는 좁아질지언정 화면에서 치우지 않는다.
+  const [wideTables, setWideTables] = useState(false);
 
   const extracting = doc.processingStatus === "extracting";
 
@@ -114,8 +119,7 @@ export function ExtractionReview({ doc, fileUrl }: Props) {
   );
 
   function focusBlock(block: ExtractionBlock) {
-    setHighlights([{ x0: block.x0, y0: block.y0, x1: block.x1, y1: block.y1 }]);
-    setFlashKey((k) => k + 1);
+    nav.highlight({ x0: block.x0, y0: block.y0, x1: block.x1, y1: block.y1 });
     setSelectedBlockId(block.id);
   }
 
@@ -195,19 +199,24 @@ export function ExtractionReview({ doc, fileUrl }: Props) {
   ];
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[1fr_380px]">
+    <div
+      className={`grid gap-4 ${
+        wideTables && tab === "tables"
+          ? "lg:grid-cols-[minmax(0,1fr)_720px]"
+          : "lg:grid-cols-[minmax(0,1fr)_380px]"
+      }`}
+    >
       <div className="h-[640px]">
         <PdfViewer
           fileUrl={fileUrl}
           page={page}
           pageCount={pageCount}
           onPageChange={(p) => {
-            setPage(p);
-            setHighlights([]);
+            nav.changePage(p);
             setSelectedBlockId(null);
           }}
-          highlights={highlights}
-          flashKey={flashKey}
+          highlights={nav.highlights}
+          flashKey={nav.flashKey}
           onPagePointerDown={handlePdfClick}
         />
       </div>
@@ -218,6 +227,11 @@ export function ExtractionReview({ doc, fileUrl }: Props) {
             <button
               key={t.key}
               role="tab"
+              // 탭과 내용을 id로 이어야 스크린리더가 "3번째 탭, 패널과 연결됨"이라는
+              // 표준 안내를 낼 수 있다. 연결이 없으면 탭 아래 내용이 무엇에 속하는지
+              // 알 수 없어, 탭을 옮겨도 내용이 바뀐 줄 모른다.
+              id={`extraction-tab-${t.key}`}
+              aria-controls={`extraction-panel-${t.key}`}
               aria-selected={tab === t.key}
               onClick={() => setTab(t.key)}
               className={`px-3 py-2 ${
@@ -231,7 +245,12 @@ export function ExtractionReview({ doc, fileUrl }: Props) {
           ))}
         </div>
 
-        <div className="flex-1 overflow-auto p-3 text-sm">
+        <div
+          role="tabpanel"
+          id={`extraction-panel-${tab}`}
+          aria-labelledby={`extraction-tab-${tab}`}
+          className="flex-1 overflow-auto p-3 text-sm"
+        >
           {tab === "text" && (
             <div>
               <label className="mb-2 flex items-center gap-2 text-xs text-slate-500">
@@ -260,7 +279,7 @@ export function ExtractionReview({ doc, fileUrl }: Props) {
                     type="button"
                     onClick={() => pageOcrMutation.mutate(page)}
                     disabled={pageOcrMutation.isPending || ocrRunning}
-                    className="mt-2 rounded bg-amber-600 px-4 py-2 font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+                    className="mt-2 rounded bg-amber-700 px-4 py-2 font-medium text-white hover:bg-amber-800 disabled:opacity-50"
                   >
                     현재 페이지 이미지로 읽기
                   </button>
@@ -292,25 +311,29 @@ export function ExtractionReview({ doc, fileUrl }: Props) {
                     <li key={b.id}>
                       <button
                         type="button"
+                        // 선택 상태를 배경색으로만 알리면 스크린리더 사용자는 어느
+                        // 구역이 지금 원문에서 하이라이트되고 있는지 알 수 없다.
+                        // 원문 대조가 이 화면의 핵심이라 거기서 막힌다(WCAG 1.4.1).
+                        aria-pressed={selectedBlockId === b.id}
                         onClick={() => focusBlock(b)}
                         className={`w-full rounded border px-2.5 py-1.5 text-left leading-snug ${
                           selectedBlockId === b.id
                             ? "border-amber-400 bg-amber-50"
-                            : "border-slate-150 border-slate-200 hover:bg-slate-50"
+                            : "border-slate-200 hover:bg-slate-50"
                         }`}
                       >
                         {(b.isHeader || b.isFooter) && (
-                          <span className="mr-1 rounded bg-slate-100 px-1 text-[10px] text-slate-500">
+                          <span className="mr-1 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">
                             반복 문구
                           </span>
                         )}
                         {b.isCaption && (
-                          <span className="mr-1 rounded bg-blue-50 px-1 text-[10px] text-blue-600">
+                          <span className="mr-1 rounded bg-blue-50 px-1.5 py-0.5 text-xs text-blue-700">
                             설명 글
                           </span>
                         )}
                         {b.isTable && (
-                          <span className="mr-1 rounded bg-green-50 px-1 text-[10px] text-green-700">
+                          <span className="mr-1 rounded bg-green-50 px-1.5 py-0.5 text-xs text-green-800">
                             표
                           </span>
                         )}
@@ -323,41 +346,43 @@ export function ExtractionReview({ doc, fileUrl }: Props) {
           )}
 
           {tab === "tables" && (
-            <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-4">
               {tablesQuery.isLoading && <p className="text-slate-500">불러오는 중…</p>}
               {(tablesQuery.data ?? []).length === 0 && !tablesQuery.isLoading && (
                 <p className="text-slate-500">이 문서에서 표를 찾지 못했어요.</p>
               )}
+              {/* 규칙 기반 추출의 한계는 모든 표에 똑같이 해당한다. 표마다 반복해서
+                  붙이면 매번 뜨는 경고가 되어 아무도 읽지 않고 표만 밀어낸다. */}
+              {(tablesQuery.data ?? []).length > 0 && (
+                <p className="rounded bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
+                  표는 자동으로 읽어낸 것이라 칸이 밀리거나 빠질 수 있어요. 중요한 수치는
+                  표 제목을 눌러 원문과 함께 확인해 주세요.
+                </p>
+              )}
+              {(tablesQuery.data ?? []).length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setWideTables((v) => !v)}
+                  aria-pressed={wideTables}
+                  className="hidden self-start rounded border border-slate-300 px-3 py-1.5 text-xs text-slate-700 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600 lg:inline-block"
+                >
+                  {/* 라벨은 상태와 무관하게 고정한다. 눌린 상태에서 "원문 넓게 보기"로
+                      바꾸면 스크린리더가 "원문 넓게 보기, 눌림"으로 읽어, 라벨은 다음
+                      동작을 aria-pressed는 현재 상태를 말해 서로 반대로 들린다. */}
+                  표 넓게 보기
+                </button>
+              )}
               {(tablesQuery.data ?? []).map((t) => (
-                <div key={t.id} className="rounded border border-slate-200 p-2">
-                  <div className="mb-1 flex items-center justify-between">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPage(t.pageNumber);
-                        setHighlights([{ x0: t.x0, y0: t.y0, x1: t.x1, y1: t.y1 }]);
-                        setFlashKey((k) => k + 1);
-                      }}
-                      className="text-blue-700 hover:underline"
-                    >
-                      {t.pageNumber}쪽의 표 {t.tableIndex + 1}
-                    </button>
-                    <span className="text-xs text-slate-500">
-                      {t.rowCount}행 × {t.columnCount}열
-                    </span>
-                  </div>
-                  {(t.confidence < 0.8 || t.extractionStatus !== "extracted") && (
-                    <p className="mb-1 rounded bg-amber-50 px-2 py-1 text-xs text-amber-800">
-                      표의 일부 내용을 정확히 읽지 못했을 수 있습니다. 원문과 함께 확인해
-                      주세요.
-                    </p>
-                  )}
-                  {t.markdownText && (
-                    <pre className="max-h-48 overflow-auto rounded bg-slate-50 p-2 text-xs">
-                      {t.markdownText}
-                    </pre>
-                  )}
-                </div>
+                <ExtractedTable
+                  key={t.id}
+                  table={t}
+                  onLocate={() => {
+                    nav.navigate({ pageNumber: t.pageNumber, bbox: [t.x0, t.y0, t.x1, t.y1] });
+                    // 다른 이동 경로와 동일하게 이전 블록 선택을 지운다 — 화면마다
+                    // 잔여 선택 상태가 다르면 같은 동작이 다르게 보인다.
+                    setSelectedBlockId(null);
+                  }}
+                />
               ))}
             </div>
           )}
@@ -366,9 +391,7 @@ export function ExtractionReview({ doc, fileUrl }: Props) {
             <DocumentSearch
               documentId={doc.id}
               onNavigate={(pageNumber, bbox) => {
-                setPage(pageNumber);
-                setHighlights([{ x0: bbox[0], y0: bbox[1], x1: bbox[2], y1: bbox[3] }]);
-                setFlashKey((k) => k + 1);
+                nav.navigate({ pageNumber, bbox });
                 setSelectedBlockId(null);
               }}
             />

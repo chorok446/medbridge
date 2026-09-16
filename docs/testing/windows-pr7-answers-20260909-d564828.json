@@ -1,0 +1,760 @@
+{
+  "installerCommit": "d564828952ccddb110ed3abcd3b5f844f0881bcd",
+  "observation": "Read-only projection after GUI retry and follow-up; cancellation failure preserved in separate pre-retry observation",
+  "active": 0,
+  "new_answers": [
+    {
+      "status": "completed",
+      "error_code": null,
+      "created_at": "2026-09-09 10:56:18.133673",
+      "stream_started_at": "2026-09-09 10:56:18.132673",
+      "completed_at": "2026-09-09 10:56:57.993820",
+      "cancel_requested_at": null,
+      "interrupted_at": null,
+      "model_name": "qwen3:8b",
+      "question": "심장은 온몸에 혈액을 보내는 근육 기관이다라는 문서의 문장을 구성하는 단어를 각각 설명하고 문단 1부터 문단 12까지 순서대로 원문을 인용해 주세요.",
+      "content": "문단 1. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c0]\n문단 2. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c1]\n문단 3. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c2]\n문단 4. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c3]\n문단 5. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c4]\n문단 6. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c5]\n문단 7. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c6]\n문단 8. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c7]\n문단 9. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c8]\n문단 10. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c9]\n문단 11. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c10]\n문단 12. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c11]",
+      "draft_chars": 0,
+      "last_stream_seq": 12,
+      "duration_sec": 39.861147,
+      "claims": [
+        {
+          "index": 0,
+          "text": "문단 1. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 1,
+          "text": "문단 2. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 2,
+          "text": "문단 3. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 3,
+          "text": "문단 4. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 4,
+          "text": "문단 5. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 5,
+          "text": "문단 6. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 6,
+          "text": "문단 7. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 7,
+          "text": "문단 8. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 8,
+          "text": "문단 9. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 9,
+          "text": "문단 10. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 10,
+          "text": "문단 11. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 11,
+          "text": "문단 12. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        }
+      ],
+      "exact_ordered_12": true,
+      "duplicate_text_and_sources": 0,
+      "known_unsupported_terms": []
+    },
+    {
+      "status": "completed",
+      "error_code": null,
+      "created_at": "2026-09-09 11:00:34.993220",
+      "stream_started_at": "2026-09-09 11:00:34.993220",
+      "completed_at": "2026-09-09 11:01:14.483422",
+      "cancel_requested_at": null,
+      "interrupted_at": null,
+      "model_name": "qwen3:8b",
+      "question": "심장은 온몸에 혈액을 보내는 근육 기관이다라는 문서의 문장을 구성하는 단어를 각각 설명하고 문단 1부터 문단 12까지 순서대로 원문을 인용해 주세요.",
+      "content": "문단 1. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c0]\n문단 2. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c1]\n문단 3. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c2]\n문단 4. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c3]\n문단 5. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c4]\n문단 6. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c5]\n문단 7. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c6]\n문단 8. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c7]\n문단 9. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c8]\n문단 10. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c9]\n문단 11. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c10]\n문단 12. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c11]",
+      "draft_chars": 0,
+      "last_stream_seq": 12,
+      "duration_sec": 39.490202,
+      "claims": [
+        {
+          "index": 0,
+          "text": "문단 1. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 1,
+          "text": "문단 2. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 2,
+          "text": "문단 3. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 3,
+          "text": "문단 4. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 4,
+          "text": "문단 5. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 5,
+          "text": "문단 6. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 6,
+          "text": "문단 7. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 7,
+          "text": "문단 8. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 8,
+          "text": "문단 9. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 9,
+          "text": "문단 10. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 10,
+          "text": "문단 11. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 11,
+          "text": "문단 12. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        }
+      ],
+      "exact_ordered_12": true,
+      "duplicate_text_and_sources": 0,
+      "known_unsupported_terms": []
+    },
+    {
+      "status": "completed",
+      "error_code": null,
+      "created_at": "2026-09-09 11:02:28.346938",
+      "stream_started_at": "2026-09-09 11:02:28.345941",
+      "completed_at": "2026-09-09 11:03:03.501145",
+      "cancel_requested_at": null,
+      "interrupted_at": null,
+      "model_name": "qwen3:8b",
+      "question": "심장은 온몸에 혈액을 보내는 근육 기관이다라는 문서의 문장을 구성하는 단어를 각각 설명하고 문단 1부터 문단 12까지 순서대로 원문을 인용해 주세요.",
+      "content": "문단 1. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c0]\n문단 2. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c1]\n문단 3. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c2]\n문단 4. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c3]\n문단 5. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c4]\n문단 6. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c5]\n문단 7. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c6]\n문단 8. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c7]\n문단 9. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c8]\n문단 10. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c9]\n문단 11. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c10]\n문단 12. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c11]",
+      "draft_chars": 0,
+      "last_stream_seq": 12,
+      "duration_sec": 35.155204,
+      "claims": [
+        {
+          "index": 0,
+          "text": "문단 1. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 1,
+          "text": "문단 2. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 2,
+          "text": "문단 3. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 3,
+          "text": "문단 4. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 4,
+          "text": "문단 5. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 5,
+          "text": "문단 6. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 6,
+          "text": "문단 7. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 7,
+          "text": "문단 8. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 8,
+          "text": "문단 9. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 9,
+          "text": "문단 10. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 10,
+          "text": "문단 11. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 11,
+          "text": "문단 12. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        }
+      ],
+      "exact_ordered_12": true,
+      "duplicate_text_and_sources": 0,
+      "known_unsupported_terms": []
+    },
+    {
+      "status": "completed",
+      "error_code": null,
+      "created_at": "2026-09-09 11:04:52.288032",
+      "stream_started_at": "2026-09-09 11:04:52.288032",
+      "completed_at": "2026-09-09 11:05:21.911280",
+      "cancel_requested_at": null,
+      "interrupted_at": null,
+      "model_name": "qwen3:8b",
+      "question": "이 문서에서 심장은 어떤 기관이라고 설명하나요?",
+      "content": "심장은 온몸에 혈액을 보내는 근육 기관이다.[c0]",
+      "draft_chars": 0,
+      "last_stream_seq": 1,
+      "duration_sec": 29.623248,
+      "claims": [
+        {
+          "index": 0,
+          "text": "심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        }
+      ],
+      "exact_ordered_12": false,
+      "duplicate_text_and_sources": 0,
+      "known_unsupported_terms": []
+    },
+    {
+      "status": "completed",
+      "error_code": null,
+      "created_at": "2026-09-09 11:07:31.488019",
+      "stream_started_at": "2026-09-09 11:07:31.488019",
+      "completed_at": "2026-09-09 11:08:07.179286",
+      "cancel_requested_at": null,
+      "interrupted_at": null,
+      "model_name": "qwen3:8b",
+      "question": "심장은 온몸에 혈액을 보내는 근육 기관이다라는 문서의 문장을 구성하는 단어를 각각 설명하고 문단 1부터 문단 12까지 순서대로 원문을 인용해 주세요.",
+      "content": "문단 1. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c0]\n문단 2. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c1]\n문단 3. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c2]\n문단 4. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c3]\n문단 5. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c4]\n문단 6. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c5]\n문단 7. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c6]\n문단 8. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c7]\n문단 9. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c8]\n문단 10. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c9]\n문단 11. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c10]\n문단 12. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c11]",
+      "draft_chars": 0,
+      "last_stream_seq": 12,
+      "duration_sec": 35.691267,
+      "claims": [
+        {
+          "index": 0,
+          "text": "문단 1. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 1,
+          "text": "문단 2. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 2,
+          "text": "문단 3. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 3,
+          "text": "문단 4. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 4,
+          "text": "문단 5. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 5,
+          "text": "문단 6. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 6,
+          "text": "문단 7. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 7,
+          "text": "문단 8. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 8,
+          "text": "문단 9. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 9,
+          "text": "문단 10. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 10,
+          "text": "문단 11. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 11,
+          "text": "문단 12. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        }
+      ],
+      "exact_ordered_12": true,
+      "duplicate_text_and_sources": 0,
+      "known_unsupported_terms": []
+    },
+    {
+      "status": "completed",
+      "error_code": null,
+      "created_at": "2026-09-09 11:09:48.758192",
+      "stream_started_at": "2026-09-09 11:18:08.235527",
+      "completed_at": "2026-09-09 11:18:33.310373",
+      "cancel_requested_at": null,
+      "interrupted_at": null,
+      "model_name": "qwen3:8b",
+      "question": "심장은 온몸에 혈액을 보내는 근육 기관이다라는 문서의 문장을 구성하는 단어를 각각 설명하고 문단 1부터 문단 12까지 순서대로 원문을 인용해 주세요.",
+      "content": "문단 1. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c0]\n문단 2. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c1]\n문단 3. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c2]\n문단 4. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c3]\n문단 5. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c4]\n문단 6. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c5]\n문단 7. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c6]\n문단 8. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c7]\n문단 9. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c8]\n문단 10. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c9]\n문단 11. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c10]\n문단 12. 심장은 온몸에 혈액을 보내는 근육 기관이다.[c11]",
+      "draft_chars": 0,
+      "last_stream_seq": 12,
+      "duration_sec": 25.074846,
+      "claims": [
+        {
+          "index": 0,
+          "text": "문단 1. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 1,
+          "text": "문단 2. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 2,
+          "text": "문단 3. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 3,
+          "text": "문단 4. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 4,
+          "text": "문단 5. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 5,
+          "text": "문단 6. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 6,
+          "text": "문단 7. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 7,
+          "text": "문단 8. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 8,
+          "text": "문단 9. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 9,
+          "text": "문단 10. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 10,
+          "text": "문단 11. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        },
+        {
+          "index": 11,
+          "text": "문단 12. 심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        }
+      ],
+      "exact_ordered_12": true,
+      "duplicate_text_and_sources": 0,
+      "known_unsupported_terms": []
+    },
+    {
+      "status": "completed",
+      "error_code": null,
+      "created_at": "2026-09-09 11:20:36.878192",
+      "stream_started_at": "2026-09-09 11:20:36.878192",
+      "completed_at": "2026-09-09 11:20:39.683149",
+      "cancel_requested_at": null,
+      "interrupted_at": null,
+      "model_name": "qwen3:8b",
+      "question": "이 문서에서 심장은 어떤 기관이라고 설명하나요?",
+      "content": "심장은 온몸에 혈액을 보내는 근육 기관이다.[c0]",
+      "draft_chars": 0,
+      "last_stream_seq": 1,
+      "duration_sec": 2.804957,
+      "claims": [
+        {
+          "index": 0,
+          "text": "심장은 온몸에 혈액을 보내는 근육 기관이다.",
+          "status": "supported",
+          "pages": [
+            1,
+            2
+          ]
+        }
+      ],
+      "exact_ordered_12": false,
+      "duplicate_text_and_sources": 0,
+      "known_unsupported_terms": []
+    }
+  ],
+  "preservationAfterNormalRestart": {
+    "quick_check": "ok",
+    "foreign_key_violations": 0,
+    "unchanged_tables": {
+      "documents": {
+        "rows": 12,
+        "sha256": "c3a70a020aa70b9318ad45063d61edbe52be8d9f82716ea1c3e4cc7386541022",
+        "matches_backup": true
+      },
+      "document_pages": {
+        "rows": 4339,
+        "sha256": "042fba7ec097311e0edc63e11f09154df7bf919511d1ed6bcda72cb490cc06c7",
+        "matches_backup": true
+      },
+      "document_blocks": {
+        "rows": 364819,
+        "sha256": "a5f391b6db39fe6ab4a1147b6bb63212c79e14ee4e9660940fee95811132372b",
+        "matches_backup": true
+      },
+      "summary_settings": {
+        "rows": 1,
+        "sha256": "81ff5a90db10b3a83102e2ff05e5a1443c01f1bd8b5c12404cb3ea180e2b2421",
+        "matches_backup": true
+      }
+    },
+    "original_qa_rows": {
+      "qa_threads": {
+        "rows": 8,
+        "unchanged": 8
+      },
+      "qa_messages": {
+        "rows": 38,
+        "unchanged": 38
+      },
+      "qa_claims": {
+        "rows": 89,
+        "unchanged": 89
+      }
+    },
+    "current_qa_fingerprints": {
+      "qa_threads": {
+        "rows": 13,
+        "sha256": "6b052f0f283019c48941ad7441b6eddf96346afb190b2e4e690e8d9a6ca14705"
+      },
+      "qa_messages": {
+        "rows": 52,
+        "sha256": "3cba9c59a57db5f4f74bc16ced02a3a8540deacd926c614988bba704f73c5244"
+      },
+      "qa_claims": {
+        "rows": 151,
+        "sha256": "52ca872701f7a1c54ecd6661027f77e2510393b120906c34a5c435035dcd4377"
+      }
+    },
+    "active_qa": 0
+  }
+}

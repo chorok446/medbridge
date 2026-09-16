@@ -153,7 +153,7 @@ export function UploadDropzone({ onUploaded }: Props) {
               type="button"
               onClick={startUpload}
               disabled={!privacyConfirmed}
-              className="rounded bg-blue-600 px-5 py-2 font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
+              className="rounded-md bg-blue-600 px-5 py-2 font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-40"
             >
               업로드
             </button>

@@ -62,12 +62,14 @@ export function uploadDocument(
   onProgress: (percent: number) => void,
 ): UploadHandle {
   const xhr = new XMLHttpRequest();
+  let aborted = false;
   const promise = new Promise<DocumentCreated>((resolve, reject) => {
-    void getApiConfig().then(({ base, token }) => {
-      const form = new FormData();
-      form.append("file", file);
-      if (title) form.append("title", title);
-
+    getApiConfig().then(({ base, token }) => {
+      // 설정 해석 중(xhr.open 전)의 취소 — xhr.abort()는 이 시점엔 abort 이벤트를 못 낸다.
+      if (aborted) {
+        reject(new Error("업로드를 취소했습니다."));
+        return;
+      }
       xhr.upload.addEventListener("progress", (e) => {
         if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
       });
@@ -93,10 +95,23 @@ export function uploadDocument(
         reject(new Error("연결에 문제가 생겨 파일을 올리지 못했습니다. 다시 시도해 주세요.")),
       );
       xhr.addEventListener("abort", () => reject(new Error("업로드를 취소했습니다.")));
-      xhr.open("POST", `${base}/api/documents`);
+      // multipart/form-data는 Starlette가 body 전체를 OS 임시파일에 먼저 spool한 뒤 앱
+      // staging으로 다시 복사한다. raw PDF 경로는 ASGI stream을 staging에 한 번만 쓴다.
+      xhr.open("POST", `${base}/api/documents/stream`);
       if (token) xhr.setRequestHeader("X-MedBridge-Token", token);
-      xhr.send(form);
-    });
+      xhr.setRequestHeader("Content-Type", "application/pdf");
+      xhr.setRequestHeader("X-MedBridge-Filename", encodeURIComponent(file.name));
+      xhr.setRequestHeader("X-MedBridge-File-Size", String(file.size));
+      if (title) xhr.setRequestHeader("X-MedBridge-Title", encodeURIComponent(title));
+      xhr.send(file);
+      // 설정 해석 실패를 삼키면 promise가 영원히 pending — 업로드 UI 전체가 먹통이 된다.
+    }, reject);
   });
-  return { promise, abort: () => xhr.abort() };
+  return {
+    promise,
+    abort: () => {
+      aborted = true;
+      xhr.abort();
+    },
+  };
 }

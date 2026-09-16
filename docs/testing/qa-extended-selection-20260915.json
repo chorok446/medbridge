@@ -1,0 +1,488 @@
+{
+  "schema_version": 1,
+  "date_kst": "2026-09-15",
+  "evaluation_commit": "f32b79f58aca9abc34714a396c78a7ddf3a8abd3",
+  "scope": "synthetic_source_selection_only",
+  "release_approved": false,
+  "product_changed": false,
+  "database_writes": 0,
+  "ollama_version": "0.34.0",
+  "preflight_ci": {
+    "run_id": 34801840531,
+    "head_sha": "b10b684ab14e806cc873fa8f9358af68bc2fc7e7",
+    "conclusion": "success",
+    "successful_jobs": 6
+  },
+  "file_sha256": {
+    "apps/api/app/qa_eval/extended_selection_evaluation.py": "db342c123aa227a572f0c1c6dc9c8b4f78a74e5d57f4557a9fd480db1e1f53f3",
+    "apps/api/app/qa_eval/source_bundle_selection.py": "c7dfe65ba1d24e639612c99baa46d8a630cc2117852d2aab37d9da0d427cd44a",
+    "apps/api/app/qa_eval/bundle_assessment.py": "65c9ba0e19fedbc68eb43cf3a39c210b4460418e10115fd60ba449930df162ee"
+  },
+  "automated_tests": {
+    "focused_passed": 232,
+    "new_regressions": 65,
+    "api_passed": 1923,
+    "api_skipped": 4,
+    "api_warnings": 1,
+    "api_seconds": 174.95,
+    "ruff": "passed",
+    "mypy_sources": 138,
+    "mypy": "passed"
+  },
+  "total_selection_attempts": 24,
+  "server_observations": {
+    "http_500_times_kst": ["2026-09-15T11:29:10+09:00", "2026-09-15T11:31:50+09:00"],
+    "app_pid": 26896,
+    "server_pid": 27896,
+    "runner_pid_seen_during_extended": 23536,
+    "runner_seen_in_post_error_process_list": false,
+    "api_ps_still_reports_model_after_error": true,
+    "loaded_size_bytes": 6295440588,
+    "loaded_vram_bytes": 6295440588,
+    "context_length": 8192,
+    "matching_windows_application_events_in_last_30_minutes": 0,
+    "root_cause_confirmed": false,
+    "additional_restarts": 0
+  },
+  "runs": [
+    {
+      "name": "fixed",
+      "shell_exit_code": 1,
+      "runner_exit_code_observed": null,
+      "note": "PowerShell invocation did not explicitly propagate LASTEXITCODE; gate report is failed/incomplete.",
+      "report": {
+        "schema_version": 3,
+        "model": "qwen3:8b",
+        "provider": "local",
+        "strategy": "fact_checklist",
+        "suite": "fixed",
+        "repeat": 3,
+        "database_writes": 0,
+        "selection_attempts": 5,
+        "model_digest_unchanged": true,
+        "results": [
+          {
+            "case_id": "mixed",
+            "repeat": 1,
+            "status": "selected",
+            "selected_indices": [
+              0,
+              1,
+              2
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 6.131
+          },
+          {
+            "case_id": "unrelated_only",
+            "repeat": 1,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 0.796
+          },
+          {
+            "case_id": "instruction_unrelated",
+            "repeat": 1,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 0.806
+          },
+          {
+            "case_id": "mixed",
+            "repeat": 2,
+            "status": "selected",
+            "selected_indices": [
+              0,
+              1,
+              2
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 1.699
+          },
+          {
+            "case_id": "unrelated_only",
+            "repeat": 2,
+            "status": "error",
+            "selected_indices": [],
+            "missing_sources": null,
+            "unexpected_sources": null,
+            "incomplete_criteria": null,
+            "failures": [
+              "evaluation_error"
+            ],
+            "passed": false,
+            "seconds": 0.972
+          }
+        ],
+        "model_digest": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+        "execution_failure": "evaluation_error",
+        "execution_detail": {
+          "phase": "selector",
+          "kind": "SummaryNetworkError",
+          "category": "server_error"
+        },
+        "gate": {
+          "scope": "synthetic_source_selection_only",
+          "release_approved": false,
+          "complete": false,
+          "passed": false,
+          "expected_trials": 9,
+          "recorded_trials": 5,
+          "failed_trials": 1,
+          "failed_cases": [
+            "unrelated_only"
+          ],
+          "failures": [
+            "incomplete_trial_set",
+            "selection_quality_failed",
+            "execution_or_provenance_failed"
+          ]
+        }
+      }
+    },
+    {
+      "name": "extended",
+      "shell_exit_code": 2,
+      "report": {
+        "schema_version": 3,
+        "model": "qwen3:8b",
+        "provider": "local",
+        "strategy": "fact_checklist",
+        "suite": "extended",
+        "repeat": 3,
+        "database_writes": 0,
+        "selection_attempts": 19,
+        "model_digest_unchanged": true,
+        "results": [
+          {
+            "case_id": "mixed",
+            "repeat": 1,
+            "status": "selected",
+            "selected_indices": [
+              0,
+              1,
+              2
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 5.994
+          },
+          {
+            "case_id": "unrelated_only",
+            "repeat": 1,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 0.781
+          },
+          {
+            "case_id": "instruction_unrelated",
+            "repeat": 1,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 0.862
+          },
+          {
+            "case_id": "new_subject_axes",
+            "repeat": 1,
+            "status": "selected",
+            "selected_indices": [
+              1,
+              2
+            ],
+            "missing_sources": 1,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 1,
+            "failures": [
+              "missing_sources",
+              "incomplete_criteria"
+            ],
+            "passed": false,
+            "seconds": 1.495
+          },
+          {
+            "case_id": "narrowed_basis",
+            "repeat": 1,
+            "status": "selected",
+            "selected_indices": [
+              1
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 1.478
+          },
+          {
+            "case_id": "history_resolves_subject",
+            "repeat": 1,
+            "status": "selected",
+            "selected_indices": [
+              1,
+              2
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 1.52
+          },
+          {
+            "case_id": "history_not_evidence",
+            "repeat": 1,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 0.617
+          },
+          {
+            "case_id": "facts_with_instruction",
+            "repeat": 1,
+            "status": "selected",
+            "selected_indices": [
+              0,
+              2
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 1.516
+          },
+          {
+            "case_id": "mixed",
+            "repeat": 2,
+            "status": "selected",
+            "selected_indices": [
+              0,
+              1,
+              2
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 1.554
+          },
+          {
+            "case_id": "unrelated_only",
+            "repeat": 2,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 0.783
+          },
+          {
+            "case_id": "instruction_unrelated",
+            "repeat": 2,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 0.787
+          },
+          {
+            "case_id": "new_subject_axes",
+            "repeat": 2,
+            "status": "selected",
+            "selected_indices": [
+              1,
+              2
+            ],
+            "missing_sources": 1,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 1,
+            "failures": [
+              "missing_sources",
+              "incomplete_criteria"
+            ],
+            "passed": false,
+            "seconds": 1.508
+          },
+          {
+            "case_id": "narrowed_basis",
+            "repeat": 2,
+            "status": "selected",
+            "selected_indices": [
+              1
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 1.535
+          },
+          {
+            "case_id": "history_resolves_subject",
+            "repeat": 2,
+            "status": "selected",
+            "selected_indices": [
+              1,
+              2
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 1.453
+          },
+          {
+            "case_id": "history_not_evidence",
+            "repeat": 2,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 0.609
+          },
+          {
+            "case_id": "facts_with_instruction",
+            "repeat": 2,
+            "status": "selected",
+            "selected_indices": [
+              0,
+              2
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 1.568
+          },
+          {
+            "case_id": "mixed",
+            "repeat": 3,
+            "status": "selected",
+            "selected_indices": [
+              0,
+              1,
+              2
+            ],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 1.443
+          },
+          {
+            "case_id": "unrelated_only",
+            "repeat": 3,
+            "status": "not_found",
+            "selected_indices": [],
+            "missing_sources": 0,
+            "unexpected_sources": 0,
+            "incomplete_criteria": 0,
+            "failures": [],
+            "passed": true,
+            "seconds": 0.863
+          },
+          {
+            "case_id": "instruction_unrelated",
+            "repeat": 3,
+            "status": "error",
+            "selected_indices": [],
+            "missing_sources": null,
+            "unexpected_sources": null,
+            "incomplete_criteria": null,
+            "failures": [
+              "evaluation_error"
+            ],
+            "passed": false,
+            "seconds": 0.97
+          }
+        ],
+        "model_digest": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+        "execution_failure": "evaluation_error",
+        "execution_detail": {
+          "phase": "selector",
+          "kind": "SummaryNetworkError",
+          "category": "server_error"
+        },
+        "gate": {
+          "scope": "synthetic_source_selection_only",
+          "release_approved": false,
+          "complete": false,
+          "passed": false,
+          "expected_trials": 24,
+          "recorded_trials": 19,
+          "failed_trials": 3,
+          "failed_cases": [
+            "instruction_unrelated",
+            "new_subject_axes"
+          ],
+          "failures": [
+            "incomplete_trial_set",
+            "selection_quality_failed",
+            "execution_or_provenance_failed"
+          ]
+        }
+      },
+      "exit_code": 2,
+      "diagnostic_errors": [
+        {
+          "attempt": 19,
+          "chain": [
+            {
+              "kind": "SummaryNetworkError",
+              "errno": null,
+              "winerror": null,
+              "http_code": null
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

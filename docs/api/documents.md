@@ -18,6 +18,7 @@ GUI ↔ sidecar 전용. 127.0.0.1 + 토큰(`X-MedBridge-Token`, 파일 엔드포
 | GET | `/health` | sidecar 상태 + 마이그레이션 리비전 (Tauri 셸 전용) |
 | GET/PATCH | `/api/profile` | 앱 설정 (표시 이름·학습 수준) |
 | POST | `/api/documents` | PDF multipart 업로드 → 즉시 문서 ID·상태 반환 |
+| POST | `/api/documents/stream` | GUI용 raw PDF 스트리밍 업로드(이중 임시파일 방지) |
 | GET | `/api/documents` | 목록 (status·search·cursor·limit) |
 | GET | `/api/documents/{id}` | 상세·처리 상태 |
 | GET | `/api/documents/{id}/file` | PDF 원문 (미리보기) |

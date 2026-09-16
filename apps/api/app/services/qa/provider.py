@@ -1,14 +1,19 @@
 """Q&A 공급자 — 요약과 별개의 Protocol이지만 네트워크 안전 경로와 모델 설정·키를
 재사용한다(별도 HTTP 클라이언트·키 저장소를 만들지 않는다).
 
-공급자는 chunkId·sectionTitle·text·pageStart/pageEnd만 본다. bbox·저장 경로·내부 DB
-구조는 전달하지 않는다.
+모델은 chunkId·text만 본다. 제목·쪽수 등 위치 메타데이터는 출처 복원용으로 서버에
+유지하며 bbox·저장 경로·내부 DB 구조도 전달하지 않는다.
 """
 
 import json
 from dataclasses import dataclass, field
 from typing import Protocol
 
+from app.services.qa.prompt_contract import (
+    CLAIM_SOURCE_AND_ABSTENTION_RULE,
+    CROSS_LANGUAGE_GROUNDING_RULE,
+    VERBATIM_QUOTE_RULE,
+)
 from app.services.qa.settings import (
     ANSWER_MAX_CHARS,
     MAX_CLAIMS,
@@ -33,12 +38,27 @@ class QaHistoryTurn:
     content: str
 
 
+# 요약 파이프라인과 같은 3단계(learner_level). 스트리밍 프롬프트 빌더도 이 표를 쓴다 —
+# 두 경로가 다른 문구를 주면 사용자가 같은 수준을 골라도 답이 달라진다.
+# 알 수 없는 값은 기본값으로 떨어뜨린다: 사용자 입력이 프롬프트 문구를 바꾸는 경로이므로
+# 화이트리스트로만 받는다.
+LEVEL_HINTS = {
+    "concise": "답변은 간단하게, 핵심만 짧게 쓴다.",
+    "nursing_student": "간호학생이 이해할 수 있게 용어를 풀어 설명한다.",
+    "experienced_nurse": (
+        "임상 경험이 있는 간호사가 읽는다. 기초 용어 설명은 줄이고 핵심을 밀도 있게 쓴다."
+    ),
+}
+DEFAULT_LEVEL = "nursing_student"
+
+
 @dataclass
 class QaRequest:
     question: str
     chunks: list[QaContextChunk]
     history: list[QaHistoryTurn] = field(default_factory=list)
     language: str = "ko"
+    learner_level: str = DEFAULT_LEVEL
 
 
 class QaProvider(Protocol):
@@ -58,12 +78,18 @@ _SYSTEM_PROMPT = (
     "- 상충하는 내용이 있으면 한쪽을 임의로 고르지 말고 conflicting_evidence로 표시한다.\n"
     "- 모든 사실 주장(claim)에는 근거가 된 청크의 chunkId를 sourceChunkIds로 붙인다. "
     "근거 없는 사실 주장을 만들지 않는다.\n"
+    f"{CROSS_LANGUAGE_GROUNDING_RULE}"
+    f"{CLAIM_SOURCE_AND_ABSTENTION_RULE}"
+    "- answer 산문에서 근거가 있는 문장 끝에 그 claim의 번호를 [c0], [c1] 형태로 붙인다. "
+    "번호는 claims 배열의 순서(0부터)다.\n"
+    "- 근거가 없는 문장에는 마커를 붙이지 않는다. claims에 없는 번호를 쓰지 않는다.\n"
     "- page나 bbox를 직접 출력하지 않는다.\n"
     "- JSON 외의 텍스트를 출력하지 않는다.\n"
     'JSON 형식: {"answer": "...", "answerStatus": '
     '"answered|not_found|insufficient_evidence|conflicting_evidence", '
     '"claims": [{"text": "...", "sourceChunkIds": ["..."]}], '
     '"followUpSuggestions": ["..."]}'
+    + VERBATIM_QUOTE_RULE
 )
 
 
@@ -103,7 +129,8 @@ class DeterministicQaProvider:
             if c.text.strip()
         ]
         claims = [{"text": t, "sourceChunkIds": [cid]} for t, cid in pairs]
-        answer = " ".join(t for t, _ in pairs)[:ANSWER_MAX_CHARS]
+        # 마커를 함께 낸다 — 통합 테스트가 실제 인용 경로를 타야 의미가 있다.
+        answer = " ".join(f"{t}[c{i}]" for i, (t, _) in enumerate(pairs))[:ANSWER_MAX_CHARS]
         return {
             "answer": answer or "이 자료에서는 확인할 수 없습니다.",
             "answerStatus": "answered" if claims else "not_found",
@@ -142,7 +169,11 @@ class OpenAICompatibleQaProvider:
         )
 
     def answer(self, request: QaRequest) -> dict:
-        from app.services.summary.endpoint import SummaryNetworkError, post_json
+        from app.services.summary.endpoint import (
+            SummaryNetworkError,
+            parse_chat_content,
+            post_json,
+        )
         from app.services.summary.settings import (
             LOCAL_MAX_TOKENS,
             LOCAL_REASONING_EFFORT,
@@ -178,17 +209,11 @@ class OpenAICompatibleQaProvider:
                 timeout=self._timeout or SUMMARY_REQUEST_TIMEOUT_SEC,
                 max_response_bytes=SUMMARY_MAX_RESPONSE_BYTES,
             )
+        # 요약과 같은 envelope 파서 — finish_reason(length 절단 등) 검사·thinking 제거 포함.
+        content = parse_chat_content(data)
         try:
-            content = data["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError) as exc:
-            raise SummaryNetworkError("bad_response") from exc
-        if isinstance(content, str):
-            from app.services.model_output import strip_thinking
-
-            content = strip_thinking(content)  # thinking 흔적 제거 후 JSON 파싱
-        try:
-            return json.loads(content) if isinstance(content, str) else content
-        except (ValueError, TypeError) as exc:
+            return json.loads(content)
+        except ValueError as exc:
             raise SummaryNetworkError("bad_response") from exc
 
 
@@ -198,12 +223,12 @@ def _build_user_prompt(request: QaRequest) -> str:
         hist = "\n".join(f"[{t.role}] {t.content}" for t in request.history)
         parts.append(f"이전 대화(질문 해석용 참고, 근거로 쓰지 마라):\n{hist}")
     chunk_block = "\n\n".join(
-        f"[chunkId {c.chunk_id}] (제목: {c.section_title or '없음'}, "
-        f"{c.page_start}-{c.page_end}쪽)\n{c.text}"
+        f"[chunkId {c.chunk_id}]\n{c.text}"
         for c in request.chunks
     )
     parts.append(f"문서 청크:\n{chunk_block}")
     parts.append(f"질문: {request.question}")
+    parts.append(LEVEL_HINTS.get(request.learner_level, LEVEL_HINTS[DEFAULT_LEVEL]))
     parts.append(
         f"위 청크만 근거로 JSON으로 답하라. claims는 최대 {MAX_CLAIMS}개, "
         f"followUpSuggestions는 최대 {MAX_FOLLOWUPS}개, 문서 범위 질문만."

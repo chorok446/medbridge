@@ -1,0 +1,253 @@
+{
+  "schema_version": 1,
+  "evaluated_at": "2026-09-12",
+  "scope": "evaluation_only_no_product_integration",
+  "evaluation_commit": "b3f1cc814121c1bf202f4955487bed8cae4d4072",
+  "validation": {
+    "new_unit_tests": 47,
+    "additional_integration_tests": 1,
+    "related_tests_passed": 151,
+    "related_tests_seconds": 1.40,
+    "full_api_passed": 1738,
+    "full_api_skipped": 4,
+    "full_api_seconds": 120.77,
+    "ruff": "passed",
+    "mypy": "passed",
+    "mypy_source_files": 134
+  },
+  "product_commit": "9cc6414352a658492766aa103151dc3f27783509",
+  "model": "qwen3:8b",
+  "model_digest": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+  "calls": {
+    "initial_private_failure": 1,
+    "synthetic_transport_probe": 1,
+    "plain_baseline": 2,
+    "outlined_singletons": 2,
+    "verified_bundles": 2,
+    "synthetic_controls": 3,
+    "total": 11
+  },
+  "initial_failure": {
+    "type": "SummaryNetworkError",
+    "category_recorded": false,
+    "per_call_deadline_seconds": 180,
+    "root_cause_confirmed": false,
+    "automatic_retry": false,
+    "subsequent_same_input_succeeded": true
+  },
+  "transport_probe": {
+    "calls": 1,
+    "seconds": 0.487,
+    "expected_selection": true,
+    "model_digest_unchanged": true
+  },
+  "input": {
+    "retrieved_chunks": 32,
+    "characters": 2186,
+    "history_turns": 0,
+    "expected_blocks": [
+      9,
+      5,
+      5
+    ],
+    "group_names": [
+      "type_table",
+      "stage_section",
+      "functional_table"
+    ]
+  },
+  "baseline": [
+    {
+      "question": "long",
+      "status": "selected",
+      "selected_chunks": 3,
+      "selected_chars": 655,
+      "selected_blocks": [
+        5,
+        0,
+        5
+      ],
+      "selected_chunks_outside_target_groups": 1,
+      "grade_row_matches": 4,
+      "source_snapshot_preserved": true,
+      "seconds": 2.127
+    },
+    {
+      "question": "short",
+      "status": "selected",
+      "selected_chunks": 3,
+      "selected_chars": 625,
+      "selected_blocks": [
+        5,
+        0,
+        5
+      ],
+      "selected_chunks_outside_target_groups": 1,
+      "grade_row_matches": 4,
+      "source_snapshot_preserved": true,
+      "seconds": 1.938
+    }
+  ],
+  "singletons": [
+    {
+      "question": "long",
+      "status": "selected",
+      "selected_chunks": 7,
+      "selected_chars": 1633,
+      "selected_blocks": [
+        9,
+        5,
+        5
+      ],
+      "selected_chunks_outside_target_groups": 3,
+      "grade_row_matches": 4,
+      "source_snapshot_preserved": true,
+      "seconds": 2.36
+    },
+    {
+      "question": "short",
+      "status": "selected",
+      "selected_chunks": 5,
+      "selected_chars": 1541,
+      "selected_blocks": [
+        9,
+        5,
+        5
+      ],
+      "selected_chunks_outside_target_groups": 1,
+      "grade_row_matches": 4,
+      "source_snapshot_preserved": true,
+      "seconds": 2.082
+    }
+  ],
+  "bundled": {
+    "complete": true,
+    "mode": "bundled",
+    "calls": 2,
+    "database_writes": 0,
+    "model_digest_unchanged": true,
+    "records": [
+      {
+        "question": "long",
+        "chunks": 32,
+        "input_chars": 2186,
+        "status": "selected",
+        "selected_chunks": 7,
+        "selected_chars": 1558,
+        "selected_chunks_outside_target_groups": 3,
+        "source_snapshot_preserved": true,
+        "seconds": 2.277,
+        "groups": [
+          {
+            "group": "type_table",
+            "expected_blocks": 9,
+            "available_blocks": 9,
+            "selected_blocks": 9,
+            "available_chunks": 2,
+            "selected_chunks": 2,
+            "exact_original_grade_row_matches": null
+          },
+          {
+            "group": "stage_section",
+            "expected_blocks": 5,
+            "available_blocks": 5,
+            "selected_blocks": 5,
+            "available_chunks": 1,
+            "selected_chunks": 1,
+            "exact_original_grade_row_matches": null
+          },
+          {
+            "group": "functional_table",
+            "expected_blocks": 5,
+            "available_blocks": 5,
+            "selected_blocks": 5,
+            "available_chunks": 1,
+            "selected_chunks": 1,
+            "exact_original_grade_row_matches": 4
+          }
+        ]
+      },
+      {
+        "question": "short",
+        "chunks": 32,
+        "input_chars": 2186,
+        "status": "selected",
+        "selected_chunks": 4,
+        "selected_chars": 1406,
+        "selected_chunks_outside_target_groups": 0,
+        "source_snapshot_preserved": true,
+        "seconds": 1.986,
+        "groups": [
+          {
+            "group": "type_table",
+            "expected_blocks": 9,
+            "available_blocks": 9,
+            "selected_blocks": 9,
+            "available_chunks": 2,
+            "selected_chunks": 2,
+            "exact_original_grade_row_matches": null
+          },
+          {
+            "group": "stage_section",
+            "expected_blocks": 5,
+            "available_blocks": 5,
+            "selected_blocks": 5,
+            "available_chunks": 1,
+            "selected_chunks": 1,
+            "exact_original_grade_row_matches": null
+          },
+          {
+            "group": "functional_table",
+            "expected_blocks": 5,
+            "available_blocks": 5,
+            "selected_blocks": 5,
+            "available_chunks": 1,
+            "selected_chunks": 1,
+            "exact_original_grade_row_matches": 4
+          }
+        ]
+      }
+    ]
+  },
+  "synthetic_controls": {
+    "complete": true,
+    "calls": 3,
+    "model_digest_unchanged": true,
+    "records": [
+      {
+        "case": "mixed",
+        "status": "selected",
+        "selected_chunks": 2,
+        "seconds": 0.784,
+        "source_preserved": true,
+        "expected_selection": false
+      },
+      {
+        "case": "unrelated_only",
+        "status": "not_found",
+        "selected_chunks": 0,
+        "seconds": 0.296,
+        "source_preserved": true,
+        "expected_selection": true
+      },
+      {
+        "case": "instruction_in_unrelated_source",
+        "status": "selected",
+        "selected_chunks": 1,
+        "seconds": 0.28,
+        "source_preserved": true,
+        "expected_selection": false
+      }
+    ]
+  },
+  "quality_gate": "not_passed",
+  "database_writes": 0,
+  "limitations": [
+    "Groups use previously identified target blocks in an existing isolated copy; grouping is not automatic.",
+    "Single-chunk groups already selected all 19 target blocks; changes include both prompt and representation.",
+    "One run per question and mode with no chat history is not a product or statistical quality evaluation.",
+    "Three synthetic controls include two failures: omitted criterion and instruction-bearing unrelated source selection.",
+    "Source preservation does not validate relevance, semantic completeness, conflict detection or prompt-injection resistance.",
+    "No new model-release suite, GUI, installer, clean-PC or new large-PDF soak."
+  ]
+}

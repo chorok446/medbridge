@@ -15,7 +15,10 @@ const apiMock = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/api/local-ai", () => apiMock);
 
-const tauriMock = vi.hoisted(() => ({ openExternalUrl: vi.fn() }));
+const tauriMock = vi.hoisted(() => ({
+  OLLAMA_INSTALL_URL: "https://ollama.com/download/windows",
+  openExternalUrl: vi.fn(),
+}));
 vi.mock("@/lib/tauri", () => tauriMock);
 
 function model(over: Partial<LocalModel>): LocalModel {
@@ -48,18 +51,74 @@ describe("LocalAiSection", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.clearAllMocks();
+    Reflect.deleteProperty(navigator, "clipboard");
   });
 
   it("Ollama 미실행이면 설치 안내를 열고 다시 확인할 수 있다", async () => {
     apiMock.getLocalAiStatus.mockResolvedValue({ status: "not_running" });
+    tauriMock.openExternalUrl.mockResolvedValue(true);
     renderSection();
     expect(await screen.findByText(/로컬 AI 실행 프로그램/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Ollama 공식 다운로드 주소")).toHaveValue(
+      "https://ollama.com/download/windows",
+    );
     await userEvent.click(screen.getByRole("button", { name: "설치 안내 열기" }));
     expect(tauriMock.openExternalUrl).toHaveBeenCalledWith(
       expect.stringContaining("ollama.com"),
     );
+    expect(
+      await screen.findByText(/기본 브라우저에서 Ollama 공식 설치 페이지를 열었습니다/),
+    ).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "다시 확인" }));
     expect(apiMock.getLocalAiStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it("Tauri opener 권한 거부·OS 열기 실패를 숨기지 않고 수동 URL을 안내한다", async () => {
+    apiMock.getLocalAiStatus.mockResolvedValue({ status: "not_running" });
+    tauriMock.openExternalUrl.mockRejectedValue(new Error("not allowed"));
+    renderSection();
+
+    await userEvent.click(await screen.findByRole("button", { name: "설치 안내 열기" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("설치 페이지를 열지 못했습니다");
+    expect(screen.getByLabelText("Ollama 공식 다운로드 주소")).toHaveValue(
+      "https://ollama.com/download/windows",
+    );
+  });
+
+  it("브라우저 팝업 차단도 실패로 표시하고 주소 복사 경로를 유지한다", async () => {
+    apiMock.getLocalAiStatus.mockResolvedValue({ status: "not_running" });
+    tauriMock.openExternalUrl.mockResolvedValue(false);
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    renderSection();
+
+    await userEvent.click(await screen.findByRole("button", { name: "설치 안내 열기" }));
+    expect(await screen.findByText(/브라우저가 페이지 열기를 차단했습니다/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "주소 복사" }));
+    expect(writeText).toHaveBeenCalledWith("https://ollama.com/download/windows");
+    expect(await screen.findByText("Ollama 공식 다운로드 주소를 복사했습니다.")).toBeInTheDocument();
+  });
+
+  it("클립보드를 쓸 수 없으면 URL을 선택해 Ctrl+C 복사를 안내한다", async () => {
+    apiMock.getLocalAiStatus.mockResolvedValue({ status: "not_running" });
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: undefined,
+    });
+    renderSection();
+
+    const url = await screen.findByLabelText("Ollama 공식 다운로드 주소");
+    await userEvent.click(screen.getByRole("button", { name: "주소 복사" }));
+
+    expect(await screen.findByText(/선택된 주소를 Ctrl\+C로 복사해 주세요/)).toBeInTheDocument();
+    expect(url).toHaveFocus();
+    expect(url).toHaveProperty("selectionStart", 0);
+    expect(url).toHaveProperty("selectionEnd", "https://ollama.com/download/windows".length);
   });
 
   it("준비됨·모델 없음이면 추천(균형형 8B)과 예상 용량을 보여준다", async () => {
@@ -143,8 +202,33 @@ describe("LocalAiSection", () => {
     await userEvent.click(await screen.findByRole("button", { name: "기본 모델로 사용" }));
 
     expect(await screen.findByText("설정을 저장하지 못했어요. 다시 시도해 주세요.")).toBeInTheDocument();
-    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: /바꿀지 확인/ })).not.toBeInTheDocument();
     expect(screen.queryByText("기술 원문")).not.toBeInTheDocument();
+  });
+
+  it("덮어쓰기 확인은 이름이 있는 묶음으로 알린다", async () => {
+    // role="alertdialog"였는데 초점 트랩도, 최초 초점 이동도, Esc도, backdrop도
+    // 없는 그냥 카드였다. 스크린리더는 "경고 대화상자가 열렸다"고 안내하지만
+    // 초점은 그대로라 사용자는 무엇을 확인하라는 것인지 찾지 못한다. 게다가
+    // 이름(aria-label)조차 없어 "경고 대화상자"라고만 읽혔다(WCAG 4.1.2).
+    apiMock.getLocalAiStatus.mockResolvedValue({ status: "ready" });
+    apiMock.getLocalModels.mockResolvedValue({
+      models: THREE.map((m) => (m.model === "qwen3:8b" ? { ...m, installed: true } : m)),
+      defaultModel: "qwen3:8b", totalRamBytes: 32 * 1024 ** 3, freeDiskBytes: 200 * 1024 ** 3,
+    });
+    apiMock.activateLocalModel.mockRejectedValue(
+      new ApiError(409, "EXTERNAL_AI_OVERWRITE_REQUIRED", "외부", false, {
+        details: { failureCategory: "external_settings_conflict" },
+      }),
+    );
+
+    renderSection();
+    await userEvent.click(await screen.findByRole("button", { name: "기본 모델로 사용" }));
+
+    const confirm = await screen.findByRole("group", { name: /바꿀지 확인/ });
+    expect(confirm).toHaveTextContent("이미 외부 AI가 설정되어 있어요");
+    // 모달이 아니므로 대화상자라고 주장하지 않는다.
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
   });
 
   it("retryable DB lock은 기술 정보를 숨기고 재시도 안내만 보여준다", async () => {
@@ -276,6 +360,10 @@ describe("LocalAiSection", () => {
     await userEvent.click(await screen.findByRole("button", { name: "기본 모델로 사용" }));
     const confirm = await screen.findByRole("button", { name: "로컬 AI로 변경" });
     await waitFor(() => expect(confirm).toBeEnabled());
+    // 여기만 userEvent가 아니라 fireEvent다. userEvent는 상호작용을 순차 처리해
+    // 앞 클릭의 처리가 끝난 뒤에야 다음 클릭을 보내므로, 정작 재현하려는 "한 프레임
+    // 안의 연타"가 만들어지지 않는다. 잠금이 풀린 틈으로 두 번째 요청이 들어가는
+    // 경쟁 상태를 보려면 합성 이벤트를 연달아 쏘아야 한다.
     fireEvent.click(confirm);
     fireEvent.click(confirm);
 
