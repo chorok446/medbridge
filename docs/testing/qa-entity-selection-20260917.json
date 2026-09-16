@@ -1,0 +1,203 @@
+{
+  "schema_version": 1,
+  "date_kst": "2026-09-17",
+  "evaluation_commit": "be87c9342914dbed95d9607e7fb55988daad7207",
+  "diagnostic_base_commit": "b42d65d210835b966e9e838e7f56264de8b82c57",
+  "scope": "development_synthetic_source_selection_only",
+  "release_approved": false,
+  "candidate_adopted": false,
+  "product_changed": false,
+  "database_writes": 0,
+  "independent_validation_completed": false,
+  "runtime": {
+    "version_before": "0.34.1",
+    "version_after": "0.34.1",
+    "model": "qwen3:8b",
+    "model_digest": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+    "app_pid": 3232,
+    "server_pid": 5428,
+    "runner_pid": 30940,
+    "runner_present_after_error": true,
+    "loaded_size_bytes": 6295440588,
+    "loaded_vram_bytes": 6295440588,
+    "context_length": 8192,
+    "restarts": 0,
+    "driver_or_model_settings_changed": false
+  },
+  "preflight_ci": {
+    "run_id": 34921891931,
+    "head_sha": "b42d65d210835b966e9e838e7f56264de8b82c57",
+    "conclusion": "success",
+    "successful_jobs": 6
+  },
+  "file_sha256": {
+    "apps/api/app/qa_eval/bundle_assessment.py": "10bf0c153a16266782de96009e5be7d006f90344d080f0be4bdb83107e6ee0dd",
+    "apps/api/app/qa_eval/source_bundle_selection.py": "f8652a30bfd1e1daa643f8a111eae8f883452127951ab942432077bfd514c4e1",
+    "apps/api/app/qa_eval/extended_selection_evaluation.py": "db342c123aa227a572f0c1c6dc9c8b4f78a74e5d57f4557a9fd480db1e1f53f3"
+  },
+  "automated_tests": {
+    "new_regressions": 26,
+    "focused_passed": 258,
+    "api_passed": 1949,
+    "api_skipped": 4,
+    "api_warnings": 1,
+    "api_seconds": 137.86,
+    "ruff": "passed",
+    "mypy": "passed",
+    "mypy_sources": 138
+  },
+  "diagnostic": {
+    "diagnostic_only": true,
+    "selection_attempts": 1,
+    "release_approved": false,
+    "validated_categorical_output": {
+      "assessments": {
+        "0": {
+          "target": "other",
+          "basis": "none"
+        },
+        "1": {
+          "target": "same",
+          "basis": "type"
+        },
+        "2": {
+          "target": "other",
+          "basis": "stage"
+        }
+      },
+      "conflict": false
+    },
+    "trial": {
+      "case_id": "new_subject_axes",
+      "repeat": 1,
+      "status": "selected",
+      "selected_indices": [
+        1,
+        2
+      ],
+      "missing_sources": 1,
+      "unexpected_sources": 0,
+      "incomplete_criteria": 1,
+      "failures": [
+        "missing_sources",
+        "incomplete_criteria"
+      ]
+    },
+    "input_unchanged": true,
+    "model_digest_unchanged": true,
+    "model_digest": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+    "exit_code": 2
+  },
+  "total_selection_attempts": 28,
+  "runs": [
+    {
+      "name": "control",
+      "shell_exit_code": 2,
+      "report": {
+        "schema_version": 3,
+        "model": "qwen3:8b",
+        "provider": "local",
+        "strategy": "fact_checklist",
+        "suite": "extended",
+        "repeat": 3,
+        "database_writes": 0,
+        "selection_attempts": 24,
+        "model_digest_unchanged": true,
+        "results": [
+          {"case_id":"mixed","repeat":1,"status":"selected","selected_indices":[0,1,2],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":1.672},
+          {"case_id":"unrelated_only","repeat":1,"status":"not_found","selected_indices":[],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":0.83},
+          {"case_id":"instruction_unrelated","repeat":1,"status":"not_found","selected_indices":[],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":0.816},
+          {"case_id":"new_subject_axes","repeat":1,"status":"selected","selected_indices":[1,2],"missing_sources":1,"unexpected_sources":0,"incomplete_criteria":1,"failures":["missing_sources","incomplete_criteria"],"passed":false,"seconds":1.516},
+          {"case_id":"narrowed_basis","repeat":1,"status":"selected","selected_indices":[1],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":1.586},
+          {"case_id":"history_resolves_subject","repeat":1,"status":"selected","selected_indices":[1,2],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":1.806},
+          {"case_id":"history_not_evidence","repeat":1,"status":"not_found","selected_indices":[],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":0.689},
+          {"case_id":"facts_with_instruction","repeat":1,"status":"selected","selected_indices":[0,2],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":1.833},
+          {"case_id":"mixed","repeat":2,"status":"selected","selected_indices":[0,1,2],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":1.749},
+          {"case_id":"unrelated_only","repeat":2,"status":"not_found","selected_indices":[],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":0.781},
+          {"case_id":"instruction_unrelated","repeat":2,"status":"not_found","selected_indices":[],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":0.758},
+          {"case_id":"new_subject_axes","repeat":2,"status":"selected","selected_indices":[1,2],"missing_sources":1,"unexpected_sources":0,"incomplete_criteria":1,"failures":["missing_sources","incomplete_criteria"],"passed":false,"seconds":1.442},
+          {"case_id":"narrowed_basis","repeat":2,"status":"selected","selected_indices":[1],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":1.45},
+          {"case_id":"history_resolves_subject","repeat":2,"status":"selected","selected_indices":[1,2],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":1.456},
+          {"case_id":"history_not_evidence","repeat":2,"status":"not_found","selected_indices":[],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":0.58},
+          {"case_id":"facts_with_instruction","repeat":2,"status":"selected","selected_indices":[0,2],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":1.478},
+          {"case_id":"mixed","repeat":3,"status":"selected","selected_indices":[0,1,2],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":1.546},
+          {"case_id":"unrelated_only","repeat":3,"status":"not_found","selected_indices":[],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":0.75},
+          {"case_id":"instruction_unrelated","repeat":3,"status":"not_found","selected_indices":[],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":0.773},
+          {"case_id":"new_subject_axes","repeat":3,"status":"selected","selected_indices":[1,2],"missing_sources":1,"unexpected_sources":0,"incomplete_criteria":1,"failures":["missing_sources","incomplete_criteria"],"passed":false,"seconds":1.452},
+          {"case_id":"narrowed_basis","repeat":3,"status":"selected","selected_indices":[1],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":1.651},
+          {"case_id":"history_resolves_subject","repeat":3,"status":"selected","selected_indices":[1,2],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":1.488},
+          {"case_id":"history_not_evidence","repeat":3,"status":"not_found","selected_indices":[],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":0.596},
+          {"case_id":"facts_with_instruction","repeat":3,"status":"selected","selected_indices":[0,2],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":1.487}
+        ],
+        "model_digest": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+        "gate": {
+          "scope": "synthetic_source_selection_only",
+          "release_approved": false,
+          "complete": true,
+          "passed": false,
+          "expected_trials": 24,
+          "recorded_trials": 24,
+          "failed_trials": 3,
+          "failed_cases": [
+            "new_subject_axes"
+          ],
+          "failures": [
+            "selection_quality_failed"
+          ]
+        }
+      }
+    },
+    {
+      "name": "candidate",
+      "shell_exit_code": 2,
+      "report": {
+        "schema_version": 3,
+        "model": "qwen3:8b",
+        "provider": "local",
+        "strategy": "entity_checklist",
+        "suite": "extended",
+        "repeat": 3,
+        "database_writes": 0,
+        "selection_attempts": 3,
+        "model_digest_unchanged": true,
+        "results": [
+          {"case_id":"mixed","repeat":1,"status":"selected","selected_indices":[0,1,2,3],"missing_sources":0,"unexpected_sources":1,"incomplete_criteria":0,"failures":["unexpected_sources"],"passed":false,"seconds":1.705},
+          {"case_id":"unrelated_only","repeat":1,"status":"not_found","selected_indices":[],"missing_sources":0,"unexpected_sources":0,"incomplete_criteria":0,"failures":[],"passed":true,"seconds":0.564},
+          {"case_id":"instruction_unrelated","repeat":1,"status":"error","selected_indices":[],"missing_sources":null,"unexpected_sources":null,"incomplete_criteria":null,"failures":["evaluation_error"],"passed":false,"seconds":0.812}
+        ],
+        "model_digest": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+        "execution_failure": "evaluation_error",
+        "execution_detail": {
+          "phase": "selector",
+          "kind": "SummaryNetworkError",
+          "category": "connect_failed"
+        },
+        "gate": {
+          "scope": "synthetic_source_selection_only",
+          "release_approved": false,
+          "complete": false,
+          "passed": false,
+          "expected_trials": 24,
+          "recorded_trials": 3,
+          "failed_trials": 2,
+          "failed_cases": [
+            "instruction_unrelated",
+            "mixed"
+          ],
+          "failures": [
+            "incomplete_trial_set",
+            "selection_quality_failed",
+            "execution_or_provenance_failed"
+          ]
+        }
+      }
+    }
+  ],
+  "transport_observation": {
+    "client_category": "connect_failed",
+    "server_recorded_http_status": 200,
+    "request_finished_kst": "2026-09-17T00:07:39+09:00",
+    "root_cause_confirmed": false,
+    "panic_or_oom_in_checked_log_tail": false
+  }
+}
