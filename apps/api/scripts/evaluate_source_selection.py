@@ -32,6 +32,7 @@ from app.qa_eval.ollama import (  # noqa: E402
     loaded_release_model_digest,
     release_model_digest,
 )
+from app.qa_eval.selection_diagnostics import exception_chain_codes  # noqa: E402
 from app.qa_eval.selection_evaluation import (  # noqa: E402
     MAX_REPEAT,
     MIN_REPEAT,
@@ -55,6 +56,8 @@ TOTAL_DEADLINE_SECONDS = 600
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="합성 출처 선택 품질 게이트")
     parser.add_argument("--local", action="store_true", required=True, help="로컬 모델 호출 승인")
+    parser.add_argument("--diagnostics", action="store_true",
+                        help="원문 없는 하위 판단 범주와 예외 종류/번호 수집")
     parser.add_argument("--repeat", type=int, default=MIN_REPEAT, help="전체 사례 반복 3~5회")
     parser.add_argument("--timeout", type=float, default=60,
                         help="한 사례 전체 제한 0초 초과~180초")
@@ -77,7 +80,8 @@ async def run(args: argparse.Namespace) -> tuple[dict, int]:
         "extended": (extended_selection_cases, extended_selection_suite_gate),
         "independent": (independent_selection_cases, independent_selection_suite_gate),
     }[args.suite]
-    report: dict = {"schema_version": 4, "model": MODEL, "provider": "local",
+    report: dict = {"schema_version": 5, "model": MODEL, "provider": "local",
+                    "diagnostics_enabled": args.diagnostics,
                     "strategy": args.strategy, "suite": args.suite,
                     "repeat": args.repeat, "database_writes": 0, "selection_attempts": 0,
                     "model_requests_started": 0,
@@ -100,7 +104,7 @@ async def run(args: argparse.Namespace) -> tuple[dict, int]:
             call_started = time.monotonic()
             report["selection_attempts"] += 1
             phase = "selector"
-            stats = SelectionCallStats()
+            stats = SelectionCallStats(capture_steps=args.diagnostics)
             def verify_response_model() -> None:
                 nonlocal phase
                 # 선택기 전용 worker에서 각 실제 응답 직후 검사한다. 마지막 묶음만
@@ -139,11 +143,15 @@ async def run(args: argparse.Namespace) -> tuple[dict, int]:
                                  and exc.category in {"timeout", "connect_failed", "server_error",
                                                       "context_limit", "rate_limited"} else None),
                 }
+                if args.diagnostics:
+                    report["execution_detail"]["error_chain"] = exception_chain_codes(exc)
             trials.append(trial)
             report["model_requests_started"] += stats.requests_started
             report["results"].append({**asdict(trial), "passed": trial.passed,
                                        "model_requests_started": stats.requests_started,
                                        "seconds": round(time.monotonic() - call_started, 3)})
+            if args.diagnostics:
+                report["results"][-1]["steps"] = [asdict(step) for step in stats.steps]
             if "execution_failure" in report:
                 break
         if "execution_failure" in report:

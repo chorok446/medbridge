@@ -172,7 +172,7 @@ async def test_all_strategies_use_same_extended_oracle_without_leaking_it(
     assert code == (0 if failure is None else 2)
     assert report["gate"]["failed_trials"] == (0 if failure is None else 3)
     assert report["suite"] == "extended" and report["strategy"] == strategy
-    assert report["schema_version"] == 4 and report["database_writes"] == 0
+    assert report["schema_version"] == 5 and report["database_writes"] == 0
     assert report["gate"]["release_approved"] is False
     assert extended_selection_cases() == before
     assert "운반" not in json.dumps(report, ensure_ascii=False)

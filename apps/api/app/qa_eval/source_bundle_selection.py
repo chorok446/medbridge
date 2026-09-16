@@ -25,6 +25,11 @@ from app.qa_eval.evidence_selection import (
     _validate_input,
 )
 from app.qa_eval.independent_assessment import independent_assessment
+from app.qa_eval.selection_diagnostics import (
+    SelectionCallStats,
+    SelectionStepTrace,
+    exception_chain_codes,
+)
 from app.qa_eval.source_outline import SourceOutline, build_source_outlines
 from app.services.local_ai.settings import ALLOWED_MODELS, OLLAMA_BASE
 from app.services.qa.context import QaChunkRef
@@ -79,13 +84,6 @@ class SourceBundleSelection:
     outlines: tuple[SourceOutline, ...]  # 선택한 청크의 원래 입력 순서, 검증된 답변 아님
 
 
-@dataclass
-class SelectionCallStats:
-    """관찰 전용. 중단된 호출도 포함하며 선택/시간/재시도 정책에는 사용하지 않는다."""
-
-    requests_started: int = 0
-
-
 def _partition(outlines: tuple[SourceOutline, ...], groups) -> tuple[tuple[int, ...], ...]:
     if groups is None:
         return tuple((i,) for i in range(len(outlines)))
@@ -126,6 +124,7 @@ def select_source_bundles(
     """
     if stats is not None:
         stats.requests_started = 0
+        stats.steps.clear()
     if strategy not in SELECTION_STRATEGIES:
         raise EvidenceSelectionError("invalid_selection_strategy")
     if (model not in ALLOWED_MODELS or not math.isfinite(deadline_seconds)
@@ -179,13 +178,17 @@ def select_source_bundles(
         if (request, lookup, groups) != (snapshot, refs, group_snapshot):
             raise EvidenceSelectionError("input_changed")
 
-    def chat(data: dict, prompt: str, response_schema: dict) -> str:
+    def chat(data: dict, prompt: str, response_schema: dict,
+             trace: SelectionStepTrace | None) -> str:
         check()
         if budget.requests_started >= max_requests:
             raise SummaryNetworkError("timeout", "source_bundle_request_limit")
         # 공유 기한은 유지하되 이번 전송 1회만 허용한다. 전체 N+1회 예산을 한 번에
         # 열면 하위 provider가 다음 묶음의 예산으로 실패한 요청을 자동 재시도한다.
         budget.request_limit = budget.requests_started + 1
+        before_requests = budget.requests_started
+        if trace is not None:
+            trace.phase = "native_request"  # 전송과 native 응답 envelope 검증을 포함한다.
         try:
             with summary_cancellation_scope(signal):
                 content = provider._chat_native(
@@ -195,22 +198,61 @@ def select_source_bundles(
         finally:
             if stats is not None:
                 stats.requests_started = budget.requests_started
+            if trace is not None:
+                trace.request_started = budget.requests_started > before_requests
+        if trace is not None:
+            trace.phase = "postflight"
         check()
         if after_response is not None:
+            if trace is not None:
+                trace.phase = "model_provenance"
             after_response()
             check()
         return content
 
+    def evaluate(data: dict, prompt: str, response_schema: dict, *, checklist: bool):
+        trace = None
+        if stats is not None and stats.capture_steps:
+            positions = tuple(bundles.index(tuple(s["sourceIndex"] for s in b["sources"]))
+                              for b in data["bundles"])
+            scope = ("whole" if strategy != "independent_checklist" or len(bundles) == 1
+                     else "bundle" if len(positions) == 1 else "global_guard")
+            trace = SelectionStepTrace(len(stats.steps) + 1, scope, positions)
+            stats.steps.append(trace)
+        try:
+            content = chat(data, prompt, response_schema, trace)
+            if trace is not None:
+                trace.phase = "assessment"
+            parse = assessed_indices if checklist else _selected_indices
+            result = parse(content, len(data["bundles"]))
+            if trace is not None:
+                # 위 엄격한 파서가 전체 형태/중복 키/범주를 승인한 불변 문자열만 읽는다.
+                # 응답 원문이나 임의 키는 복사하지 않는다. 진단 값은 선택에 되먹이지 않는다.
+                if checklist:
+                    validated = json.loads(content)
+                    trace.assessments = [
+                        {"bundle_index": position,
+                         "target": validated["assessments"][str(i)]["target"],
+                         "basis": validated["assessments"][str(i)]["basis"]}
+                        for i, position in enumerate(trace.bundle_indices)
+                    ]
+                    trace.conflict = validated["conflict"]
+                trace.status = result[0]
+                trace.phase = "complete"
+            return result
+        except Exception as exc:
+            if trace is not None:
+                trace.error_chain = exception_chain_codes(exc)
+            raise
+
     if strategy == "independent_checklist":
         def assess(data: dict, count: int) -> tuple[str, set[int]]:
-            return assessed_indices(chat(data, ASSESSMENT_SYSTEM, assessment_schema(count)), count)
+            return evaluate(data, ASSESSMENT_SYSTEM, assessment_schema(count), checklist=True)
 
         status, selected = independent_assessment(payload, assess)
     else:
-        content = chat(payload, system, schema)
-        parse = (assessed_indices if strategy in ("fact_checklist", "entity_checklist")
-                 else _selected_indices)
-        status, selected = parse(content, len(bundles))
+        status, selected = evaluate(payload, system, schema,
+                                    checklist=strategy in ("fact_checklist", "entity_checklist"))
     indices = {index for i in selected for index in bundles[i]}
     return SourceBundleSelection(status, tuple(sorted(selected)), tuple(
         outline for i, outline in enumerate(outlines) if i in indices
