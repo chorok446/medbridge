@@ -228,7 +228,9 @@ def mock_runtime(monkeypatch, *, regression=False, error=False):
 
 
 @pytest.mark.parametrize("regression", [False, True])
-@pytest.mark.parametrize("strategy", ["baseline", "factual_axes", "fact_checklist"])
+@pytest.mark.parametrize("strategy", [
+    "baseline", "factual_axes", "fact_checklist", "entity_checklist",
+])
 async def test_cli_grades_real_return_values_without_sending_oracle(
     monkeypatch, regression, strategy,
 ):
@@ -246,7 +248,9 @@ async def test_cli_grades_real_return_values_without_sending_oracle(
     assert "전압" not in serialized and "source_refs" not in serialized
 
 
-@pytest.mark.parametrize("strategy", ["baseline", "factual_axes", "fact_checklist"])
+@pytest.mark.parametrize("strategy", [
+    "baseline", "factual_axes", "fact_checklist", "entity_checklist",
+])
 async def test_cli_routes_strategy_without_exposing_or_changing_expected_contract(
     monkeypatch, strategy,
 ):

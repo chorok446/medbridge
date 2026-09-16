@@ -154,7 +154,9 @@ def mock_model(monkeypatch, *, failure=None):
     return calls
 
 
-@pytest.mark.parametrize("strategy", ["baseline", "factual_axes", "fact_checklist"])
+@pytest.mark.parametrize("strategy", [
+    "baseline", "factual_axes", "fact_checklist", "entity_checklist",
+])
 @pytest.mark.parametrize("failure", [None, "quality"])
 async def test_all_strategies_use_same_extended_oracle_without_leaking_it(
     monkeypatch, strategy, failure,
@@ -204,13 +206,15 @@ def test_suite_is_opt_in_and_cases_cannot_be_filtered(argv):
         cli.parse_args(argv)
 
 
-@pytest.mark.parametrize("strategy", ["baseline", "factual_axes", "fact_checklist"])
+@pytest.mark.parametrize("strategy", [
+    "baseline", "factual_axes", "fact_checklist", "entity_checklist",
+])
 @pytest.mark.parametrize("case_id", EXTENDED_CASE_IDS)
 def test_real_selector_receives_full_case_without_oracle_on_every_strategy(case_id, strategy):
     case = next(c for c in extended_selection_cases() if c.case_id == case_id)
     before = copy.deepcopy(case)
     selected, _, status = EXPECTED[case_id]
-    if strategy == "fact_checklist":
+    if strategy in ("fact_checklist", "entity_checklist"):
         response = {"assessments": {
             str(i): {"target": "same" if i in selected else "other",
                      "basis": "type" if i in selected else "none"}
